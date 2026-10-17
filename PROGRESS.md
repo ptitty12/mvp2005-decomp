@@ -496,3 +496,16 @@
   - The deployment can host roster packs: the owner uploads a pack zip on the Server disc page (`/disc`, new **Roster packs** card: list, Remove, Upload), the server keeps it in `MVP_PACKS_DIR` (Docker: `/data/packs`, same volume and login as the disc), and the game page's Roster packs panel offers it in a **Packs on this server** dropdown. Choosing one adds it exactly like a picked zip (same checks, same netplay set hash); the page remembers it per browser, and the game start waits for a pack download in progress.
   - Server: `engine/server/src/pack_store.ts`, `/api/packs` routes (GET list and zip with ETag; POST/DELETE with the disc page's CSRF token). Tests: 72 server, 91 web; Chrome on the real server: the MLB 2026 pack from the dropdown gives the same result hash as the file (`464d7267...`). Guide: `docs/engine/DEPLOY_DOKPLOY.md` §8.
   | Owner: redeploy in Dokploy, then upload the MLB 2026 zip on the Server disc page.
+- 2026-10-17 (evening) | lead + agents | engine: visual fix and speed | On main:
+  - **Q7, the owner's "frozen block in the top-left":**
+    - Cause: the bind-group cache was keyed by WebGPU handle addresses the browser reuses, so any mid-game Picture scale change froze the game's saved top-left 128×128, along with shadows, player shading and the video board.
+    - Fixed, with a scale-change regression check in `browser_check`.
+  - **Q6, speed:**
+    - hostSlow 2: 0.90× → 0.975×. 4 efficiency cores: about 1.0×. The laptop stand-in: about 10 ms per field.
+    - The human-pitching reference line was re-recorded (F2).
+    - The ABS doc's reference lines may need re-recording by the mods work.
+  - **Paused:** no new engine agents. The weekly usage was at 86% with 3 days to its reset.
+  - **Open small items:**
+    - thin one-pixel lines across the score bug's base-runner diamond at 3×, natively too;
+    - real ThinkPad numbers from the owner's Copy stats.
+  | Owner: redeploy once for Q6 + Q7; paste Copy stats from desktop + ThinkPad after an online game.
