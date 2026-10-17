@@ -12,6 +12,70 @@ void GpMemory::attach(const std::uint8_t* live, std::uint32_t size) {
   gen_of_.assign(lines_, 0);
   page_gen_.assign((size_ >> kPageShift) + 1, 0);
   any_active_ = false;
+  shadow_.clear();
+  shadow_valid_.clear();
+  shadow_page_.clear();
+  shadows_ = 0;
+}
+
+void GpMemory::shadow(std::uint32_t addr, std::uint32_t len, const std::uint8_t* data) {
+  addr &= 0x01FFFFFFu;
+  if (!live_ || !len || addr >= size_ || len > size_ - addr) return;
+  if (shadow_.empty()) {
+    shadow_.assign(size_, 0);
+    shadow_valid_.assign(size_ >> kShadowShift, 0);
+    shadow_page_.assign((size_ >> kPageShift) + 1, 0);
+  }
+  std::memcpy(shadow_.data() + addr, data, len);
+  for (std::uint32_t k = addr >> kShadowShift, e = (addr + len - 1) >> kShadowShift; k <= e; ++k)
+    if (!shadow_valid_[k]) {
+      shadow_valid_[k] = 1;
+      ++shadow_page_[k >> (kPageShift - kShadowShift)];
+      ++shadows_;
+    }
+  ++stats_.shadows;
+  stats_.shadow_bytes += len;
+}
+
+void GpMemory::end_shadow(std::uint32_t addr, std::uint32_t len) {
+  addr &= 0x01FFFFFFu;
+  if (!shadows_ || !len || addr >= size_) return;
+  const std::uint32_t last = std::min(addr + len - 1, size_ - 1);
+  for (std::uint32_t k = addr >> kShadowShift, e = last >> kShadowShift; k <= e; ++k)
+    if (shadow_valid_[k]) {
+      shadow_valid_[k] = 0;
+      --shadow_page_[k >> (kPageShift - kShadowShift)];
+      --shadows_;
+    }
+}
+
+// Q6: a view over memory where some entries hold copies: the copy itself when
+// they cover all of it, else the view without them with the copies laid over.
+const std::uint8_t* GpMemory::shadowed(std::uint32_t addr, std::uint32_t len, int slot) {
+  const std::uint32_t first = addr >> kShadowShift, last = (addr + len - 1) >> kShadowShift;
+  std::uint32_t k = first;
+  while (k <= last && shadow_valid_[k]) ++k;
+  if (k > last) {
+    ++stats_.shadow_views;
+    return shadow_.data() + addr;
+  }
+  k = first;
+  while (k <= last && !shadow_valid_[k]) ++k;
+  const std::uint8_t* base = plain_view(addr, len, slot);
+  if (k > last) return base;
+  std::vector<std::uint8_t>& out = scratch_[slot & 1];
+  if (base != out.data()) {
+    if (out.size() < len) out.resize(len);
+    std::memcpy(out.data(), base, len);
+  }
+  ++stats_.shadow_views;
+  for (; k <= last; ++k) {
+    if (!shadow_valid_[k]) continue;
+    const std::uint32_t a = std::max(addr, k << kShadowShift);
+    const std::uint32_t e = std::min(addr + len, (k + 1) << kShadowShift);
+    std::memcpy(out.data() + (a - addr), shadow_.data() + a, e - a);
+  }
+  return out.data();
 }
 
 void GpMemory::mark(std::uint32_t first_line, std::uint32_t last_line) {

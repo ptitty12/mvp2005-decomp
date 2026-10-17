@@ -26,7 +26,8 @@
 //   threads=0       the single-threaded engine even where the page is cross-origin isolated (P2)
 //   bitmaps=0       threaded: the render thread draws into the page's canvas instead of sending ImageBitmaps
 //   digest=1        a renderer digest per VI field (window.mvp.digest; digestDetail=F1-F2: per draw)
-//   rtTune=US,MS,KIB,SYNC   the render thread's waiting (fence poll, record poll, publish step, sync fences)
+//   rtTune=US,MS,KIB,SYNC,COPIES   the render thread's waiting (fence poll, record poll, publish step, sync fences,
+//                           copies of what commands read instead of write waits)
 //   slowMotion=1    a machine that cannot keep up runs the game evenly in slow motion, every frame shown (Q2)
 //   audioRing=0     the sound goes to the worklet as messages even where the page could share memory (Q2)
 //   hostSlow=N, hostSlowFrom=F   a machine N times slower, simulated from VI field F on (Q2: the engine's

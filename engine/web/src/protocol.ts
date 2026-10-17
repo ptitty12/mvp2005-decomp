@@ -133,7 +133,7 @@ export interface RunOptions {
   threads?: boolean;   // P2: false = the inline renderer even where the threaded engine could run
   digest?: boolean;    // development (P2): the renderer digest per VI field, in each stats window's `digest`
   digestDetail?: number[];  // development (P2): VI fields [from, to] whose draws get a digest line each
-  rtTune?: number[];   // development (P2): the render thread's waiting (mvp_render_tune: us, ms, KiB, sync fences)
+  rtTune?: number[];   // development (P2): the render thread's waiting (mvp_render_tune: us, ms, KiB, sync fences, copies)
   audioRing?: boolean; // Q2: false = the frames go to the worklet as messages even where memory can be shared
   hostSlow?: number;   // development (Q2): simulate a machine this many times slower (mvp_host_slow) ...
   hostSlowFrom?: number;  // ... from this VI field on

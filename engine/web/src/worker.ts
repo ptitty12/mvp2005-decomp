@@ -374,7 +374,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
       M.mvpVsync = vsync;
       M._mvp_set_threaded(1);
       const tune = options.rtTune;
-      if (tune) M._mvp_render_tune(tune[0] ?? -1, tune[1] ?? -1, tune[2] ?? 0, tune[3] ?? -1);
+      if (tune) M._mvp_render_tune(tune[0] ?? -1, tune[1] ?? -1, tune[2] ?? 0, tune[3] ?? -1, tune[4] ?? -1);
     }
     const tg = performance.now();
     gfxReady = new Promise<boolean>((resolve) => {

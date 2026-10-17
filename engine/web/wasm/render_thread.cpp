@@ -104,6 +104,8 @@ enum : u32 {
   kScale,       // Q1: {internal resolution}
   kGxBatch,     // Q4: {count n, n lengths, the n commands' bytes one after the other}
   kGpuLoad,     // Q5 (development): {passes}
+  kShadow,      // Q6: {addr, len} + memory there: a copy of what the next commands read (GpMemory::shadow)
+  kShadowEnd,   // Q6: {addr, len}: the guest writes there next; copies there end
 };
 
 constexpr u32 kRingBytes = 16u << 20;
@@ -117,6 +119,10 @@ double kSpinMs = 1.0;
 // writes to memory the render thread still reads wait instead (GpReads), which
 // covers every case the fences cover.
 bool kSyncFences = false;
+// Q6: what commands read of vertex arrays, XF loads, palettes and preloads goes
+// into the ring as a copy (GpMemory::shadow) instead of making the guest's next
+// write there wait (render_tune's `copies`; off: they are marked, as before).
+bool kCopies = true;
 std::atomic<double> g_host_slow{1.0};  // development (Q2): render_host_slow
 constexpr double kVsyncPollMs = 1.0;      // with a frame due, it looks at the refresh count this often
 constexpr double kVsyncStallMs = 50.0;    // a frame due this long shows even if the count did not move
@@ -181,6 +187,19 @@ struct Shared {
   std::vector<u32> gp_gen_of, gp_page_gen;
   u64 gp_flushes = 0, gp_sent_bytes = 0, gp_flushed_bytes = 0, gp_unmarked = 0;
   u64 mark_entries = 0;  // Q4: entries marked (statistics)
+  // Q6: the ranges the commands being appended read (GpReads, through mark()):
+  // copies go into the ring before the commands, marks after them (a mark's
+  // epoch must include the commands' records).
+  struct Read {
+    u32 addr, size;
+    gfx::ReadKind kind;
+  };
+  std::vector<Read> reads_now, reads_later;
+  // Per entry that became a copy while an earlier command still read memory
+  // there: that command's mark (the guest's next write waits for it), else 0.
+  std::vector<u32> kept = std::vector<u32>(ppc::kGpEntries);
+  std::vector<u32> kept_at;  // the entries with one (the sweep forgets the finished)
+  u64 copies = 0, copy_bytes = 0, copy_ends = 0;  // statistics
   u32 synced = 0;           // ring position of the last fence
   u32 present_pos[2] = {};  // ring positions after the last two presents
   u64 fences = 0, fence_waits = 0, lag_waits = 0, big = 0, resizes = 0;
@@ -208,10 +227,19 @@ u32 tag_end(u32 tag) {
   return S->ring.published_at(epoch + 1);
 }
 
-// Emulation thread: the command being appended reads [addr, addr + size).
+// Q6: an entry whose memory the render thread has a copy of (GpMemory::shadow):
+// the guest's next write there ends the copy (gp_wait). Marks hold an epoch
+// with kTagBit set, so this is never one.
+constexpr u32 kCopyTag = 1;
+
+// Emulation thread: the command being appended reads [addr, addr + size)
+// (reads_copy and reads_mark deal with it).
+void mark(u32 addr, u32 size, gfx::ReadKind kind) { S->reads_now.push_back({addr, size, kind}); }
+
+// Marks [addr, addr + size) as read by the commands just appended.
 bool gp_snapshot_entry(u32 i);
 bool gp_page_snapshot(u32 entry);
-void mark(u32 addr, u32 size, gfx::ReadKind kind) {
+void mark_now(u32 addr, u32 size, gfx::ReadKind kind) {
   const u32 first = addr >> ppc::kGpShift, last = (addr + size - 1) >> ppc::kGpShift;
   const u32 tag = current_tag();
   S->mark_entries += last - first + 1;
@@ -230,6 +258,7 @@ void mark(u32 addr, u32 size, gfx::ReadKind kind) {
         continue;
       }
       std::uint32_t& e = ppc::g_gp_pages[i];
+      if (e == kCopyTag) continue;  // Q6: the render thread reads the copy (every read goes through GpMemory::view)
       if (!e) S->marked.push_back(i);
       e = tag;
       S->kinds[i] = static_cast<u8>(kind);
@@ -239,13 +268,24 @@ void mark(u32 addr, u32 size, gfx::ReadKind kind) {
 
 // Emulation thread: a guest write to [first, last] (ppc/mem_access.h, the
 // translated stores, the hardware's DMA): wait until the render thread has
-// finished every command that reads those pages.
+// finished every command that reads those pages (Q6: where it has a copy, end
+// the copy instead, before the write).
 void gp_wait(u32 first, u32 last) {
   ++S->write_checks;
+  bool copies = false;
   for (u32 p = first >> ppc::kGpShift; p <= (last >> ppc::kGpShift); ++p) {
     const u32 i = p & (ppc::kGpEntries - 1);
     std::uint32_t& e = ppc::g_gp_pages[i];
     if (!e) continue;
+    if (e == kCopyTag) {  // Q6: the render thread has a copy: it ends here, before the write
+      copies = true;
+      S->reads.forget();
+      // An earlier command that reads memory there (marked when the copy was
+      // taken): the write waits for it, as below.
+      e = S->kept[i];
+      S->kept[i] = 0;
+      if (!e) continue;
+    }
     const u32 pos = tag_end(e);
     if (!S->ring.finished(pos)) {
       if (S->idle.load() == 1 && S->idle.exchange(0) == 1)
@@ -259,6 +299,15 @@ void gp_wait(u32 first, u32 last) {
     e = 0;
     S->reads.forget();  // Q4: an entry it may count as marked is not any more
   }
+  if (copies) {
+    const u32 a = (first & 0x01FFFFFFu) & ~((1u << ppc::kGpShift) - 1);
+    const u32 len = (((last - first) + (first & ((1u << ppc::kGpShift) - 1))) | ((1u << ppc::kGpShift) - 1)) + 1;
+    u8* d = S->ring.reserve(kShadowEnd, 8);
+    std::memcpy(d, &a, 4);
+    std::memcpy(d + 4, &len, 4);
+    S->ring.commit();
+    ++S->copy_ends;
+  }
 }
 
 // Emulation thread, at each VI field: forget the pages whose commands are done.
@@ -266,11 +315,19 @@ void sweep() {
   std::size_t n = 0;
   for (u32 p : S->marked) {
     std::uint32_t& e = ppc::g_gp_pages[p];
+    if (e == kCopyTag) continue;  // Q6: a copy now (until the guest writes there)
     if (e && S->ring.finished(tag_end(e))) e = 0;
     if (e) S->marked[n++] = p;
   }
   if (n != S->marked.size()) S->reads.forget();  // Q4: entries it may count as marked are not any more
   S->marked.resize(n);
+  n = 0;  // Q6: the marks copies keep
+  for (u32 p : S->kept_at) {
+    u32& h = S->kept[p];
+    if (h && S->ring.finished(tag_end(h))) h = 0;
+    if (h) S->kept_at[n++] = p;
+  }
+  S->kept_at.resize(n);
 }
 
 // ---- Q1: the GP's view of memory (gfx/gp_memory.h), the emulation side ----
@@ -527,6 +584,18 @@ void handle(const gfx::RenderRing::Record& r) {
       S->side.gp_write_through(v.a, v.b);
       return;
     }
+    case kShadow: {
+      Pair v;
+      std::memcpy(&v, r.data, sizeof v);
+      S->side.gp_shadow(v.a, v.b, r.data + sizeof v);
+      return;
+    }
+    case kShadowEnd: {
+      Pair v;
+      std::memcpy(&v, r.data, sizeof v);
+      S->side.gp_end_shadow(v.a, v.b);
+      return;
+    }
     default:
       return;
   }
@@ -650,7 +719,8 @@ bool render_thread_start(const char* selector, int width, int height, void (*on_
 
 bool render_thread_running() { return S != nullptr; }
 
-void render_tune(double fence_spin_us, double render_spin_ms, int publish_kib, int sync_fences) {
+void render_tune(double fence_spin_us, double render_spin_ms, int publish_kib, int sync_fences, int copies) {
+  if (copies >= 0) kCopies = copies != 0;
   if (sync_fences >= 0) kSyncFences = sync_fences != 0;
   if (fence_spin_us >= 0) kFenceSpinUs = fence_spin_us;
   if (render_spin_ms >= 0) kSpinMs = render_spin_ms;
@@ -721,14 +791,100 @@ void render_gp_write_through(std::uint32_t addr, std::uint32_t len) {
   }
 }
 
+// Q6: entries [p0, p0 + n) to the render thread as a copy of memory (the caller
+// took entries where that is what the GP sees). A mark an entry had (an earlier
+// command still reads memory there) is kept in S->kept.
+void copy_entries(u32 p0, u32 n) {
+  constexpr u32 kMax = 1u << 20;  // bytes per record
+  while (n) {
+    const u32 k = std::min(n, kMax >> ppc::kGpShift);
+    const u32 addr = p0 << ppc::kGpShift, len = k << ppc::kGpShift;
+    u8* d = S->ring.reserve(kShadow, 8 + len);
+    std::memcpy(d, &addr, 4);
+    std::memcpy(d + 4, &len, 4);
+    std::memcpy(d + 8, S->gp_live + addr, len);
+    S->ring.commit();
+    for (u32 p = p0; p < p0 + k; ++p) {
+      std::uint32_t& e = ppc::g_gp_pages[p];
+      S->kept[p] = e && !S->ring.finished(tag_end(e)) ? e : 0;
+      if (S->kept[p]) S->kept_at.push_back(p);
+      e = kCopyTag;
+    }
+    ++S->copies;
+    S->copy_bytes += len;
+    p0 += k;
+    n -= k;
+  }
+}
+
+// Q6: whether line `l`'s snapshot (Q1) holds what memory holds there.
+bool gp_line_current(u32 l) {
+  return std::memcmp(S->gp_sent.data() + static_cast<std::size_t>(l) * kLine,
+                     S->gp_live + static_cast<std::size_t>(l) * kLine, kLine) == 0;
+}
+
+// Q6: before the commands that read S->reads_now go into the ring: copies of
+// what they read of vertex arrays, XF loads, palettes and preloads, entry by
+// entry, where the GP sees memory as it is (no snapshot over the entry, or one
+// that memory still matches: a copy taken now stays what the GP sees until the
+// guest writes there, whatever later flushes and fields do to the snapshot);
+// the rest is marked after them (reads_mark).
+void reads_copy() {
+  S->reads_later.clear();
+  for (const Shared::Read& r : S->reads_now) {
+    const u32 addr = r.addr & 0x01FFFFFFu;
+    const bool copyable = kCopies && S->gp_lines && r.size && r.kind != gfx::ReadKind::kCopy &&
+                          r.kind != gfx::ReadKind::kTexture && addr + r.size <= S->gp_lines * kLine;
+    if (!copyable) {
+      S->reads_later.push_back(r);
+      continue;
+    }
+    const u32 first = addr >> ppc::kGpShift, last = (addr + r.size - 1) >> ppc::kGpShift;
+    u32 run = 0, runs = 0;  // entries to copy
+    for (u32 p = first; p <= last; ++p) {
+      std::uint32_t& e = ppc::g_gp_pages[p];
+      bool copy = false;
+      if (e == kCopyTag) {
+        // copied already
+      } else {
+        const u32 l0 = (p << ppc::kGpShift) >> kLineShift;
+        const bool a0 = gp_line_active(l0), a1 = gp_line_active(l0 + 1);
+        if (a0 && a1) ++S->gp_unmarked;  // the snapshot came through the ring (as mark_now)
+        else if ((a0 && !gp_line_current(l0)) || (a1 && !gp_line_current(l0 + 1)))
+          S->reads_later.push_back({p << ppc::kGpShift, 1u << ppc::kGpShift, r.kind});  // a snapshot memory moved on from
+        else copy = true;
+      }
+      if (copy) {
+        if (runs && run + runs == p) {
+          ++runs;
+        } else {
+          if (runs) copy_entries(run, runs);
+          run = p;
+          runs = 1;
+        }
+      }
+    }
+    if (runs) copy_entries(run, runs);
+  }
+}
+
+// Q6: after the commands went into the ring: the marks reads_copy left.
+void reads_mark() {
+  for (const Shared::Read& r : S->reads_later) mark_now(r.addr, r.size, r.kind);
+  S->reads_now.clear();
+  S->reads_later.clear();
+}
+
 void render_gx(const std::uint8_t* cmd, std::size_t len) {
   if (disabled()) return;
   const u32 n = static_cast<u32>(len);
+  S->reads.set_epoch(S->ring.publishes());
+  S->reads.command(cmd, n);  // what it reads, so that guest writes there wait for it (Q6: or copies)
+  reads_copy();
   if (n <= S->ring.max_payload()) {
     std::memcpy(S->ring.reserve(kGx, n), cmd, n);
     S->ring.commit();
-    S->reads.set_epoch(S->ring.publishes());
-    S->reads.command(cmd, n);  // what it reads, so that guest writes there wait for it
+    reads_mark();
     S->ring.publish_if(kPublishBytes);
     return;
   }
@@ -736,8 +892,7 @@ void render_gx(const std::uint8_t* cmd, std::size_t len) {
   // where it is, and the emulation waits until it has.
   put(kGxRef, Ref{cmd, n});
   ++S->big;
-  S->reads.set_epoch(S->ring.publishes());
-  S->reads.command(cmd, n);
+  reads_mark();
   kick();
   S->fence_ms += S->ring.wait_read(S->ring.end());
   S->synced = S->ring.end();
@@ -753,6 +908,9 @@ void render_gx_batch(const rt::GxCommand* cmds, std::size_t n) {
     for (std::size_t k = 0; k < n; ++k) render_gx(cmds[k].p, cmds[k].len);
     return;
   }
+  S->reads.set_epoch(S->ring.publishes());
+  for (std::size_t k = 0; k < n; ++k) S->reads.command(cmds[k].p, cmds[k].len);
+  reads_copy();  // Q6: copies before the commands
   u8* d = S->ring.reserve(kGxBatch, static_cast<u32>(total));
   const u32 count = static_cast<u32>(n);
   std::memcpy(d, &count, 4);
@@ -772,8 +930,7 @@ void render_gx_batch(const rt::GxCommand* cmds, std::size_t n) {
   }
   std::memcpy(out, run, run_len);
   S->ring.commit();
-  S->reads.set_epoch(S->ring.publishes());
-  for (std::size_t k = 0; k < n; ++k) S->reads.command(cmds[k].p, cmds[k].len);
+  reads_mark();
   S->ring.publish_if(kPublishBytes);
 }
 
@@ -910,7 +1067,8 @@ std::string render_status_json() {
                 "\"write_wait_ms\":%.1f,\"pending_pages\":%zu,\"read_ranges\":%llu,\"lag_waits\":%llu,"
                 "\"lag_ms\":%.1f,\"records\":%llu,\"ring_mb\":%.1f,\"full_waits\":%llu,\"big\":%llu,"
                 "\"wait_kinds\":%s,\"gp_flushes\":%llu,\"gp_flushed_mb\":%.1f,\"gp_sent_mb\":%.2f,\"gp_unmarked\":%llu,"
-                "\"read_primitives\":%llu,\"read_indexed\":%llu,\"read_skipped\":%llu,\"mark_entries\":%llu}",
+                "\"read_primitives\":%llu,\"read_indexed\":%llu,\"read_skipped\":%llu,\"mark_entries\":%llu,"
+                "\"copies\":%llu,\"copy_mb\":%.2f,\"copy_ends\":%llu}",
                 static_cast<unsigned long long>(S->resizes), static_cast<unsigned long long>(S->fences),
                 static_cast<unsigned long long>(S->fence_waits), S->fence_ms,
                 static_cast<unsigned long long>(S->fence_hist[0]), static_cast<unsigned long long>(S->fence_hist[1]),
@@ -927,7 +1085,8 @@ std::string render_status_json() {
                 static_cast<unsigned long long>(S->reads.stats().primitives),
                 static_cast<unsigned long long>(S->reads.stats().indexed),
                 static_cast<unsigned long long>(S->reads.stats().skipped),
-                static_cast<unsigned long long>(S->mark_entries));
+                static_cast<unsigned long long>(S->mark_entries), static_cast<unsigned long long>(S->copies),
+                static_cast<double>(S->copy_bytes) / 1e6, static_cast<unsigned long long>(S->copy_ends));
   return s + b;
 }
 

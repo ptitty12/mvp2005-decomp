@@ -66,6 +66,9 @@ class RenderSide {
     gp_.set_lines(first_line, lines, data);
   }
   void gp_write_through(std::uint32_t addr, std::uint32_t len) { gp_.write_through(addr, len); }
+  // Q6 (the render thread): copies of what commands read (GpMemory::shadow).
+  void gp_shadow(std::uint32_t addr, std::uint32_t len, const std::uint8_t* data) { gp_.shadow(addr, len, data); }
+  void gp_end_shadow(std::uint32_t addr, std::uint32_t len) { gp_.end_shadow(addr, len); }
   const gfx::GpMemory& gp_memory() const { return gp_; }
   // A VI field ended; `xfb` is the frame buffer the VI scans.
   void vi_field(std::uint64_t field, std::uint32_t xfb);
