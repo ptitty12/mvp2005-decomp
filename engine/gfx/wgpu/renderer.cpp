@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include "gfx/tev_wgsl.h"
 #include "gfx/texture_decode.h"
@@ -540,6 +541,16 @@ const Renderer::Pipeline& Renderer::pipeline(const PipelineConfig& c) {
   return pipelines_.emplace(c, std::move(info)).first->second;
 }
 
+void Renderer::forget_view(const wgpu::TextureView& v) {
+  if (!v) return;
+  const void* p = v.Get();
+  for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
+    bool uses = false;
+    for (std::size_t k = 0; k < 8 && !uses; ++k) uses = it->first[k] == p;
+    it = uses ? bind_groups_.erase(it) : std::next(it);
+  }
+}
+
 const std::uint8_t* Renderer::guest(std::uint32_t addr, std::uint32_t size) {
   if (gpm_) return gpm_->view(addr, size, 1);
   addr &= 0x01FFFFFFu;
@@ -584,6 +595,8 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
     if (e.epoch != epoch_) {  // memory written there since the copy means the CPU replaced it
       if (hash_memory(t.addr, e.bytes) != e.mem_hash) {
         ++stats_.copies_dropped;
+        forget_view(e.view);
+        if (e.tall) forget_view(e.tall->view);
         copies_.erase(ci);
         ci = copies_.end();
       } else {
@@ -603,6 +616,13 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
       if (v) return v;
     }
     if (ci != copies_.end()) ++stats_.copy_size_misses;
+  } else if (!copies_.empty()) {
+    // Q7 (diagnostic): the texture starts inside an EFB copy's memory.
+    auto below = copies_.upper_bound(t.addr & 0x01FFFFFFu);
+    if (below != copies_.begin()) {
+      --below;
+      if ((t.addr & 0x01FFFFFFu) < below->first + below->second->bytes) ++stats_.copy_inside;
+    }
   }
   if (!texture_format_known(t.format)) {
     ++stats_.unknown_formats;
@@ -683,6 +703,7 @@ wgpu::TextureView Renderer::tall_copy(CopyEntry& e, const TextureDesc& t) {
   std::unique_ptr<CopyEntry::Tall>& c = e.tall;
   const bool fresh = !c || c->h != t.height || c->scale != s;
   if (fresh) {
+    if (c) forget_view(c->view);
     c = std::make_unique<CopyEntry::Tall>();
     wgpu::TextureDescriptor td{};
     td.size = {t.width * s, t.height * s, 1};
@@ -846,24 +867,30 @@ void Renderer::draw(const DrawCall& d) {
       }
     last_.fog = c.fog_type != 0;
     last_.pipe = &pipeline(c);
-    // Texture bind groups by their views and samplers. A cached group holds
-    // references to its views, so a handle's identity is never reused while the
-    // entry exists.
+    // Texture bind groups by their views and samplers (handle addresses). Q7: the
+    // entry keeps its own references to them, so no address in a key can belong
+    // to another object while the entry exists (a bind group alone does not keep
+    // them: in the browser a released view's handle is freed and the next view
+    // can get its address; see BindEntry).
     std::array<const void*, 16> key{};
     for (int k = 0; k < 8; ++k) {
       key[static_cast<std::size_t>(k)] = te[k].textureView.Get();
       key[static_cast<std::size_t>(8 + k)] = te[8 + k].sampler.Get();
     }
     if (bind_groups_.size() > 4096) bind_groups_.clear();
-    wgpu::BindGroup& tg = bind_groups_[key];
-    if (!tg) {
+    BindEntry& be = bind_groups_[key];
+    if (!be.group) {
       wgpu::BindGroupDescriptor bgd{};
       bgd.layout = bgl_textures_;
       bgd.entryCount = 16;
       bgd.entries = te;
-      tg = gpu_.device().CreateBindGroup(&bgd);
+      be.group = gpu_.device().CreateBindGroup(&bgd);
+      for (int k = 0; k < 8; ++k) {
+        be.views[static_cast<std::size_t>(k)] = te[k].textureView;
+        be.samplers[static_cast<std::size_t>(k)] = te[8 + k].sampler;
+      }
     }
-    last_.textures = tg;
+    last_.textures = be.group;
   }
   if (last_.indirect) ++stats_.indirect_draws;
   if (last_.fog) ++stats_.fog_draws;
@@ -981,6 +1008,10 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
   const std::uint32_t addr = c.dest & 0x01FFFFFFu;
   std::unique_ptr<CopyEntry>& e = copies_[addr];
   if (!e || e->w != w || e->h != h || e->pw != w * scale_ || e->ph != h * scale_) {
+    if (e) {  // Q7: a new texture (another size, or another scale): the old one's bind groups go with it
+      forget_view(e->view);
+      if (e->tall) forget_view(e->tall->view);
+    }
     e = std::make_unique<CopyEntry>();
     wgpu::TextureDescriptor td{};
     td.size = {w * scale_, h * scale_, 1};
