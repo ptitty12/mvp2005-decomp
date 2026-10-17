@@ -460,6 +460,7 @@ function startEngine(disc: DiscSource): void {
   options.scale = pictureScale();
   sentScale = options.scale;
   options.mods = modsPanel.specs();
+  options.modIntroMs = modsPanel.introMs();
   if (params.has('modSeed')) options.modSeed = Number(params.get('modSeed'));
   modsPanel.lock();
   send({ type: 'start', disc, canvas: off, width, height, options: { ...options, netplay, packs },

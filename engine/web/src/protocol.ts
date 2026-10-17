@@ -149,6 +149,7 @@ export interface RunOptions {
   scale?: number;      // Q1: the internal resolution, 1-3 times the console's (the Picture setting)
   mods?: string[];     // gameplay mods: "id" or "id:key=value,...", e.g. "abs:miss=8" (docs/mods/); single-threaded engine
   modSeed?: number;    // the mods' match seed (default: a random one per game)
+  modIntroMs?: number; // how long the page announces a review before it starts (the ABS "challenge" card)
   discCache?: { blockKib?: number; maxBlocks?: number; maxRun?: number; ahead?: number };  // the server image's cache
 }
 

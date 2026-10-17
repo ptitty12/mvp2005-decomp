@@ -37,6 +37,7 @@ export interface MvpEngine {
   _mvp_gpu_timing(on: number): void;  // Q5 (development): 0 = no GPU timestamps (before mvp_gfx_init)
   _mvp_mod_enable(spec: number): number;
   _mvp_mod_seed(seed: number): void;
+  _mvp_mod_intro(ms: number): void;  // the page's announcement before each review
   _mvp_mod_settings(): number;
   _mvp_mod_status(): number;
   _mvp_set_pad(port: number, connected: number, buttons: number, sx: number, sy: number, cx: number, cy: number,

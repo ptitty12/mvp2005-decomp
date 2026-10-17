@@ -30,7 +30,8 @@
 // virtual disc between mvp_open_disc and mvp_boot.
 // Gameplay mods (hook API v1, docs/mods/ABS_CHALLENGE.md): mvp_mod_enable("abs:k=v,...")
 // and mvp_mod_seed before mvp_boot; mvp_mod_status() for the page (the timeline's
-// phase and the mods' log lines). They need the single-threaded engine.
+// phase and the mods' log lines); mvp_mod_intro(ms), the page's announcement before
+// each review. They need the single-threaded engine.
 // P1 times the drive model's reads on the host ("io" in mvp_status;
 // mvp_io_log_enable / mvp_io_log for a per-read log).
 // P2: the threaded build (mvp-web-mt, MVP_WEB_THREADS) runs the GX processor
@@ -314,6 +315,10 @@ struct Engine {
   std::vector<std::string> mod_log, mod_notes;  // lines and player messages for the page (mvp_mod_status)
   std::vector<std::string> mod_ui;              // the mods' UI records (JSON objects) for the page
   bool mod_seed_set = false;                     // mvp_mod_seed was called (netplay: overrides the session's)
+  // The page's announcement of a review (mvp_mod_intro): once one is requested, nothing
+  // runs for `intro_ms` of host time before it starts. Host-side only: the guest waits at
+  // a frame poll, as it does for the other player online.
+  double intro_ms = 0, intro_until = 0;
 };
 Engine g;
 std::vector<TimedSource::Record> g_io_log;
@@ -796,6 +801,10 @@ EMSCRIPTEN_KEEPALIVE void mvp_mod_seed(double seed) {
   g.mod_seed_set = true;
 }
 
+// How long the page announces a review before it starts (ms; 0, the default: none).
+// The ABS challenge scene shows "ABS challenge" meanwhile (abs-scene.ts).
+EMSCRIPTEN_KEEPALIVE void mvp_mod_intro(double ms) { g.intro_ms = ms > 0 ? ms : 0; }
+
 // The mods' canonical settings (the netplay handshake's part), "" without mods.
 EMSCRIPTEN_KEEPALIVE const char* mvp_mod_settings() {
   g_text = g.mods.canonical_settings();
@@ -949,14 +958,29 @@ EMSCRIPTEN_KEEPALIVE void mvp_host_slow(double factor) {
 #endif
 }
 
+// A requested review waits out the page's announcement (mvp_mod_intro): true while it
+// does. The run has stopped at the frame poll for it, and nothing runs meanwhile.
+bool intro_holds() {
+  if (!g.timeline || !g.timeline->due() || g.mods.phase() != mods::Phase::Live || !g.mods.review_requested())
+    return false;
+  const double now = now_ms();
+  if (g.intro_until == 0) g.intro_until = now + g.intro_ms;
+  if (now < g.intro_until) return true;
+  g.intro_until = 0;
+  return false;
+}
+
 // Runs `n` VI fields (fewer if the run stops). Returns the fields run, or -1
 // once stopped (mvp_status() says why).
 EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
   if (!g.m || g.stopped) return -1;
+  if (intro_holds()) return 0;
   // Netplay (Q5): the next frame's input is not here yet: nothing runs, so no
   // batch starts (the render thread is not woken for nothing). A gameplay mod's
-  // review replays recorded inputs instead and is not held up.
-  if (web::net_active() && g.mods.phase() == mods::Phase::Live && !web::net_may_run()) return 0;
+  // review replays recorded inputs instead and is not held up; one that waited
+  // for its announcement starts below.
+  const bool step_due = g.timeline && g.timeline->due();
+  if (!step_due && web::net_active() && g.mods.phase() == mods::Phase::Live && !web::net_may_run()) return 0;
   const std::uint64_t start = g.hw->vi_fields();
   const std::uint64_t run_start = g.fields_run, want = static_cast<std::uint64_t>(n);
   if (g_tracing) g_trace.push_back({~0ull, static_cast<std::uint32_t>(start)});
@@ -965,6 +989,8 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
   if (g.threaded) web::render_batch_begin();
 #endif
   try {
+    if (step_due)
+      while (g.timeline->due()) g.timeline->step();  // the review announced meanwhile starts
     // A review's headless legs (g.hold) run unpaced, within a budget per batch.
     while (g.fields_run - run_start < want || (g.hold && now_ms() - t0 < 40)) {
       // Netplay: the next frame's input is not here yet (a review replays recorded inputs instead).
@@ -984,8 +1010,10 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
         dt = now_ms() - f0;
       }
       if (dt > g.max_field_ms) g.max_field_ms = dt;
-      if (g.timeline)
+      if (g.timeline) {
+        if (intro_holds()) break;  // the page announces the review first
         while (g.timeline->due()) g.timeline->step();
+      }
     }
   } catch (const StopRun& s) {
     g.stopped = true;

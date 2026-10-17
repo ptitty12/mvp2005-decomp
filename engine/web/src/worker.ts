@@ -460,6 +460,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
     // A given seed (tests), else offline a random one per game; netplay uses the session's.
     if (options.modSeed !== undefined) M._mvp_mod_seed(options.modSeed);
     else if (!options.netplay) M._mvp_mod_seed(crypto.getRandomValues(new Uint32Array(1))[0]!);
+    if (options.modIntroMs) M._mvp_mod_intro(options.modIntroMs);
     post({ type: 'log', text: `mods: ${cstr(M._mvp_mod_settings())}`, error: false });
   }
 
@@ -790,7 +791,8 @@ function fastLoop(): void {
       break;
     }
     ran += r;
-    if (net && r === 0) break;  // waiting for the other player: let datagrams in
+    // Nothing ran: waiting for the other player (let datagrams in), or a review's announcement.
+    if (r === 0) break;
   }
   if (!afterRun(ran, performance.now() - t0)) return;
   if (!opts?.fast && opts?.fastUntil && status().fields >= opts.fastUntil) {

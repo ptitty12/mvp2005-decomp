@@ -1,7 +1,8 @@
-// The ABS challenge scene over the game (docs/mods/ABS_CHALLENGE.md §7). A review
-// first rewinds without showing frames; instead of a frozen picture the page shows
-// a broadcast-style card: who challenged which call, the strike zone being
-// scanned, and the rewind's progress. The replay itself plays with only a small
+// The ABS challenge scene over the game (docs/mods/ABS_CHALLENGE.md §4.6). The
+// moment a challenge is made, a broadcast-style card announces it: "ABS challenge",
+// who challenged which call, the strike zone being scanned. The engine waits
+// ANNOUNCE_MS before the review starts, and the card stays while it rewinds (with
+// its progress, if that takes long). The replay itself plays with only a small
 // "Replay" tag. After it, the verdict: where the pitch crossed and whether the call
 // stands; it fades out shortly after play resumes. Host-side only: nothing here
 // reaches the game.
@@ -25,6 +26,10 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
 }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// How long the challenge is announced before the replay (ms): the engine waits that
+// long before it starts the review (mvp_mod_intro), so the card is not cut short.
+export const ANNOUNCE_MS = 1800;
 
 export class ChallengeScene {
   private root: HTMLDivElement;
@@ -107,6 +112,7 @@ export class ChallengeScene {
         this.challenge = { team: String(r.team), call: String(r.call), truth: String(r.truth),
                            x: Number(r.x), y: Number(r.y) };
         this.verdictShown = false;
+        this.showReview(true);  // at once: the engine waits ANNOUNCE_MS before the review starts
       } else if (r.abs === 'verdict' && this.challenge) {
         const left = Number(r.left);
         this.status.textContent = r.overturned
@@ -118,18 +124,25 @@ export class ChallengeScene {
     this.phase = phase;
     switch (phase) {
       case 'seeking':
-        // From a snapshot near the release the rewind is over in a few frames
-        // (ABS_CHALLENGE.md §7.2): the card waits so that it does not flash.
         if (prev !== 'seeking') {
-          window.clearTimeout(this.cardTimer);
-          this.cardTimer = window.setTimeout(() => {
-            if (this.phase === 'seeking') this.showReview();
-          }, 200);
+          window.clearTimeout(this.fadeTimer);
+          if (!this.root.hidden) {
+            this.barBox.hidden = false;  // announced: the card stays, with the rewind's progress
+          } else {
+            // Not announced (no challenge record): from a snapshot near the release the
+            // rewind is over in a few frames (ABS_CHALLENGE.md §7.2), so the card waits
+            // so that it does not flash.
+            window.clearTimeout(this.cardTimer);
+            this.cardTimer = window.setTimeout(() => {
+              if (this.phase === 'seeking') this.showReview(false);
+            }, 200);
+          }
         }
         this.setProgress(progress);
         break;
       case 'presenting':
         window.clearTimeout(this.cardTimer);
+        window.clearTimeout(this.fadeTimer);
         this.root.hidden = true;
         this.tag.textContent = this.challenge ? `Replay · ${cap(this.challenge.team)} challenge` : 'Replay';
         this.tag.hidden = false;
@@ -150,24 +163,35 @@ export class ChallengeScene {
     }
   }
 
-  private showReview(): void {
+  // The challenge card: announced the moment a challenge is made (`announce`: big title,
+  // no progress yet), else shown while a review rewinds.
+  private showReview(announce: boolean): void {
     window.clearTimeout(this.fadeTimer);
+    window.clearTimeout(this.cardTimer);
     const c = this.challenge;
     this.root.classList.remove('abs-fading', 'abs-verdict', 'abs-overturned', 'abs-stands');
     this.root.classList.add('abs-reviewing');
+    this.root.classList.toggle('abs-announce', announce);
     this.title.textContent = 'ABS challenge';
     this.sub.textContent = c ? `${cap(c.team)} challenges the ${c.call} call` : 'Reviewing the call';
     this.status.textContent = 'Tracking the pitch...';
     this.ball.style.display = 'none';
-    this.barBox.hidden = false;
+    this.setProgress(0);
+    this.barBox.hidden = announce;
     this.root.hidden = false;
+    // A review that never starts (the engine dropped it) must not leave the card up.
+    if (announce) this.fadeTimer = window.setTimeout(() => this.fadeOut(), ANNOUNCE_MS + 3000);
+    // A fresh pop each time (the card's animation runs when it is shown again).
+    this.card.style.animation = 'none';
+    void this.card.offsetWidth;
+    this.card.style.animation = '';
   }
 
   private showVerdict(): void {
     const c = this.challenge;
     this.verdictShown = true;
     window.clearTimeout(this.fadeTimer);
-    this.root.classList.remove('abs-reviewing', 'abs-fading');
+    this.root.classList.remove('abs-reviewing', 'abs-fading', 'abs-announce');
     this.root.classList.add('abs-verdict');
     if (c) {
       const overturned = c.truth !== c.call;

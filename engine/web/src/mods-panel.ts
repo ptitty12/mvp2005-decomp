@@ -5,7 +5,7 @@
 // The URL's mod= parameters, when present, win over the panel. While a review runs,
 // the ABS challenge scene (abs-scene.ts) covers the game instead of a frozen picture.
 
-import { ChallengeScene } from './abs-scene.js';
+import { ANNOUNCE_MS, ChallengeScene } from './abs-scene.js';
 
 const KEY = 'mvp.mods.abs';
 
@@ -69,6 +69,11 @@ export class ModsPanel {
     if (this.fromUrl.length) return this.fromUrl;
     const s = absSpec(this.settings);
     return s ? [s] : [];
+  }
+
+  // How long the engine waits before a review so the scene can announce it (ms).
+  introMs(): number {
+    return this.scene ? ANNOUNCE_MS : 0;
   }
 
   // The game started: the settings can no longer change for it.
