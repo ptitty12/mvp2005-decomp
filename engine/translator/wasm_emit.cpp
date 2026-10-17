@@ -2214,8 +2214,8 @@ void FuncGen::emit_fp(const InsnInfo& x) {
 // Q4, F1: the fast model of ppc/fp.h (its comment has the rules), for every
 // instruction emit_fp computes but fctiw (exact in both models). Every step is one
 // IEEE double operation in the order fp.cpp writes it, a single result is the
-// double rounded to f32 and back, a result below the normal range of its
-// precision becomes a signed zero, and a NaN result becomes the default NaN,
+// double rounded to f32 and back (Q6: subnormal results stay), and a NaN result
+// becomes the default NaN,
 // whatever bits the host's arithmetic gave it. Called inside emit_fp's fast-path
 // block, after the FPSCR check; the sources are in their locals.
 void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
@@ -2223,7 +2223,7 @@ void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
   const Insn i{x.word};
   const Op o = x.op;
   const u32 rD = i.rD(), rA = i.rA(), rB = i.rB(), rC = i.rC();
-  constexpr u64 kOne = 0x3FF0000000000000ull, kMinSingle = 0x3810000000000000ull, kMinDouble = 0x0010000000000000ull;
+  constexpr u64 kOne = 0x3FF0000000000000ull;
   auto ld = [&](u32 off) { fp_get(off); };
   // The result for the double in L_r, as i64 bits into `out` (fp::fast_finish).
   auto fin = [&](bool single, u32 out) {
@@ -2233,17 +2233,7 @@ void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
       b.op(op::f32_demote_f64);
       b.op(op::f64_promote_f32);
     }
-    b.set(L_fa);
-    b.f64c_bits(0);
-    b.get(L_fa);
-    b.op(op::f64_copysign);
-    b.get(L_fa);
-    b.get(L_fa);
-    b.op(op::f64_abs);
-    b.f64c_bits(single ? kMinSingle : kMinDouble);
-    b.op(op::f64_lt);
-    b.op(op::select);  // below the normal range: a signed zero
-    b.op(op::i64_reinterpret_f64);
+    b.op(op::i64_reinterpret_f64);  // Q6: no flush below the normal range
     b.get(L_r);
     b.get(L_r);
     b.op(op::f64_ne);

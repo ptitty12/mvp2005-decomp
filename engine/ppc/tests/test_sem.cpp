@@ -800,6 +800,12 @@ TEST_CASE("fp fused multiply-add") {
 }
 
 TEST_CASE("fp NaN, infinity and NI") {
+  // The Gekko's NI flush and NaN propagation: the exact model's (Q6: the fast
+  // model, the engine's default with NI set, flushes nothing; test_fp checks it).
+  struct ExactModel {
+    ExactModel() { fp::g_model = fp::Model::Exact; }
+    ~ExactModel() { fp::g_model = fp::Model::Fast; }
+  } exact;
   Machine m;
   auto& c = m.c;
   c.fpr[1].ps0 = 0x7FF0000000000001ull;  // SNaN
