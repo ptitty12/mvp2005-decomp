@@ -291,6 +291,7 @@ class Hardware : public ppc::Io {
   u32 cp32(u32 lo_off) const { return cp16(lo_off) | u32(cp16(lo_off + 2)) << 16; }
   void set_cp32(u32 lo_off, u32 v);
   u32 cp_status() const;
+  bool cp_cause() const;  // Q6: the CP interrupt's cause (a watermark or the breakpoint, enabled)
   u32 gp_distance() const;
   bool gp_at_breakpoint() const;
   WgpState own_wgp_;            // the write-gather buffer (P2: or the runtime's, set_wgp_state)

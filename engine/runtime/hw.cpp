@@ -280,8 +280,13 @@ void Hardware::gp_run() {
     set_cp32(0x38, rp);
     moved = true;
   }
-  if (moved || gp_at_breakpoint()) kick();
-  if (gfx_ && gp_at_breakpoint()) gfx_->gp_sync();  // P2: the guest can see where the GP stopped
+  // Q6: the GP's progress raises nothing but the CP interrupt (a watermark or
+  // the breakpoint, each with its enable): a safe point is due only when that
+  // cause is up. (Any other cause kicks where it is raised; a safe point with
+  // nothing to deliver changes nothing, so the guest sees the same.)
+  const bool at_bp = gp_at_breakpoint();
+  if ((moved || at_bp) && cp_cause()) kick();
+  if (gfx_ && at_bp) gfx_->gp_sync();  // P2: the guest can see where the GP stopped
 }
 
 void Hardware::gp_consume(const u8* bytes, std::size_t n) {
@@ -681,6 +686,13 @@ u32 Hardware::vi_current_line() const {
   return static_cast<u32>(((now() - frame_start_tb_) % kFrameTb) / line_tb()) + 1;
 }
 
+bool Hardware::cp_cause() const {
+  const u32 cr = cp16(0x02);
+  if (!(cr & (0x4 | 0x8 | 0x20))) return false;  // Q4: the CP status only when it can raise one
+  const u32 sr = cp_status();
+  return ((sr & 0x1) && (cr & 0x4)) || ((sr & 0x2) && (cr & 0x8)) || ((sr & 0x10) && (cr & 0x20));
+}
+
 u32 Hardware::pi_cause() const {
   u32 cause = 0x10000;  // RSWST: the reset switch is not pressed
   for (int n = 0; n < 4; ++n) {
@@ -693,10 +705,7 @@ u32 Hardware::pi_cause() const {
   if (((di_sr_ & 0x4) && (di_sr_ & 0x2)) || ((di_sr_ & 0x10) && (di_sr_ & 0x8)) || ((di_sr_ & 0x40) && (di_sr_ & 0x20)) ||
       ((di_cvr_ & 0x4) && (di_cvr_ & 0x2)))
     cause |= 0x4;  // DI
-  if (const u32 cr = cp16(0x02); cr & (0x4 | 0x8 | 0x20)) {  // Q4: the CP status only when it can raise one
-    const u32 sr = cp_status();
-    if (((sr & 0x1) && (cr & 0x4)) || ((sr & 0x2) && (cr & 0x8)) || ((sr & 0x10) && (cr & 0x20))) cause |= 0x800;  // CP
-  }
+  if (cp_cause()) cause |= 0x800;  // CP
   if ((pe_ctrl_ & 0x4) && (pe_ctrl_ & 0x1)) cause |= 0x200;  // PE token
   if ((pe_ctrl_ & 0x8) && (pe_ctrl_ & 0x2)) cause |= 0x400;  // PE finish
   if (((dsp_cr_ & 0x08) && (dsp_cr_ & 0x10)) || ((dsp_cr_ & 0x20) && (dsp_cr_ & 0x40)) ||
