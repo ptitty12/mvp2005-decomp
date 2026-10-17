@@ -13,7 +13,8 @@ constexpr u32 kCircleDraw = 0x802F893Cu;  // r3 = HUD; draws the circle while hu
 constexpr u32 kNewPitch = 0x801BAFA4u;    // umpire reset for the next pitch
 constexpr u32 kRelease = 0x801896E8u;     // posts event 0x3D (release)
 constexpr u32 kWindup = 0x802321BCu;      // the pitch is chosen and the delivery starts (posts event 0x5A)
-constexpr u32 kSites[] = {kUmpireCall, kCircleDraw, kNewPitch, kRelease, kWindup};
+constexpr u32 kNewGame = 0x801BACA0u;     // the umpire's set-up for a game, also on Restart Game (§3.10)
+constexpr u32 kSites[] = {kUmpireCall, kCircleDraw, kNewPitch, kRelease, kWindup, kNewGame};
 
 // The late snapshot (docs/mods/ABS_CHALLENGE.md §7.2): a review rewinds to a
 // snapshot just before its replay's first frame (release - pre), so the headless
@@ -145,6 +146,9 @@ class AbsMod final : public Mod {
       case kWindup:
         windup(h);
         break;
+      case kNewGame:
+        new_game(h);
+        break;
       case kRelease:
         s.release_frame = static_cast<u32>(h.frame());
         s.late_due = 0;  // too late to help a review, and it would stall the pitch in flight
@@ -206,6 +210,22 @@ class AbsMod final : public Mod {
   }
 
  private:
+  // A game starts (from the menus, or the pause menu's Restart Game): both teams get
+  // their challenges again, and nothing of the last game's pitches carries over. The
+  // statistics stay (they count the whole session).
+  void new_game(Host& h) {
+    State& s = h.state_as<State>();
+    s.challenges[0] = s.challenges[1] = static_cast<u8>(h.setting("challenges"));
+    s.window_open = 0;
+    s.windup_frame = s.late_due = 0;
+    s.late_asked = 0;
+    s.delivery[0] = s.delivery[1] = 0;
+    s.pitch_team = 2;
+    char line[80];
+    std::snprintf(line, sizeof line, "new game: %u challenge(s) per team", s.challenges[0]);
+    h.log(line);
+  }
+
   // The delivery starts: schedule the late snapshot to land kLateMargin polls
   // before the replay's first frame (release - pre), with the delivery learned
   // for this fielding team. A snapshot asked for at frame F is taken at poll F + 1.

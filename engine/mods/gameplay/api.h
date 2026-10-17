@@ -25,8 +25,8 @@
 namespace mvp::mods {
 
 // 1.1: the host keeps the two latest snapshots, and a review restores the later one
-// that fits (Host::request_snapshot).
-inline constexpr std::uint32_t kHookApiMajor = 1, kHookApiMinor = 1;
+// that fits (Host::request_snapshot). 1.2: the site 0x801BACA0 (a new game).
+inline constexpr std::uint32_t kHookApiMajor = 1, kHookApiMinor = 2;
 
 using u8 = std::uint8_t;
 using u16 = std::uint16_t;

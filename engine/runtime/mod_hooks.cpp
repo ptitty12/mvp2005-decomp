@@ -18,6 +18,7 @@ constexpr Site kSites[] = {
     {0x801BAFA4u, "fn_801BAFA4", "plate umpire: reset for the next pitch (ABS)"},
     {0x801896E8u, "fn_801896E8", "pitch: release, posts event 0x3D (ABS)"},
     {0x802321BCu, "fn_802321BC", "pitch: chosen, the delivery starts; posts event 0x5A (ABS)"},
+    {0x801BACA0u, "fn_801BACA0", "plate umpire: set up for a new game (also Restart Game); rolls the variable zone (ABS)"},
 };
 constexpr std::size_t kCount = sizeof kSites / sizeof kSites[0];
 
