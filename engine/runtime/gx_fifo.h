@@ -61,6 +61,7 @@ class GxFifo {
   // What a BP register load reports to the pixel engine.
   struct Effects {
     bool draw_done = false;  // BP 0x45 with bit 1: the finish interrupt
+    std::uint32_t draw_dones = 0;  // Q6: how many (a push may hold several)
     bool token_int = false;  // BP 0x48: token and the token interrupt
     bool token_set = false;  // BP 0x47 or 0x48: the token register
     std::uint16_t token = 0;

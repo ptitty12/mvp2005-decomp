@@ -192,7 +192,11 @@ static bool run_803EB000(Cpu& c) {
 }
 
 void hle_fn_803EB000(Cpu& c, GuestFn original) {
-  if (!run_803EB000(c)) original(c);
+  Hardware* const hw = hardware_of(c);
+  if (hw) hw->gp_defer(true);  // Q6: the GP reads its bursts in one piece (Hardware::gp_defer)
+  const bool done = run_803EB000(c);
+  if (hw) hw->gp_defer(false);
+  if (!done) original(c);
 }
 
 namespace {
@@ -263,7 +267,9 @@ void hle_fn_803EA3EC(Cpu& c, GuestFn original) {
         break;
       case Safe::Go: break;
     }
+    if (hw) hw->gp_defer(true);  // Q6: the GP reads this pass's bursts before the back edge's safe point
     if (!run_803EB000(c)) {  // the original runs there instead, from the dispatcher
+      if (hw) hw->gp_defer(false);
       c.pc = kCallee;
       g_unwinding = true;
       return;
@@ -308,6 +314,7 @@ void hle_fn_803EA3EC(Cpu& c, GuestFn original) {
     stfs(24, 4);
     c.gpr[3] += 0x10;
     c.gpr[10] += 1;
+    if (hw) hw->gp_defer(false);
     c.ticks = tk(26);
     switch (safe_point(c, kBack)) {  // the back edge's (an interrupt handler that ran counted its own)
       case Safe::Leave: return;

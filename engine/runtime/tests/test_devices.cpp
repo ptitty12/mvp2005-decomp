@@ -3,6 +3,7 @@
 // the AI sample counter and DMA, and the DSP mailbox protocol.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -476,4 +477,80 @@ TEST_CASE("Q4: Hardware::wgp_store does what write does for the write-gather pip
   b.wgp(fill);
   CHECK(a.r(0xCC003014) == b.r(0xCC003014));
   CHECK(std::memcmp(&a.mem[kBase], &b.mem[kBase], kEnd - kBase) == 0);
+}
+
+TEST_CASE("Q6: the GP reading deferred bursts in one piece leaves what reading each one does") {
+  // Two machines, the GP linked to a small CPU FIFO that wraps often, PE
+  // interrupts on: one lets the GP read every burst at once, the other holds
+  // the GP (gp_defer) over groups of 1-9 bursts. After each group: the same
+  // pointers, PE token and interrupt state, finishes, commands seen, memory.
+  Rig a, b;
+  Seen sa, sb;
+  constexpr u32 kBase = 0x00100000, kEnd = 0x001003E0;  // 1 KiB
+  for (Rig* g : {&a, &b}) {
+    g->w(0xCC00300C, kBase);
+    g->w(0xCC003010, kEnd);
+    g->w(0xCC003014, kBase);
+    g->cp32(0x20, kBase);
+    g->cp32(0x24, kEnd);
+    g->cp32(0x28, 0x300);
+    g->cp32(0x2C, 0x100);
+    g->cp32(0x34, kBase);
+    g->cp32(0x38, kBase);
+    g->w(0xCC000002, 0x11, 2);  // read enable, linked
+    g->w(0xCC00100A, 0x3, 2);   // PE token and finish interrupts
+    g->w(0xCC003004, 0xE00);
+  }
+  a.hw.set_gfx_observer(&sa);
+  b.hw.set_gfx_observer(&sb);
+  std::uint64_t seed = 0x2545F4914F6CDD1Dull;
+  auto next = [&] {
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    return static_cast<u32>(seed >> 16);
+  };
+  std::vector<u8> s;  // a stream: NOPs, XF loads, CP loads, tokens, finishes
+  while (s.size() < 256 * 1024) {
+    switch (next() % 6) {
+      case 0: s.push_back(0); break;
+      case 1: {
+        const u32 n = next() % 16;
+        s.push_back(0x10);
+        put32(s, (n << 16) | (next() & 0x3FF));
+        for (u32 k = 0; k <= n; ++k) put32(s, next());
+        break;
+      }
+      case 2: cp_load(s, static_cast<u8>(0x30 + next() % 2), next()); break;
+      case 3: bp_load(s, 0x47000000u | (next() & 0xFFFF)); break;
+      case 4: bp_load(s, 0x48000000u | (next() & 0xFFFF)); break;
+      default: bp_load(s, 0x45000002u); break;
+    }
+  }
+  s.resize(s.size() & ~std::size_t(31));
+  int groups = 0;
+  for (std::size_t at = 0; at < s.size();) {
+    const std::size_t n = std::min<std::size_t>(s.size() - at, 32 * (1 + next() % 9));
+    const std::vector<u8> part(s.begin() + static_cast<std::ptrdiff_t>(at), s.begin() + static_cast<std::ptrdiff_t>(at + n));
+    a.wgp(part);
+    b.hw.gp_defer(true);
+    b.wgp(part);
+    b.hw.gp_defer(false);
+    at += n;
+    ++groups;
+    REQUIRE(a.cp32r(0x34) == b.cp32r(0x34));
+    REQUIRE(a.cp32r(0x38) == b.cp32r(0x38));
+    REQUIRE(a.r(0xCC003014) == b.r(0xCC003014));
+    REQUIRE(a.r(0xCC00100E, 2) == b.r(0xCC00100E, 2));
+    REQUIRE(a.r(0xCC00100A, 2) == b.r(0xCC00100A, 2));
+    REQUIRE(a.hw.pi_cause() == b.hw.pi_cause());
+    REQUIRE(a.hw.draw_done_count() == b.hw.draw_done_count());
+    if (next() % 4 == 0)  // the handler acknowledges both, sometimes
+      for (Rig* g : {&a, &b}) g->w(0xCC00100A, 0x3 | 0xC, 2);
+  }
+  CHECK(groups > 1000);
+  CHECK(a.hw.draw_done_count() > 100);
+  CHECK(sa.cmds == sb.cmds);
+  CHECK(sb.batches < sa.batches);  // fewer, larger pushes
+  CHECK(std::memcmp(&a.mem[kBase], &b.mem[kBase], kEnd + 32 - kBase) == 0);
 }

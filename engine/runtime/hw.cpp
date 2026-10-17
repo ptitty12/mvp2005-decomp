@@ -264,6 +264,10 @@ void Hardware::wgp_burst() {
   }
   set_reg(0xCC003014u, pa | wrap, 4);
   if (cp16(0x02) & 0x10) set_cp32(0x34, pa);  // linked: the GP's write pointer follows
+  if (gp_defer_) {  // Q6: read at gp_defer(false)
+    gp_deferred_ = true;
+    return;
+  }
   gp_run();
 }
 
@@ -272,10 +276,14 @@ void Hardware::gp_run() {
   u32 base = cp32(0x20) & 0x03FFFFE0u, end = cp32(0x24) & 0x03FFFFFFu;
   u32 wp = cp32(0x34) & 0x03FFFFE0u, rp = cp32(0x38) & 0x03FFFFE0u;
   bool moved = false;
+  const bool bp = (cp16(0x02) & 0x2) != 0;
   while (rp != wp && !gp_at_breakpoint()) {
-    if (rp + 32 > mem1_size_) throw StopRun{"GX FIFO read outside MEM1"};
-    gp_consume(mem1_ + rp, 32);
-    rp += 32;
+    // Q6: everything up to the write pointer at once when no wrap and no
+    // breakpoint is in the way (the breakpoint stops the GP at a burst).
+    const u32 n = (!bp && wp > rp && wp - 32 <= end) ? wp - rp : 32;
+    if (rp + n > mem1_size_) throw StopRun{"GX FIFO read outside MEM1"};
+    gp_consume(mem1_ + rp, n);
+    rp += n;
     if (rp > end) rp = base;
     set_cp32(0x38, rp);
     moved = true;
@@ -297,7 +305,7 @@ void Hardware::gp_consume(const u8* bytes, std::size_t n) {
   if (fx.token_int) pe_ctrl_ |= 0x4;
   if (fx.draw_done) {
     pe_ctrl_ |= 0x8;
-    ++draw_dones_;
+    draw_dones_ += fx.draw_dones;
   }
   if (fx.token_int || fx.draw_done) kick();
   // P2: from here the guest can know that the GP consumed every command so far.
