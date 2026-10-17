@@ -28,7 +28,9 @@ human pitching **1.000x** and CPU vs CPU **0.993x** (before 0.87-0.93); hostSlow
 **0.970-0.985x** (before 0.89-0.90; the 1.0x stretch is not reached); hostSlow 1.3
 **9.6-10.1 ms** of emulation per field (before 11.0-12.1). The emulation thread alone
 (Node): -14.4 %. Every guest line is unchanged except human pitching's (lever 1); renderer
-digests, netplay and a whole game check out (section 12).
+digests, netplay and a whole game check out (section 12). After merging origin/main twice
+(the hook API v1 and gameplay mods; Q7's top-left fix) the numbers and checks hold, save
+states included, and Q7's scale-change check passes (section 14).
 
 ## 1. Where the time went (at the start)
 
@@ -286,7 +288,7 @@ any of it (the render thread only reads). Checked with the renderer digests (sec
 field by field.
 
 Measured: paced sessions of one site with copies on and off (`rtTune=-1,-1,0,-1,0`),
-interleaved; speed, the emulation thread's time per field (with the ×N spin of the
+interleaved; speed, the emulation thread's time per field (with the Ã—N spin of the
 simulated machines), new frames shown per second, presents over 25 ms:
 
 | Machine | Match | Copies on | Copies off |
@@ -461,7 +463,10 @@ Commits on `engine/q6-speed` (not pushed):
 | `c3d5c442` | copies of what commands read instead of write waits (lever 5) |
 | `8ef9646e` | merge of origin/main (Q5b), no conflicts |
 | `a2f433bf` | the GP reads the skinning code's bursts in one piece |
-| (this log) | Q6_LOG.md, WEB.md's re-recorded lines and Q6's numbers |
+| `ab383308` | Q6_LOG.md, WEB.md's re-recorded lines and Q6's numbers |
+| `7418a56d` | merge of origin/main (hook API v1, gameplay mods, roster packs), section 14 |
+| `c6820d6b` | merge of origin/main (Q7), section 14 |
+| (this update) | section 14 |
 
 Proposed DECISIONS entries (for the lead; docs/DECISIONS.md not edited):
 
@@ -497,3 +502,90 @@ What is left, by size:
   a field) could be translated in the page; about 2.5 % in Node.
 - `fn_80369878` and `fn_803E3C08` (each about 1 %) spend their time in calls into other
   translated code; native versions would have to call back.
+
+## 14. After the merges with origin/main (hook API v1 and mods; Q7)
+
+origin/main moved twice after section 11: `7ab8e2ca` (the hook API v1 with its site
+registry, frame-poll gate and save states; gameplay mods with the ABS challenge, in the
+browser and in netplay; roster packs on the server), merged as `7418a56d`, then `c169d2b1`
+(Q7: the frozen top-left block after a Picture scale change), merged as `c6820d6b`.
+
+**The merges.** One conflict, in the first: the HLE table (now built in a lambda, with the
+mod sites appended); Q6's `fn_803EA3EC` entry stays next to `fn_803EB000`. No mod site lies
+inside either native function (the sites are at `0x801BB338`, `0x802F893C`, `0x801BAFA4`,
+`0x801896E8`, `0x802321BC`). Q7 merged cleanly: it changes the renderer's texture
+bind-group cache, which sits above `GpMemory` and its copies.
+
+**Save states against Q6's changes.**
+- A save state is taken only at a stopped frame poll, between runs: no native function is
+  under way then, so nothing of `fn_803EA3EC`'s loop lives on the host stack, and
+  `Hardware`'s gp_defer flags (copied with the rest of `Hardware`) are always clear.
+- The safe-point change (section 7) keeps no state; the frame-poll gate stops in the frame
+  poll's hook, not at a safe point.
+- Restoring writes guest memory with `memcpy`, outside the write checks. The copies
+  (section 9) never meet that: gameplay mods force the single-threaded engine, which has no
+  render thread and no copies.
+- Native `mvp-play --rewind-test` (save, run, restore, run again): CPU vs CPU (poll 8,000 ->
+  8,900, with the native skinning loop and the held GP at work throughout) and human
+  pitching (7,000 -> 7,700) on both merges, menus (2,000 -> 2,300) on the first: IDENTICAL
+  each time. The ABS mod on (`--mod abs:miss=30,edge=0 --mod-seed 1`, CPU vs CPU to 12,000
+  fields, with its snapshots every pitch), twice on the first merge: the same guest line
+  both times.
+
+**Exactness, on the final merge.** Native guest lines unchanged (700 `53221c4a`, 2,400
+`4285f135`, 3,600 `40a7692d`, CPU vs CPU 11,600 `d8c30e9a`, human pitching 9,000
+`caec614c`). Chrome: the same lines threaded and single-threaded, paced, and without
+isolation. Renderer digests: CPU vs CPU threaded = single-threaded = origin/main's threaded
+= the branch before the merges, in every field; human pitching threaded = single-threaded =
+origin/main's (before Q7) in all 8,995 common fields (its guest line differs, section 2, but
+nothing drawn does there). Netplay: native solo `2a8de818` unchanged; `netplay_check` PASS
+(both pages threaded). Tests: MSVC 49 (48 pass, `local_disasm` skips), Emscripten 42 (41
+pass, the same skip), with `test_gameplay`, `mods_crosscheck`, `local_mods_example`, Q7's
+`test_gfx_render` case and the server's pack tests. The ABS reference lines in
+docs/mods/ABS_CHALLENGE.md (`c1bccfad`, `4d94b897`, netplay `b7363882`) come from input
+scripts that are not in the repository and were not re-run; they were recorded with the
+flush to zero and may change the way human pitching's did.
+
+**The owner's top-left report.**
+- Before Q7, on the first merge: headed Chrome, threaded, at 2x and 3x (`scale=2`, `scale=3`)
+  on menus and in play, every screenshot looked right and the digests of the merged engine
+  and origin/main agreed in every field (and 2x with 3x). Picture Auto with `gpuLoad=150`
+  never stepped down on this PC's GPU (51-65 % busy); with `gpuLoad=600` it did (2x -> 1x).
+  When that step-down came *during play*, a block about 137 x 137 console pixels at the
+  top-left showed the wrong picture (another camera's stands, a pole, windows) frame after
+  frame. It did so the same way with origin/main's site (no Q6) and with the merged site
+  with Q6's copies turned off; at a fixed 1x from the start, and after a step-down that came
+  before play, both drew that corner correctly. So it was the owner's bug, not Q6's.
+- After merging Q7: its scale-change check (CLK2's script unpaced to field 8,250, Picture 2x
+  -> 3x at field 7,000, against a fixed `scale=3` run, the top-left 128 x 128) passes on the
+  merged engine with a region mean of 0.00 and a whole-picture mean of 0.00 (limit 3), the
+  same with the copies turned off, and on origin/main. Three more runs with `gpuLoad=600`,
+  each stepping down 2x -> 1x during play (fields ~8,150-8,200), show that corner correctly
+  in every screenshot.
+
+**Speed, one interleaved pair each** (Chrome, paced, the merged engine `c6820d6b` against
+origin/main `c169d2b1`):
+
+| Config | Match | Build | Game speed | Emulation ms/field | New frames/s | Rendered fps | Present p95 ms | Presents > 25 ms | Composited p95 ms | Composited > 25 ms | Underruns/min |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| hostSlow 1.3 | CPU vs CPU | before | 1.000 | 11.3 | 59.5 | 59.9 | 26 | 6.5 % | 21.6 | 1.8 % | 0.0 |
+| hostSlow 1.3 | CPU vs CPU | after | 1.000 | 10.0 | 59.4 | 59.9 | 25 | 5.7 % | 21.4 | 1.0 % | 0.0 |
+| hostSlow 1.3 | human pitching | before | 1.000 | 11.0 | 59.4 | 59.9 | 25 | 6.2 % | 21.7 | 1.2 % | 0.0 |
+| hostSlow 1.3 | human pitching | after | 1.000 | 9.7 | 59.6 | 59.9 | 25 | 4.5 % | 22.5 | 2.4 % | 1.6 |
+| hostSlow 2 | CPU vs CPU | before | 0.896 | 18.0 | 36.1 | 36.3 | 47 | 48.9 % | 52.1 | 51.8 % | 0.0 |
+| hostSlow 2 | CPU vs CPU | after | 0.975 | 15.3 | 51.1 | 51.8 | 37 | 17.0 % | 31.4 | 7.7 % | 0.0 |
+| hostSlow 2 | human pitching | before | 0.904 | 17.5 | 43.1 | 43.4 | 44 | 28.8 % | 51.0 | 27.3 % | 0.0 |
+| hostSlow 2 | human pitching | after | 0.978 | 14.8 | 51.8 | 51.9 | 36 | 21.6 % | 35.5 | 14.9 % | 0.0 |
+| 4 E-cores | CPU vs CPU | before | 0.936 | 16.8 | 44.0 | 44.6 | 42 | 27.5 % | 47.5 | 24.0 % | 0.0 |
+| 4 E-cores | CPU vs CPU | after | 0.993 | 13.6 | 55.3 | 57.3 | 26 | 7.1 % | 21.0 | 0.7 % | 0.0 |
+| 4 E-cores | human pitching | before | 0.921 | 17.3 | 42.0 | 42.4 | 44 | 32.9 % | 49.4 | 31.0 % | 0.0 |
+| 4 E-cores | human pitching | after | 1.000 | 13.1 | 56.0 | 57.8 | 27 | 7.0 % | 23.3 | 4.2 % | 0.0 |
+
+The same as section 11 within the run-to-run spread: hostSlow 1.3 at 10.0 / 9.7 ms of
+emulation per field (before 11.3 / 11.0), hostSlow 2 at 0.975 / 0.978x (before 0.896 /
+0.904x), 4 E-cores at 0.993 / 1.000x (before 0.936 / 0.921x). One sound underrun in the
+human-pitching run at hostSlow 1.3 (1.6 a minute; none in the other eleven). A first set
+of these pairs on the first merge (before Q7) gave the same picture where the machine was
+quiet (4 E-cores 0.993 / 0.999x against 0.912 / 0.913x; hostSlow 2 human pitching 0.962x
+against 0.893x); its other runs met another session's builds and engine runs (up to 20
+cores busy) and are not used.
