@@ -65,6 +65,13 @@ The mod runs natively (`mvp-play --mod abs`), in the browser (the Gameplay mods 
   `engine/web/src/abs-scene.ts` (the challenge scene, §4.6), and the Worker and page.
 - Netplay: `net/protocol.cpp` names the differing settings in a refusal.
 
+**Owner feedback, 2026-10-17** (first play in the browser):
+- **An announcement the moment someone challenges** (§4.6). The engine waits 1.8 s before the
+  review starts.
+- **The verdict's strike zone is 1.5 times larger** (§4.6).
+- **Challenges reset at every new game, Restart Game included** (§4.3). A restarted game
+  used to keep the last game's counters.
+
 **Known limits:**
 - **Threaded browser engine:** mods need the single-threaded engine. The render thread's
   GX state is not saved yet.
@@ -470,6 +477,23 @@ three games; then the same games with the mod logging each release):
   100 frames). The release waits for the pitching meter.
 - The pitch choice before it (new pitch to `fn_802321BC`) takes 44-270 polls.
 
+**A new game: the umpire's set-up `fn_801BACA0`** (V: `src/game/tu_801BAC74.cpp`; T,
+2026-10-17):
+- **What it does:** it clears the umpire's state and rolls the per-game variable zone (§3.3).
+- **When it runs:** traced with the batter game's script, then the pause menu's Restart Game.
+  The menu items are Replay, Pitch/Swing Analysis, Roster Options, Game Options, Box Score,
+  Select Controller, Restart Game and Quit; a confirmation follows, Cancel or Ok.
+  - It ran at field 3863, when the first game started.
+  - It ran again at field 7639, just after the restart was confirmed. The new game's first
+    pitch (top of the 1st, 0-0, 0 out) came at field 9433.
+- **With the mod** (`challenges=1`):
+  - a challenge used in the first game left 0;
+  - after Restart Game the mod logged "new game: 1 challenge(s) per team";
+  - the new game's first called strike could be challenged.
+  - The build before the fix refused that challenge ("no challenges left").
+- **Quit, then a new game from the main menu,** was not traced. I: it starts a game the same
+  way as the first one, which runs `fn_801BACA0` (field 3863).
+
 ## 4. Mod behaviour
 
 ### 4.1 Truth and the umpire model
@@ -539,8 +563,11 @@ answer.
   challenged by the batting team, a called ball by the fielding team.
 - **Teams:** `+0x1CD0` gives the batting side, and `options+0x6C[team]` gives the controller
   port per team (index 0 = home, T). In netplay that maps each player's port to a team.
-- **Counters:** each team starts with `abs.challenges`. A challenge is spent only when the
-  call stands.
+- **Counters:** each team starts every game with `abs.challenges`. A challenge is spent only
+  when the call stands.
+  - The mod refills them at the umpire's per-game set-up (`fn_801BACA0`, site since
+    2026-10-17). That set-up also runs on the pause menu's Restart Game (§3.10).
+  - Before that, a restarted game kept the last game's counters (owner, 2026-10-17).
 - **Verdict:** known the instant the challenge is made (truth was recorded at the call).
   The review is presentation.
 - **The window closes** at the next new-pitch signal (`fn_801BAFA4`) or when the time runs
@@ -580,16 +607,26 @@ Save states copy the block, and the netplay state hash includes it (§5.7, §6.2
 
 **The challenge scene** (`engine/web/src/abs-scene.ts`, 2026-10-17). During the headless
 legs the canvas holds its last frame. Instead of that frozen picture, a card covers the game:
-- **While the review rewinds (Seeking),** if the rewind lasts over 0.2 s (2026-10-17: from
-  the late snapshot it usually takes about 50 ms, and the card would only flash):
-  - "ABS challenge" and who challenged which call;
-  - a strike zone being scanned;
-  - the leg's progress, from `Timeline::progress()`.
+- **The moment a challenge is made: the announcement** (owner, 2026-10-17: going straight
+  to the rewind was confusing).
+  - The card shows:
+    - "ABS CHALLENGE" in large letters;
+    - who challenged which call ("Away challenges the strike call");
+    - a strike zone being scanned.
+  - The engine waits 1.8 s (`ANNOUNCE_MS`) before the review starts, so the card is not
+    cut short. The page passes the time as `modIntroMs`, and the engine takes it through
+    `mvp_mod_intro`.
+  - During the wait the run is stopped at the frame poll before the review, as when it
+    waits for the other player online. Nothing reaches the guest.
+- **While the review rewinds (Seeking):** the card stays. When the rewind is long (a team's
+  first pitch, §0), it also shows the leg's progress, from `Timeline::progress()`.
 - **During the replay (Presenting):** only a small tag shows, naming who challenged ("Replay ·
   Away challenge").
 - **During the re-run (Rerunning):**
   - the verdict, "Overturned" ("It was a ball") or "Call stands";
-  - where the pitch crossed, drawn in the zone.
+  - where the pitch crossed, drawn in the zone. The zone is 1.5 times its first size (owner,
+    2026-10-17: it was hard to see): about 275 px wide, capped at 40 % of the window's
+    height.
 
   It fades out 2.2 s after play resumes.
 
@@ -657,6 +694,7 @@ The page holds the truth back until after the replay. The banner keeps the other
 | `0x801BAFA4` | before | new pitch: request snapshot S_P |
 | `0x801896E8` | before | release: record R; learn the delivery (§7.2) |
 | `0x802321BC` | before | the pitch is chosen and the delivery starts (posts event 0x5A): schedule the late snapshot S_L (§7.2). Added in hook API 1.1 |
+| `0x801BACA0` | before | the umpire's set-up for a new game, also on Restart Game (§3.10): refill both teams' challenges (§4.3). Added in hook API 1.2 |
 
 v1 needs only before sites, so no mod code runs "after" the original (see §4.1 on unwinds).
 `fn_802321BC` runs once per pitch, for CPU and human pitchers. The CPU's pitch choice
@@ -672,7 +710,9 @@ call overhead even when unused, so it should be measured before it is promised.
 **Binding is by address.** The label is decoration: a manifest that names a decomp symbol
 but no address is rejected.
 
-### 5.3 Host API (as built: `engine/mods/gameplay/api.h`, version 1.1)
+### 5.3 Host API (as built: `engine/mods/gameplay/api.h`, version 1.2)
+
+**1.2 (2026-10-17):** a site (`0x801BACA0`, a new game).
 
 **1.1 (2026-10-17):** a site (`0x802321BC`). The host keeps the two latest snapshots instead
 of one, and a review restores the later one at or before `present_from`. Both changes are
@@ -1046,6 +1086,7 @@ Each stage ends with a check anyone can run, and later stages build on earlier o
 - Hook API 1.1 (2026-10-17, §5.3): a minor version under §5.8's rule. It adds the site
   `0x802321BC`, and the host keeps two snapshots instead of one, so a review can rewind
   from the later one (§7.2). Both are additions; 1.0 mods behave as before.
+- Hook API 1.2 (2026-10-17): the site `0x801BACA0` (a new game, §3.10). An addition.
 
 **ROADMAP.md:**
 - Engine track: add "E8 Mods with code: hook API v1 and save states (exit: ABS challenge
