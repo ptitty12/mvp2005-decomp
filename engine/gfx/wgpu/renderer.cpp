@@ -544,6 +544,7 @@ const Renderer::Pipeline& Renderer::pipeline(const PipelineConfig& c) {
 void Renderer::forget_view(const wgpu::TextureView& v) {
   if (!v) return;
   const void* p = v.Get();
+  bound_textures_ = nullptr;  // a group freed here could lend its address to the next one: bind again
   for (auto it = bind_groups_.begin(); it != bind_groups_.end();) {
     bool uses = false;
     for (std::size_t k = 0; k < 8 && !uses; ++k) uses = it->first[k] == p;
@@ -877,7 +878,10 @@ void Renderer::draw(const DrawCall& d) {
       key[static_cast<std::size_t>(k)] = te[k].textureView.Get();
       key[static_cast<std::size_t>(8 + k)] = te[8 + k].sampler.Get();
     }
-    if (bind_groups_.size() > 4096) bind_groups_.clear();
+    if (bind_groups_.size() > 4096) {
+      bind_groups_.clear();
+      bound_textures_ = nullptr;  // as in forget_view()
+    }
     BindEntry& be = bind_groups_[key];
     if (!be.group) {
       wgpu::BindGroupDescriptor bgd{};
