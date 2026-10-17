@@ -59,6 +59,7 @@ struct Net {
   rt::InputSource* local = nullptr;
   int local_port = 0;
   std::string text;
+  std::string mod_settings;  // gameplay mods' canonical settings, part of the handshake
 };
 Net n;
 
@@ -87,6 +88,9 @@ void net_after_poll(std::uint64_t frame) {
   if (n.driver) n.driver->after_poll(frame);
 }
 
+void net_set_mod_settings(const std::string& s) { n.mod_settings = s; }
+std::uint64_t net_seed() { return n.session ? n.session->seed() : 0; }
+
 }  // namespace mvp::web
 
 extern "C" {
@@ -108,6 +112,10 @@ EMSCRIPTEN_KEEPALIVE int mvp_net_begin(int player, int delay, int hash_every, co
   // and the packs by their ordered set hash (E6, MODDING.md §10).
   cfg.id.disc = n.disc_id;
   cfg.id.packset = web::packs_set_hash();
+  // Gameplay mods and their settings must match too (a mismatch refuses the game),
+  // and player 1's random nonce is the seed proposal for their random streams.
+  if (!n.mod_settings.empty()) cfg.id.settings += ";" + n.mod_settings;
+  cfg.seed = cfg.nonce;
   n.session = std::make_unique<net::Session>(n.channel, cfg, [](std::uint64_t f) {
     if (!n.local) return net::Session::neutral_pad();
     return n.local->input_for(f).pad[static_cast<std::size_t>(n.local_port)];

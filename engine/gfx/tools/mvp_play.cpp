@@ -68,6 +68,15 @@
 //   --pack PATH       (E6) a roster pack (directory or .zip), repeatable, in set order:
 //                     applied to the disc's tables and mounted on the virtual disc
 //                     before boot (docs/MODDING.md, mods/mount.h)
+//   --mod ID[:K=V,...] a gameplay mod (hook API v1, mods/gameplay/host.h), repeatable,
+//                     with its settings, e.g. --mod abs:miss=20,edge=3 (docs/mods/);
+//                     ABS challenge in the window: L+R+Z (Q+E+Space) after a called pitch
+//   --mod-seed N      the match seed of the mods' random streams (default 1)
+//   --capture-review DIR  captures of every review's replay (mods/gameplay/timeline.h),
+//                     every --capture-review-every N fields (default 5)
+//   --rewind-test F:N save states (runtime/save_state.h): save the machine at frame
+//                     poll F, run N polls, restore, run them again; prints whether the
+//                     guest state matched (scripted input only)
 //
 // Determinism: the renderer and the mixer only read guest state, audio and
 // window events never reach the guest (playback throttles the host, not the
@@ -105,6 +114,8 @@
 #include "gfx/wgpu/renderer.h"
 #include "gfx/wgpu/window.h"
 #include "host_profiler.h"
+#include "mods/gameplay/host.h"
+#include "mods/gameplay/timeline.h"
 #include "mods/mount.h"
 #include "runtime/boot.h"
 #include "runtime/hle.h"
@@ -112,6 +123,7 @@
 #include "runtime/hw.h"
 #include "runtime/input.h"
 #include "runtime/native.h"
+#include "runtime/save_state.h"
 #include "runtime/sys_hooks.h"
 #include "translator/program.h"
 
@@ -294,6 +306,12 @@ struct HostInputSource : InputSource {
 
 struct Play : GfxObserver {
   YieldingHooks* yield_hooks = nullptr;  // --yield
+  // Gameplay mods' reviews (mods/gameplay/timeline.h): `hold` while one runs
+  // without presenting (nothing shown or captured, no pacing); `replay` while
+  // its replay is shown (captured to --capture-review).
+  bool hold = false, replay = false;
+  std::string review_capture_dir;
+  std::uint64_t review_capture_every = 5, review_captures = 0, replays = 0;
   gfx::GxProcessor* proc = nullptr;
   gfx::Renderer* renderer = nullptr;
   gfx::Window* window = nullptr;
@@ -486,6 +504,18 @@ struct Play : GfxObserver {
     renderer->scan_field(xfb);  // P1: what the VI scans out (the window shows scanout())
     const gfx::Renderer::Frame* f = renderer->xfb(xfb);
     if (!f) f = renderer->latest_xfb();
+    if (replay && !review_capture_dir.empty() && f && field % review_capture_every == 0) {
+      auto px = renderer->read_frame(*f);
+      char name[80];
+      std::snprintf(name, sizeof name, "/review%02llu_field_%06llu_frame_%06llu.png",
+                    static_cast<unsigned long long>(replays), static_cast<unsigned long long>(field),
+                    static_cast<unsigned long long>(frames));
+      if (gfx::write_png_rgba(review_capture_dir + name, f->width, f->height, px.data())) ++review_captures;
+    }
+    if (hold) {
+      if (window && !window->pump()) throw StopRun{"window closed"};
+      return;
+    }
     if (window && field % present_every == 0) {
       if (audio_out) audio_out->throttle();  // keep the host near real time (host pacing only)
       const auto c0 = std::chrono::steady_clock::now();
@@ -509,7 +539,7 @@ struct Play : GfxObserver {
         last_present = now;
       }
     }
-    if (!capture_dir.empty() && f && f->serial != last_capture_serial &&
+    if (!replay && !capture_dir.empty() && f && f->serial != last_capture_serial &&
         ((field >= capture_from && field % capture_every == 0) || capture_at.count(field))) {
       auto px = renderer->read_frame(*f);
       char name[64];
@@ -527,9 +557,103 @@ Play* g_play = nullptr;
 std::uint64_t g_cpi_switch_frame = ~0ull;
 ClockConfig g_cpi_switch_to;
 
+mods::GameplayHost* g_mods = nullptr;  // --mod: gameplay mods, null without any
+mods::Timeline* g_timeline = nullptr;   // their snapshots and reviews
+
+// --rewind-test F:N: the save-state round trip (docs/mods/ABS_CHALLENGE.md §6.5).
+struct RewindTest {
+  std::uint64_t at = ~0ull, n = 0;
+  int stage = 0;  // 0: run to F; 1: saved, run to F+N; 2: restored, run to F+N again; 3: done
+  bool due = false;
+  rt::SaveState state;
+  std::string first;
+  Machine* m = nullptr;
+  YieldingHooks* hooks = nullptr;
+  Hardware* hw = nullptr;
+  InputQueue* input = nullptr;
+};
+RewindTest g_rewind;
+
+std::string guest_line(Machine& m, YieldingHooks& hooks) {
+  Sha1 h;
+  h.update(m.mem1(), Machine::kMem1Size);
+  char b[160];
+  std::snprintf(b, sizeof b, "instructions %llu time base %llu MEM1 sha1 %s",
+                static_cast<unsigned long long>(m.cpu().ticks),
+                static_cast<unsigned long long>(hooks.time_base(m.cpu())), Sha1::hex(h.finish()).c_str());
+  return b;
+}
+
+bool poll_gate(ppc::Cpu& c) {
+  RewindTest& t = g_rewind;
+  const std::uint64_t poll = rt::g_frame_polls;
+  if (t.stage < 3 && ((t.stage == 0 && poll == t.at) || (t.stage > 0 && poll == t.at + t.n)) &&
+      t.hooks->stop_before(c)) {
+    t.due = true;
+    return false;
+  }
+  return g_timeline ? g_timeline->gate(c) : true;
+}
+
+// After rt::run() returned for the rewind test.
+void rewind_step() {
+  RewindTest& t = g_rewind;
+  t.due = false;
+  if (t.stage == 0) {
+    const auto t0 = std::chrono::steady_clock::now();
+    rt::save_state(t.state, *t.m, *t.hooks, *t.hw, t.input);
+    std::printf("rewind test: saved at poll %llu in %.1f ms\n", static_cast<unsigned long long>(t.at),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    t.stage = 1;
+  } else if (t.stage == 1) {
+    t.first = guest_line(*t.m, *t.hooks);
+    const auto t0 = std::chrono::steady_clock::now();
+    rt::load_state(t.state, *t.m, *t.hooks, *t.hw, t.input);
+    std::printf("rewind test: poll %llu: %s; restored poll %llu in %.1f ms\n",
+                static_cast<unsigned long long>(t.at + t.n), t.first.c_str(), static_cast<unsigned long long>(t.at),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    t.stage = 2;
+  } else if (t.stage == 2) {
+    const std::string again = guest_line(*t.m, *t.hooks);
+    std::printf("rewind test: poll %llu again: %s: %s\n", static_cast<unsigned long long>(t.at + t.n), again.c_str(),
+                again == t.first ? "IDENTICAL" : "DIFFERENT");
+    t.stage = 3;
+  }
+}
+
+// What a review does to mvp-play (mods/gameplay/timeline.h): presenting, guest
+// audio, and the renderer's GX state saved and restored with the snapshots.
+struct PlayTimelineTool : mods::Timeline::Tool {
+  Play* play = nullptr;
+  gfx::GxProcessor* proc = nullptr;
+  gfx::Renderer* renderer = nullptr;
+  gfx::GpMemory* gp_memory = nullptr;
+  Hardware* hw = nullptr;
+  ax::FrameObserver* mixer = nullptr;  // null when no audio is mixed
+  std::unique_ptr<gfx::GxProcessor> views[2];
+  void present(bool on, mods::Phase phase) override {
+    play->hold = !on;
+    play->replay = phase == mods::Phase::Presenting;
+    if (play->replay) ++play->replays;
+    if (mixer) hw->set_ax_observer(phase == mods::Phase::Live ? mixer : nullptr);  // the replay is silent
+  }
+  void save_views(int slot) override {
+    if (!proc) return;
+    if (views[slot]) *views[slot] = *proc;
+    else views[slot] = std::make_unique<gfx::GxProcessor>(*proc);
+  }
+  void load_views(int slot) override {
+    if (proc && views[slot]) *proc = *views[slot];
+    if (renderer) renderer->invalidate_textures();
+    if (gp_memory) gp_memory->field();
+  }
+};
+
 void frame_hook(ppc::Cpu& c, std::uint64_t frame) {
   g_play->frames = frame;
   if (frame >= g_play->max_frames) throw StopRun{"ran " + std::to_string(frame) + " frames (--frames)"};
+  if (g_timeline) g_timeline->after_poll(frame);
+  if (g_mods) g_mods->on_frame(c, frame);
   {
     const std::uint8_t* n = g_play->mem1 + (0x8061B884u & 0x01FFFFFFu);  // the frame loop's tick count
     const std::uint32_t ticks = std::uint32_t(n[0]) << 24 | std::uint32_t(n[1]) << 16 | std::uint32_t(n[2]) << 8 | n[3];
@@ -671,6 +795,8 @@ int main(int argc, char** argv) {
   std::uint64_t profile_from = 0;
   std::string trace_entry, trace_file;
   std::vector<std::string> packs;
+  std::vector<std::string> mod_args;  // --mod ID[:K=V,...]
+  std::uint64_t mod_seed = 1;
   Play play;
   for (int k = 1; k < argc; ++k) {
     std::string a = argv[k];
@@ -741,13 +867,24 @@ int main(int argc, char** argv) {
     else if (a == "--no-audio") no_audio = true;
     else if (a == "--audio-latency") audio_latency = static_cast<std::uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--pack") packs.push_back(next());
+    else if (a == "--mod") mod_args.push_back(next());
+    else if (a == "--mod-seed") mod_seed = std::strtoull(next().c_str(), nullptr, 0);
+    else if (a == "--capture-review") play.review_capture_dir = next();
+    else if (a == "--rewind-test") {
+      const std::string v = next();
+      const auto colon = v.find(':');
+      g_rewind.at = std::strtoull(v.c_str(), nullptr, 10);
+      g_rewind.n = colon == std::string::npos ? 60 : std::strtoull(v.c_str() + colon + 1, nullptr, 10);
+    }
+    else if (a == "--capture-review-every")
+      play.review_capture_every = std::max<std::uint64_t>(1, std::strtoull(next().c_str(), nullptr, 10));
     else {
       std::fprintf(stderr,
                    "usage: mvp-play [--input SCRIPT] [--ports MASK] [--frames N] [--fields N] [--stop-file F] [--hash-every N] [--record-input F] [--pacing-from N] [--pace] [--cpi X] [--cpi-switch F:X] [--max-ticks N] "
                    "[--headless] [--no-render] [--yield] [--present-every N] [--capture DIR] [--capture-every N] [--capture-from N] [--capture-at F1,F2,...] "
                    "[--draw-log FILE] [--draw-log-from N] [--draw-log-to N] [--dump-textures DIR --dump-field N [--dump-to M]] "
                    "[--perf-every N] [--profile N] [--host-profile N] [--profile-from F] [--trace-entry HEX,... [--trace-file F] [--trace-from N] "
-                   "[--trace-to N] [--trace-peek HEX,...]] [--audio-wav FILE] [--no-audio] [--audio-latency MS] [--pack PATH]...\n");
+                   "[--trace-to N] [--trace-peek HEX,...]] [--audio-wav FILE] [--no-audio] [--audio-latency MS] [--pack PATH]... [--mod ID[:K=V,...]]... [--mod-seed N] [--capture-review DIR [--capture-review-every N]] [--rewind-test F:N]\n");
       return 2;
     }
   }
@@ -842,6 +979,28 @@ int main(int argc, char** argv) {
   hooks.reschedule(m.cpu());
   mvp_register_game();
 
+  // Gameplay mods (--mod): enabled with their settings, sites bound before the first instruction.
+  mods::GameplayHost gameplay;
+  for (auto& mod : mods::builtin_mods()) gameplay.add(std::move(mod));
+  for (const std::string& arg : mod_args) {
+    const auto colon = arg.find(':');
+    std::string id = arg.substr(0, colon), settings = colon == std::string::npos ? "" : arg.substr(colon + 1);
+    if (!gameplay.enable(id, settings, &err)) {
+      std::fprintf(stderr, "mvp-play: --mod %s: %s\n", arg.c_str(), err.c_str());
+      return 2;
+    }
+  }
+  if (gameplay.any_enabled()) {
+    gameplay.set_seed(mod_seed);
+    if (!gameplay.start(m.cpu(), &err)) {
+      std::fprintf(stderr, "mvp-play: %s\n", err.c_str());
+      return 2;
+    }
+    g_mods = &gameplay;
+    std::printf("mods: %s seed %llu\n", gameplay.canonical_settings().c_str(),
+                static_cast<unsigned long long>(mod_seed));
+  }
+
   std::unique_ptr<gfx::Renderer> renderer_owner;
   if (gpu) renderer_owner = std::make_unique<gfx::Renderer>(*gpu, m.mem1(), Machine::kMem1Size, scale);
   gfx::Renderer* renderer = renderer_owner.get();
@@ -934,8 +1093,28 @@ int main(int argc, char** argv) {
   if (profile_top > 0) profiler.start(&m.cpu(), &play.fields, profile_from);
   tools::HostProfiler host_profiler;
   if (host_profile_top > 0) host_profiler.start(&play.fields, profile_from);
+  // Gameplay mods' snapshots and reviews: the run stops at a frame poll when one is due.
+  PlayTimelineTool timeline_tool;
+  timeline_tool.play = &play;
+  timeline_tool.proc = play.proc;
+  timeline_tool.renderer = renderer;
+  timeline_tool.gp_memory = play.gp_memory;
+  timeline_tool.hw = &hw;
+  if (!audio_wav.empty() || audio_out) timeline_tool.mixer = &mixer;
+  mods::Timeline timeline(m, hooks, hw, input, gameplay, timeline_tool);
+  if (g_mods) g_timeline = &timeline;
+  g_rewind.m = &m;
+  g_rewind.hooks = &hooks;
+  g_rewind.hw = &hw;
+  g_rewind.input = &input;
+  if (g_mods || g_rewind.at != ~0ull) rt::g_poll_gate = &poll_gate;
   try {
-    for (;;) rt::run(m.cpu());  // returns at each VI field with --yield
+    for (;;) {
+      rt::run(m.cpu());  // returns at each VI field with --yield, and when the timeline stops it
+      if (g_rewind.due) rewind_step();
+      if (g_timeline)
+        while (g_timeline->due()) g_timeline->step();
+    }
   } catch (const StopRun& s) {
     why = s.why;
   } catch (const ppc::GuestFault& f) {
@@ -949,6 +1128,15 @@ int main(int argc, char** argv) {
   hw.set_ax_observer(nullptr);
   rt::g_input = nullptr;
   rt::g_frame_hook = nullptr;
+  rt::g_poll_gate = nullptr;
+  if (g_timeline)
+    std::printf("timeline: %llu snapshots (longest %.1f ms), %llu reviews, %llu restores (longest %.1f ms), %llu replay captures\n",
+                static_cast<unsigned long long>(timeline.snapshots), timeline.snapshot_ms_max,
+                static_cast<unsigned long long>(timeline.reviews), static_cast<unsigned long long>(timeline.restores),
+                timeline.restore_ms_max, static_cast<unsigned long long>(play.review_captures));
+  g_timeline = nullptr;
+  g_mods = nullptr;
+  gameplay.stop();
   rt::g_dc_flush_hook = nullptr;
   rt::g_entry_hook = nullptr;
   if (g_trace.f && g_trace.f != stdout) std::fclose(g_trace.f);

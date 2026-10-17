@@ -112,3 +112,14 @@ test('the Server disc page link: same-origin only, absent anywhere else', async 
   assert.equal(await page(fakeFetch({})), null);
   assert.equal(await page(async () => { throw new TypeError('Failed to fetch'); }), null);
 });
+
+test('the roster packs the server offers: same-origin only, with or without a disc', async () => {
+  const cfg = (v) => fakeFetch({ 'https://mvp.example.test/config.json': () => json(v) });
+  const packs = async (f) => (await findServerDisc(BASE, f)).packs ?? null;
+  assert.equal(await packs(cfg({ disc: '/api/disc/image?v=1', packs: '/api/packs' })), 'https://mvp.example.test/api/packs');
+  assert.equal(await packs(cfg({ discPage: '/disc', packs: '/api/packs' })), 'https://mvp.example.test/api/packs');
+  assert.equal(await packs(cfg({ disc: '/api/disc/image' })), null);
+  assert.equal(await packs(cfg({ packs: 'https://elsewhere.test/api/packs' })), null);
+  assert.equal(await packs(cfg({ packs: 42 })), null);
+  assert.equal(await packs(fakeFetch({})), null);
+});

@@ -82,6 +82,12 @@ extern InputQueue* g_input;
 // Called at every frame poll after its input was consumed (tools: frame logs,
 // frame budgets). Host side only.
 extern void (*g_frame_hook)(Cpu& c, std::uint64_t frame);
+// Asked at every frame poll before anything is consumed (save states, gameplay
+// mods' frame-boundary services): whether the poll may go ahead now. A gate that
+// needs the run to return first stops it there (YieldingHooks::stop_before) and
+// returns false: the poll then changes nothing, and the guest makes it again,
+// unchanged, when the run continues. Null: always.
+extern bool (*g_poll_gate)(Cpu& c);
 extern std::uint64_t g_frame_polls, g_pad_reads;
 // Q1: DCFlushRange, DCStoreRange and their NoSync forms are about to write the
 // data cache's lines over [ea, ea + len) back to memory (hooks before them; the

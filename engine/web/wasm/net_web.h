@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "runtime/host_yield.h"
 #include "runtime/input.h"
@@ -28,5 +29,10 @@ rt::InputSource* net_attach(rt::Machine& m, rt::YieldingHooks& hooks, rt::InputS
 bool net_may_run();
 // At every frame poll, after its input was consumed.
 void net_after_poll(std::uint64_t frame);
+// Gameplay mods (mods/gameplay/host.h): their canonical settings join the
+// handshake's settings string (set before mvp_net_begin), and they draw from the
+// session's shared seed (player 1's proposal, known once the handshake is done).
+void net_set_mod_settings(const std::string& s);
+std::uint64_t net_seed();
 
 }  // namespace mvp::web

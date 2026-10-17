@@ -8,6 +8,7 @@
 #include "runtime/hle_game.h"
 #include "runtime/input.h"
 #include "runtime/machine.h"
+#include "runtime/mod_hooks.h"
 
 namespace mvp::rt {
 
@@ -128,6 +129,7 @@ void hle_pad_read(Cpu& c, GuestFn) {
 // that has to wait for that input (netplay) stops the run here instead, before
 // anything is consumed; the guest makes this poll again when the run continues.
 void hle_frame_poll(Cpu& c, GuestFn) {
+  if (g_poll_gate && !g_poll_gate(c)) return;
   if (g_input && !g_input->may_begin_frame(c)) return;
   std::uint64_t frame = g_input ? g_input->begin_frame() : g_frame_polls;
   ++g_frame_polls;
@@ -149,6 +151,7 @@ void (*g_report)(const std::string& line) = &default_report;
 std::uint64_t g_report_count = 0;
 InputQueue* g_input = nullptr;
 void (*g_frame_hook)(Cpu& c, std::uint64_t frame) = nullptr;
+bool (*g_poll_gate)(Cpu& c) = nullptr;
 std::uint64_t g_frame_polls = 0, g_pad_reads = 0;
 void (*g_dc_flush_hook)(u32 ea, u32 len) = nullptr;
 
@@ -222,7 +225,8 @@ std::string format_guest(Cpu& c, u32 fmt_addr, int first_gpr) {
 }
 
 const std::vector<HleEntry>& hle_table() {
-  static const std::vector<HleEntry> t = {
+  static const std::vector<HleEntry> t = [] {
+    std::vector<HleEntry> v = {
       {"OSReport", &hle_os_report, "prints to the developer log instead of the debug console"},
       {"VMInit", &hle_vm_init, "maps 0x7E000000 as plain RAM (R10); no DSI paging"},
       {"VMAlloc", &hle_vm_alloc, "returns success: the region is plain RAM"},
@@ -244,7 +248,14 @@ const std::vector<HleEntry>& hle_table() {
        0x803EB000u, HleKind::Native},
       {"fn_803EA3EC", &hle_fn_803EA3EC, "the skinning loop around fn_803EB000 (natively)", 0x803EA3ECu,
        HleKind::Native},
-  };
+    };
+    // Gameplay mod sites (hook API v1, runtime/mod_hooks.h): a Before hook each,
+    // calling whatever handler a mod bound there (nothing when none is bound).
+    const auto sites = mod::sites();
+    for (std::size_t k = 0; k < sites.size(); ++k)
+      v.push_back({sites[k].label, mod::site_fn(k), sites[k].why, sites[k].address, HleKind::Before});
+    return v;
+  }();
   return t;
 }
 

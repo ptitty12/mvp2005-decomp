@@ -28,6 +28,9 @@
 // read-ahead for the server's image (mvp_disc_want / mvp_disc_insert).
 // E6 adds roster packs (packs_web.h: mvp_pack_*, mvp_packs_mount), mounted on the
 // virtual disc between mvp_open_disc and mvp_boot.
+// Gameplay mods (hook API v1, docs/mods/ABS_CHALLENGE.md): mvp_mod_enable("abs:k=v,...")
+// and mvp_mod_seed before mvp_boot; mvp_mod_status() for the page (the timeline's
+// phase and the mods' log lines). They need the single-threaded engine.
 // P1 times the drive model's reads on the host ("io" in mvp_status;
 // mvp_io_log_enable / mvp_io_log for a per-read log).
 // P2: the threaded build (mvp-web-mt, MVP_WEB_THREADS) runs the GX processor
@@ -58,6 +61,8 @@
 #include "gfx/wgpu/gpu.h"
 #include "gfx/wgpu/renderer.h"
 #include "gfx/wgpu/window.h"
+#include "mods/gameplay/host.h"
+#include "mods/gameplay/timeline.h"
 #include "runtime/boot.h"
 #include "runtime/hle.h"
 #include "runtime/host_yield.h"
@@ -299,6 +304,16 @@ struct Engine {
   // Host time spent inside rt::run, for the frame-time numbers.
   double run_ms = 0, last_batch_ms = 0, max_field_ms = 0;
   std::uint64_t run_fields = 0;
+
+  // Gameplay mods and their timeline (snapshots, reviews). `fields_run` counts VI
+  // fields as they happen (a review's restore takes the field counter back).
+  mods::GameplayHost mods;
+  std::unique_ptr<mods::Timeline> timeline;
+  bool hold = false;  // a review runs without presenting
+  std::uint64_t fields_run = 0;
+  std::vector<std::string> mod_log, mod_notes;  // lines and player messages for the page (mvp_mod_status)
+  std::vector<std::string> mod_ui;              // the mods' UI records (JSON objects) for the page
+  bool mod_seed_set = false;                     // mvp_mod_seed was called (netplay: overrides the session's)
 };
 Engine g;
 std::vector<TimedSource::Record> g_io_log;
@@ -371,6 +386,7 @@ void dc_flush_hook(std::uint32_t ea, std::uint32_t len) {
 }
 
 void Observer::vi_field(std::uint64_t field, std::uint32_t xfb) {
+  ++e->fields_run;
 #ifdef MVP_WEB_THREADS
   if (e->threaded) web::render_field(field, xfb);
   else
@@ -381,11 +397,28 @@ void Observer::vi_field(std::uint64_t field, std::uint32_t xfb) {
   e->hooks->request_yield();  // run() returns after this field's safe point
 }
 
-void frame_hook(ppc::Cpu&, std::uint64_t frame) {
+// What a review does to the page's engine (mods/gameplay/timeline.h).
+struct WebTimelineTool : mods::Timeline::Tool {
+  void present(bool on, mods::Phase phase) override {
+    g.hold = !on;
+    if (g.hw && g.mixer) g.hw->set_ax_observer(phase == mods::Phase::Live ? g.mixer.get() : nullptr);  // silent replay
+  }
+  void save_views(int slot) override { g.rs.save_view(slot); }
+  void load_views(int slot) override { g.rs.load_view(slot); }
+};
+WebTimelineTool g_timeline_tool;
+
+bool poll_gate(ppc::Cpu& c) { return g.timeline->gate(c); }
+
+void frame_hook(ppc::Cpu& c, std::uint64_t frame) {
   g.frames = frame;
+  if (g.timeline) g.timeline->after_poll(frame);
+  if (g.mods.any_enabled()) g.mods.on_frame(c, frame);
   if (g.input_log.on) g.input_log.record(frame, g.input->current());
   if (frame >= g.stop_frames) throw StopRun{"ran " + std::to_string(frame) + " frames"};
-  if (web::net_active()) web::net_after_poll(frame);  // netplay (E5): state hash, early yield
+  // Netplay (E5): state hash, early yield. A review's re-run polls are not hashed
+  // again (both players re-run them the same way; checking resumes after it).
+  if (web::net_active() && g.mods.phase() == mods::Phase::Live) web::net_after_poll(frame);
 }
 
 std::string json_escape(const std::string& s) {
@@ -714,9 +747,83 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   g_input = g.input.get();
   g_frame_hook = &frame_hook;
   g_dc_flush_hook = g_gp_view ? &dc_flush_hook : nullptr;
+  if (g.mods.any_enabled()) {
+    if (g.threaded) {
+      g.error = "gameplay mods need the single-threaded engine";
+      return 0;
+    }
+    auto to_page = [](const std::string& s) {
+      if (g.mod_log.size() < 256) g.mod_log.push_back(s);
+    };
+    if (net && !g.mod_seed_set) g.mods.set_seed(web::net_seed());  // both players draw the same numbers
+    g.mods.set_log(to_page);
+    g.mods.set_notify([](const std::string& s) {
+      if (g.mod_notes.size() < 64) g.mod_notes.push_back(s);
+    });
+    g.mods.set_publish([](const std::string& s) {
+      if (g.mod_ui.size() < 64) g.mod_ui.push_back(s);
+    });
+    if (!g.mods.start(g.m->cpu(), &g.error)) return 0;
+    g.timeline = std::make_unique<mods::Timeline>(*g.m, *g.hooks, *g.hw, *g.input, g.mods, g_timeline_tool);
+    g.timeline->set_log([to_page](const std::string& s) { to_page("timeline: " + s); });
+    g_poll_gate = &poll_gate;
+  }
   attach_renderer();
   apply_audio();
   return 1;
+}
+
+// Gameplay mods (before mvp_boot): "id" or "id:key=value,...". 0 and mvp_last_error() on a bad spec.
+EMSCRIPTEN_KEEPALIVE int mvp_mod_enable(const char* spec) {
+  g.error.clear();
+  if (g.m) {
+    g.error = "mods are chosen before mvp_boot";
+    return 0;
+  }
+  if (g.mods.available().empty())
+    for (auto& mod : mods::builtin_mods()) g.mods.add(std::move(mod));
+  const std::string s = spec ? spec : "";
+  const auto colon = s.find(':');
+  if (!g.mods.enable(s.substr(0, colon), colon == std::string::npos ? "" : s.substr(colon + 1), &g.error)) return 0;
+  web::net_set_mod_settings(g.mods.canonical_settings());  // netplay: part of the handshake (before mvp_net_begin)
+  return 1;
+}
+
+// The match seed of the mods' random streams. Netplay uses the session's shared
+// seed unless one is set here (tests: both pages must then pass the same).
+EMSCRIPTEN_KEEPALIVE void mvp_mod_seed(double seed) {
+  g.mods.set_seed(static_cast<std::uint64_t>(seed));
+  g.mod_seed_set = true;
+}
+
+// The mods' canonical settings (the netplay handshake's part), "" without mods.
+EMSCRIPTEN_KEEPALIVE const char* mvp_mod_settings() {
+  g_text = g.mods.canonical_settings();
+  return g_text.c_str();
+}
+
+// {"phase":"live|seeking|presenting|rerunning","progress":0-1,"log":[...],"notify":[...],
+// "ui":[{...}]}: the timeline's phase and how far its current review leg is, the
+// mods' log lines, their messages for the player and their UI records (JSON
+// objects, mods::Host::publish) since the last call.
+EMSCRIPTEN_KEEPALIVE const char* mvp_mod_status() {
+  static const char* kPhase[] = {"live", "seeking", "presenting", "rerunning"};
+  char progress[32];
+  std::snprintf(progress, sizeof progress, "%.3f", g.timeline ? g.timeline->progress() : 1.0);
+  g_text = std::string("{\"phase\":\"") + kPhase[static_cast<int>(g.mods.phase())] + "\",\"progress\":" + progress +
+           ",\"log\":[";
+  for (std::size_t k = 0; k < g.mod_log.size(); ++k)
+    g_text += (k ? ",\"" : "\"") + json_escape(g.mod_log[k]) + "\"";
+  g_text += "],\"notify\":[";
+  for (std::size_t k = 0; k < g.mod_notes.size(); ++k)
+    g_text += (k ? ",\"" : "\"") + json_escape(g.mod_notes[k]) + "\"";
+  g_text += "],\"ui\":[";
+  for (std::size_t k = 0; k < g.mod_ui.size(); ++k) g_text += (k ? "," : "") + g.mod_ui[k];
+  g_text += "]}";
+  g.mod_log.clear();
+  g.mod_notes.clear();
+  g.mod_ui.clear();
+  return g_text.c_str();
 }
 
 // Audio on or off (the mixer attached or not), before or after mvp_boot.
@@ -847,17 +954,21 @@ EMSCRIPTEN_KEEPALIVE void mvp_host_slow(double factor) {
 EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
   if (!g.m || g.stopped) return -1;
   // Netplay (Q5): the next frame's input is not here yet: nothing runs, so no
-  // batch starts (the render thread is not woken for nothing).
-  if (web::net_active() && !web::net_may_run()) return 0;
-  const std::uint64_t start = g.hw->vi_fields(), target = start + static_cast<std::uint64_t>(n);
+  // batch starts (the render thread is not woken for nothing). A gameplay mod's
+  // review replays recorded inputs instead and is not held up.
+  if (web::net_active() && g.mods.phase() == mods::Phase::Live && !web::net_may_run()) return 0;
+  const std::uint64_t start = g.hw->vi_fields();
+  const std::uint64_t run_start = g.fields_run, want = static_cast<std::uint64_t>(n);
   if (g_tracing) g_trace.push_back({~0ull, static_cast<std::uint32_t>(start)});
   double t0 = now_ms();
 #ifdef MVP_WEB_THREADS
   if (g.threaded) web::render_batch_begin();
 #endif
   try {
-    while (g.hw->vi_fields() < target) {
-      if (web::net_active() && !web::net_may_run()) break;  // netplay: the next frame's input is not here yet
+    // A review's headless legs (g.hold) run unpaced, within a budget per batch.
+    while (g.fields_run - run_start < want || (g.hold && now_ms() - t0 < 40)) {
+      // Netplay: the next frame's input is not here yet (a review replays recorded inputs instead).
+      if (web::net_active() && g.mods.phase() == mods::Phase::Live && !web::net_may_run()) break;
       double f0 = now_ms();
 #ifdef MVP_WEB_THREADS
       const double waited0 = g.threaded ? web::render_waited_ms() : 0;
@@ -873,6 +984,8 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
         dt = now_ms() - f0;
       }
       if (dt > g.max_field_ms) g.max_field_ms = dt;
+      if (g.timeline)
+        while (g.timeline->due()) g.timeline->step();
     }
   } catch (const StopRun& s) {
     g.stopped = true;
@@ -884,7 +997,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
   }
   g.last_batch_ms = now_ms() - t0;
   g.run_ms += g.last_batch_ms;
-  const std::uint64_t ran = g.hw->vi_fields() - start;
+  const std::uint64_t ran = g.fields_run - run_start;
   g.run_fields += ran;
   if (g.stopped) {
 #ifdef MVP_WEB_THREADS
@@ -901,6 +1014,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
 // Threaded (P2): the render thread shows it once it has drawn the batch; 1 once
 // it has shown a frame.
 EMSCRIPTEN_KEEPALIVE int mvp_present() {
+  if (g.hold) return 0;  // a review runs without presenting: the canvas keeps the last frame
 #ifdef MVP_WEB_THREADS
   if (g.threaded) return web::render_present(g_frame_polls) ? 1 : 0;
 #endif
@@ -1083,6 +1197,16 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_status() {
                   static_cast<unsigned long long>(ms.aux_return_frames[0]),
                   static_cast<unsigned long long>(ms.nonsilent_frames), ms.peak,
                   static_cast<unsigned long long>(g.audio.dropped()));
+    s += b;
+  }
+  if (g.timeline) {  // gameplay mods: snapshots and reviews, with the longest host time of each
+    const auto& t = *g.timeline;
+    std::snprintf(b, sizeof b,
+                  ",\"timeline\":{\"snapshots\":%llu,\"snapshot_ms_max\":%.2f,\"reviews\":%llu,\"restores\":%llu,"
+                  "\"restore_ms_max\":%.2f}",
+                  static_cast<unsigned long long>(t.snapshots), t.snapshot_ms_max,
+                  static_cast<unsigned long long>(t.reviews), static_cast<unsigned long long>(t.restores),
+                  t.restore_ms_max);
     s += b;
   }
   s += ",\"wgp_fast\":" + std::to_string(wasm_wgp_state()->fast_stores);  // P2: stores the translated code gathered itself

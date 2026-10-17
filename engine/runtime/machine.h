@@ -43,6 +43,16 @@ class Machine {
   void map_ram(u32 base, u32 size);
   bool has_ram(u32 base) const;
 
+  // Save states (runtime/save_state.h): the CPU and every RAM region. load()
+  // needs the same RAM regions as save() saw and keeps the CPU's host pointers.
+  struct Snapshot {
+    ppc::Cpu cpu;
+    std::vector<u8> mem1;
+    std::vector<std::pair<u32, std::vector<u8>>> extra_ram;
+  };
+  void save(Snapshot& s) const;
+  bool load(const Snapshot& s);
+
   ppc::Cpu& cpu() { return cpu_; }
   ppc::Memory& memory() { return *mem_; }
   u8* mem1() { return mem1_.data(); }

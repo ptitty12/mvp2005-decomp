@@ -32,6 +32,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -200,6 +201,14 @@ class Hardware : public ppc::Io {
   // A read of one register this many times in a row stops the run (a poll that
   // the device model does not answer).
   std::uint64_t poll_limit = 1000000;
+
+  // Save states (runtime/save_state.h): a copy of every device's state, ARAM and
+  // the GX FIFO parser included (and, alongside, statistics). The copy belongs to
+  // this machine: restore_from() keeps this object's observers, disc and
+  // write-gather pipe location and only takes the state.
+  std::unique_ptr<Hardware> snapshot() const;
+  void save_into(Hardware& snap) const;
+  void restore_from(const Hardware& snap);
 
   static const char* block_name(u32 addr);
 

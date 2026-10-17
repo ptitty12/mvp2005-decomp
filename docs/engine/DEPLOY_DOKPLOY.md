@@ -112,7 +112,25 @@ be uploaded.
 4. When it says **Done**, the server has the disc, and you never upload it again.
    The game page never shows a file picker or an upload button to players.
 
-## 8. Play with your brother
+## 8. Add roster packs (optional)
+
+Roster packs change the rosters, players and team names (for example the MLB 2026
+pack, `docs/MLB2026.md`). Put them on the server and every player picks them from a
+list on the game page instead of bringing the file.
+
+1. Open `https://<your domain>/disc` again. Under **Roster packs**, click **Choose
+   file**, pick the pack's `.zip` (the MLB 2026 pack is
+   `C:\Users\Patrick Taylor\decompile_mvp_04-mlb2026\build\mlb2026\pack\mlb-2026.zip`),
+   and click **Upload**. The server checks that it is a roster pack for this game.
+2. On the game page, the **Roster packs** panel now has **Packs on this server**.
+   Choose the pack there before pressing Play. The page remembers it for next time.
+3. For an online game both of you choose the same packs in the same order; the game
+   refuses to connect otherwise and says why.
+
+Uploading a new version of a pack replaces the old one; **Remove** takes a pack off
+the list. Packs are kept in the same volume as the disc, behind the same password.
+
+## 9. Play with your brother
 
 Send your brother the site address and, separately, the password.
 
@@ -145,7 +163,7 @@ loads.
   `TURN_EXTERNAL_IP`, and if the domain is proxied, set `TURN_HOST`. Then deploy
   again.
 - **Removing everything:** deleting the app in Dokploy with its volumes also
-  deletes the stored password and the uploaded disc.
+  deletes the stored password, the uploaded disc and the roster packs.
 
 ## Where the disc is kept
 

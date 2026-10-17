@@ -95,6 +95,7 @@ export interface PackInput {
   label: string;             // the folder's or the zip's name, for messages
   kind: 'files' | 'zip';
   files: PackFile[];
+  server?: string;           // the server pack's file, when it came from the server's list (packs.ts)
 }
 export interface PackIssue {
   severity: 'error' | 'warning';
@@ -146,6 +147,8 @@ export interface RunOptions {
   paceMargin?: number; // development (Q5): the online pace's margin (pacer.ts; default 0.98)
   paceTune?: string;   // development (Q5b): the pacer's and the paced loop's tuning, `key:value,...` (worker.ts)
   scale?: number;      // Q1: the internal resolution, 1-3 times the console's (the Picture setting)
+  mods?: string[];     // gameplay mods: "id" or "id:key=value,...", e.g. "abs:miss=8" (docs/mods/); single-threaded engine
+  modSeed?: number;    // the mods' match seed (default: a random one per game)
   discCache?: { blockKib?: number; maxBlocks?: number; maxRun?: number; ahead?: number };  // the server image's cache
 }
 
@@ -246,7 +249,9 @@ export type FromWorker =
   | { type: 'stopped'; status: Status; guestLine: string; discTrace?: string; ioLog?: string; inputLog?: string }
   | { type: 'net-send'; data: ArrayBuffer }  // a datagram for the other player
   | { type: 'net'; status: NetStatus; windows?: string; diagnostic?: string }
-  | { type: 'pace'; report: PaceReport; state: PaceState };  // Q5: for the other player (text message), and the overlay
+  | { type: 'pace'; report: PaceReport; state: PaceState }  // Q5: for the other player (text message), and the overlay
+  | { type: 'mod'; phase: string; progress: number; log: string[]; notify: string[];  // gameplay mods (mvp_mod_status)
+      ui: Record<string, unknown>[] };  // ... the review leg's progress (0-1) and the mods' UI records
 
 // Q5b: the paced loop's schedule time given up so far (ms), by reason: after a wait for the
 // other player (`gate`), behind by more fields than the loop catches up (`debt`), far behind (`far`).

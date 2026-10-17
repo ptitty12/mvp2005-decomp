@@ -13,7 +13,8 @@
 // "stateFile"), which is then required.
 //
 // The Docker deployment (deploy/, docs/engine/DEPLOY_DOKPLOY.md) sets everything
-// through the environment: MVP_DISC_DIR (the uploaded disc), MVP_TURN_MODE (the
+// through the environment: MVP_DISC_DIR (the uploaded disc), MVP_PACKS_DIR (the roster
+// packs the pages offer in a dropdown), MVP_TURN_MODE (the
 // ICE servers handed to the pages) and the secret file above.
 //
 // docs/engine/NETPLAY.md ("Deploying on a VPS") has a complete example.
@@ -49,6 +50,13 @@ export interface ServerConfig {
   discDir: string;
   /** The largest upload accepted, in bytes. */
   maxDiscBytes: number;
+  /**
+   * Roster packs the pages offer in a dropdown (src/pack_store.ts), uploaded on the Server disc
+   * page; empty: none (players can still pick their own pack files).
+   */
+  packsDir: string;
+  /** The largest pack zip accepted, in bytes (a pack is at most 64 MiB: docs/MODDING.md §2). */
+  maxPackBytes: number;
   /** The disc uploads must be (GV4E69 rev 0; tests use a synthetic one). Not configurable from outside. */
   expectDisc: ExpectedDisc;
   /** The password from the environment (MVP_PASSWORD), or '' to use the stored one (first-run setup). */
@@ -81,6 +89,8 @@ export const defaults: Omit<ServerConfig, 'password' | 'site'> = {
   disc: '',
   discDir: '',
   maxDiscBytes: 1536 << 20,
+  packsDir: '',
+  maxPackBytes: 80 << 20,
   expectDisc: RETAIL_DISC,
   stateFile: '',
   setupHours: 48,
@@ -174,6 +184,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const maxDiscBytes = pick('maxDiscBytes', 'MVP_DISC_MAX_BYTES', Number, defaults.maxDiscBytes);
   if (!(Number.isSafeInteger(maxDiscBytes) && maxDiscBytes > 0)) throw new Error('MVP_DISC_MAX_BYTES must be a positive number of bytes');
   const discDir = pick('discDir', 'MVP_DISC_DIR', String, defaults.discDir);
+  const packsDir = pick('packsDir', 'MVP_PACKS_DIR', String, defaults.packsDir);
+  const maxPackBytes = pick('maxPackBytes', 'MVP_PACK_MAX_BYTES', Number, defaults.maxPackBytes);
+  if (!(Number.isSafeInteger(maxPackBytes) && maxPackBytes > 0)) throw new Error('MVP_PACK_MAX_BYTES must be a positive number of bytes');
   return {
     host: pick('host', 'MVP_HOST', String, defaults.host),
     port: pick('port', 'MVP_PORT', Number, defaults.port),
@@ -181,6 +194,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     disc: pick('disc', 'MVP_DISC_IMAGE', String, defaults.disc),
     discDir: discDir ? resolve(discDir) : '',
     maxDiscBytes,
+    packsDir: packsDir ? resolve(packsDir) : '',
+    maxPackBytes,
     expectDisc: RETAIL_DISC,
     password,
     stateFile: stateFile ? resolve(stateFile) : '',

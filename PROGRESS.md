@@ -492,3 +492,7 @@
   - **The owner's field test:** desktop + ThinkPad (Ryzen 7 PRO 7840U) online was choppy and slow before Q4/Q5.
   - **Running:** Q6, more emulation speed (worktree decompile_mvp_04-e2, branch engine/q6-speed). Targets: hostSlow 2 ≥ 0.95×, 4 E-cores 1.0×, ≤ 10 ms per field at hostSlow 1.3.
   | Owner: redeploy, then paste Copy stats from both machines after an online game.
+- 2026-10-17 | claude-side-packs | engine: server-hosted roster packs (owner request) | On main:
+  - The deployment can host roster packs: the owner uploads a pack zip on the Server disc page (`/disc`, new **Roster packs** card: list, Remove, Upload), the server keeps it in `MVP_PACKS_DIR` (Docker: `/data/packs`, same volume and login as the disc), and the game page's Roster packs panel offers it in a **Packs on this server** dropdown. Choosing one adds it exactly like a picked zip (same checks, same netplay set hash); the page remembers it per browser, and the game start waits for a pack download in progress.
+  - Server: `engine/server/src/pack_store.ts`, `/api/packs` routes (GET list and zip with ETag; POST/DELETE with the disc page's CSRF token). Tests: 72 server, 91 web; Chrome on the real server: the MLB 2026 pack from the dropdown gives the same result hash as the file (`464d7267...`). Guide: `docs/engine/DEPLOY_DOKPLOY.md` §8.
+  | Owner: redeploy in Dokploy, then upload the MLB 2026 zip on the Server disc page.

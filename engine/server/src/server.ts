@@ -12,6 +12,9 @@
 //                                            into their own browser storage (src/disc_hash.ts)
 //   GET  /disc, /api/disc, /api/disc/uploads  the Server disc page and its chunked upload (deploy:
 //                                            src/disc_page.ts, src/disc_store.ts), with uploads on
+//   GET  /api/packs, /api/packs/<file>       the roster packs the pages offer in a dropdown, and one
+//                                            pack's zip (src/pack_store.ts), with a packs directory
+//   POST /api/packs, DELETE /api/packs/<file> upload or remove a pack (the Server disc page, its token)
 //   GET  /api/rooms                          open rooms (src/lobby.ts)
 //   WS   /ws                                 lobby and WebRTC signaling
 //   GET  anything else                       the engine site (static files)
@@ -21,6 +24,7 @@
 // server has no password (setup mode) every page load is sent to /setup instead.
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 
@@ -42,6 +46,7 @@ import { DISC_PAGE_CSP, discPage } from './disc_page.js';
 import { ManifestCache } from './disc_hash.js';
 import { DiscStore, type Answer } from './disc_store.js';
 import { serveDisc, serveStatic } from './files.js';
+import { PackStore } from './pack_store.js';
 import { Lobby } from './lobby.js';
 import {
   CsrfTokens,
@@ -114,6 +119,24 @@ function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
   });
 }
 
+/**
+ * The body as bytes, or null when it is larger than `limit` or fails. A body over the
+ * limit is read to its end and dropped, so the page gets an answer (413), not a reset.
+ */
+function readBodyBytes(req: IncomingMessage, limit: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size <= limit) chunks.push(c);
+      else chunks.length = 0;
+    });
+    req.on('end', () => resolve(size <= limit ? Buffer.concat(chunks) : null));
+    req.on('error', () => resolve(null));
+  });
+}
+
 /** The origin requests must come from: the configured public URL, else the request's own host. */
 function originAllowed(req: IncomingMessage, cfg: ServerConfig): boolean {
   const origin = req.headers.origin;
@@ -157,6 +180,8 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
   });
   // The uploaded disc (deploy): only when a disc directory is configured.
   const store = cfg.discDir ? await DiscStore.open({ dir: cfg.discDir, expect: cfg.expectDisc, maxBytes: cfg.maxDiscBytes, now, log }) : null;
+  // Roster packs the pages offer in a dropdown: only when a packs directory is configured.
+  const packs = cfg.packsDir ? await PackStore.open({ dir: cfg.packsDir, maxBytes: cfg.maxPackBytes, log }) : null;
   /**
    * The image the disc route serves, its URL and version: an uploaded one, else the configured file.
    * `sidecar`: where its manifest is kept between restarts (uploads only).
@@ -288,12 +313,94 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
    * Each request must come from the page itself: the X-MVP-CSRF header holds the session's token,
    * Sec-Fetch-Site (when sent) says same-origin and Origin (when sent) is this site.
    */
-  const handleUpload = async (req: IncomingMessage, res: ServerResponse, method: string, path: string, url: URL): Promise<void> => {
+  /** A request from the Server disc page itself: its CSRF token, same-origin. */
+  const fromDiscPage = (req: IncomingMessage): boolean => {
     const session = parseCookies(req.headers.cookie).get(COOKIE)!;
     const got = String(req.headers['x-mvp-csrf'] ?? '');
     const want = discToken(session);
     const tokenOk = got.length === want.length && timingSafeEqual(Buffer.from(got), Buffer.from(want));
-    if (!tokenOk || !sameOriginPost(req, cfg)) {
+    return tokenOk && sameOriginPost(req, cfg);
+  };
+
+  /**
+   * The roster packs (src/pack_store.ts):
+   *   GET          /api/packs          {packs: [{file, id, name, version, description, size, sha256}]}
+   *   GET/HEAD     /api/packs/<file>   the zip (ETag = its SHA-256: a page revalidates and keeps its copy)
+   *   POST         /api/packs          upload a zip (the body), from the Server disc page
+   *   DELETE       /api/packs/<file>   remove it, from the Server disc page
+   */
+  const handlePacks = async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<void> => {
+    const forbidden = () =>
+      sendJson(res, { status: 403, body: { error: 'This request must come from the Server disc page of this site.' } });
+    const rest = path.slice('/api/packs'.length);
+    if (rest === '' || rest === '/') {
+      if (method === 'GET' || method === 'HEAD') {
+        res
+          .writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' })
+          .end(method === 'HEAD' ? undefined : JSON.stringify({ packs: await packs!.list() }));
+        return;
+      }
+      if (method === 'POST') {
+        if (!fromDiscPage(req)) {
+          forbidden();
+          return;
+        }
+        const type = req.headers['content-type'] ?? '';
+        if (!type.startsWith('application/zip') && !type.startsWith('application/octet-stream')) {
+          sendJson(res, { status: 415, body: { error: 'Expected a .zip file.' } });
+          return;
+        }
+        if (Number(req.headers['content-length'] ?? 0) > packs!.maxBytes) {
+          res.setHeader('Connection', 'close');  // refuse at once; do not wait for a body this large
+          sendJson(res, { status: 413, body: { error: `A pack zip can be at most ${Math.floor(packs!.maxBytes / 1048576)} MB.` } });
+          return;
+        }
+        const body = await readBodyBytes(req, packs!.maxBytes);
+        if (body === null) {
+          sendJson(res, { status: 413, body: { error: `A pack zip can be at most ${Math.floor(packs!.maxBytes / 1048576)} MB.` } });
+          return;
+        }
+        sendJson(res, await packs!.save(body));
+        return;
+      }
+      res.writeHead(405, { Allow: 'GET, HEAD, POST' }).end();
+      return;
+    }
+    const file = rest.slice(1);  // `path` is decoded already
+    if (!PackStore.validFile(file)) {
+      sendJson(res, { status: 404, body: { error: 'No such pack.' } });
+      return;
+    }
+    if (method === 'DELETE') {
+      if (!fromDiscPage(req)) {
+        forbidden();
+        return;
+      }
+      sendJson(res, await packs!.remove(file));
+      return;
+    }
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD, DELETE' }).end();
+      return;
+    }
+    const info = await packs!.info(file);
+    const p = info ? await packs!.path(file) : null;
+    if (!info || !p) {
+      sendJson(res, { status: 404, body: { error: 'No such pack.' } });
+      return;
+    }
+    const etag = `"${info.sha256}"`;
+    const headers = { 'Content-Type': 'application/zip', 'Cache-Control': 'private, no-cache', ETag: etag };
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers).end();
+      return;
+    }
+    const data = method === 'HEAD' ? undefined : await readFile(p);
+    res.writeHead(200, { ...headers, 'Content-Length': String(info.size) }).end(data);
+  };
+
+  const handleUpload = async (req: IncomingMessage, res: ServerResponse, method: string, path: string, url: URL): Promise<void> => {
+    if (!fromDiscPage(req)) {
       sendJson(res, { status: 403, body: { error: 'This request must come from the Server disc page of this site.' } });
       return;
     }
@@ -441,6 +548,10 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       await handleUpload(req, res, method, path, url);
       return;
     }
+    if (packs && (path === '/api/packs' || path.startsWith('/api/packs/'))) {
+      await handlePacks(req, res, method, path);
+      return;
+    }
     if (method !== 'GET' && method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
       return;
@@ -459,7 +570,8 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
           body.discManifest = d.version ? `/api/disc/manifest?v=${d.version}` : '/api/disc/manifest';
         }
       }
-      if (store) body.discPage = '/disc';
+      if (store || packs) body.discPage = '/disc';
+      if (packs) body.packs = '/api/packs';
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' }).end(JSON.stringify(body));
       return;
     }
@@ -491,11 +603,11 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       await serveDisc(d.path, req, res);
       return;
     }
-    if (store && path === '/disc') {
+    if ((store || packs) && path === '/disc') {
       const token = discToken(parseCookies(req.headers.cookie).get(COOKIE)!);
       res
         .writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': DISC_PAGE_CSP })
-        .end(method === 'HEAD' ? undefined : discPage(token));
+        .end(method === 'HEAD' ? undefined : discPage(token, { disc: !!store, packs: !!packs }));
       return;
     }
     if (store && path === '/api/disc') {

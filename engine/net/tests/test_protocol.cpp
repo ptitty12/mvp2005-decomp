@@ -194,6 +194,18 @@ TEST_CASE("handshake compatibility") {
   c = sample_hello(2);
   c.id.settings = "ax_voices=0;ports=0x3";
   CHECK(incompatibility(a, c).find("settings") != std::string::npos);
+  // Gameplay mods (mods/gameplay/host.h): only the keys that differ, by player, in words.
+  Hello m1 = sample_hello(1), m2 = sample_hello(2);
+  m1.id.settings = "ports=0x3;mod.abs.miss=30;mod.abs=1";
+  m2.id.settings = "ports=0x3;mod.abs.miss=20;mod.abs=1";
+  CHECK(incompatibility(m1, m2) ==
+        "the players chose different gameplay mod settings (mod.abs.miss: player 1 30, player 2 20); "
+        "both must choose the same");
+  CHECK(incompatibility(m2, m1) == incompatibility(m1, m2));  // the same text on both sides
+  m2.id.settings = "ports=0x3";
+  CHECK(incompatibility(m1, m2).find("mod.abs: player 1 1, player 2 (none)") != std::string::npos);
+  m2.id.settings = "ports=0x1;mod.abs.miss=30;mod.abs=1";
+  CHECK(incompatibility(m1, m2) == "different settings (ports: player 1 0x3, player 2 0x1)");
   c = sample_hello(2);
   c.hash_interval = 30;
   CHECK(incompatibility(a, c).find("desync-check") != std::string::npos);

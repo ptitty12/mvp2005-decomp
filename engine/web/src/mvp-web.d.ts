@@ -35,6 +35,10 @@ export interface MvpEngine {
   _mvp_render_scale(scale: number): void;  // Q1: the internal resolution, 1-3
   _mvp_gpu_load(passes: number): void;  // Q5 (development): extra GPU work per present
   _mvp_gpu_timing(on: number): void;  // Q5 (development): 0 = no GPU timestamps (before mvp_gfx_init)
+  _mvp_mod_enable(spec: number): number;
+  _mvp_mod_seed(seed: number): void;
+  _mvp_mod_settings(): number;
+  _mvp_mod_status(): number;
   _mvp_set_pad(port: number, connected: number, buttons: number, sx: number, sy: number, cx: number, cy: number,
                tl: number, tr: number): void;
   _mvp_status(): number;

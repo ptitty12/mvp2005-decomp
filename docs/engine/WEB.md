@@ -387,6 +387,16 @@ Everything below is run by agents; the owner never runs commands.
   used with this disc ..." and the first problems. The set hash goes into the netplay
   handshake (`NETPLAY.md` §3). The packs never leave the browser; the patched tables
   live only in the engine's memory.
+  **Server packs** (the deployment): when `/config.json` names `"packs"` (the server's
+  `MVP_PACKS_DIR`, `engine/server/src/pack_store.ts`), the panel adds a **Packs on this
+  server** list from `GET /api/packs`. Choosing one downloads its zip from
+  `/api/packs/<file>` behind the login (an ETag lets the browser revalidate instead of
+  downloading again) and adds it exactly as a picked zip, so the checks, the order and the
+  netplay set hash are the same. The page remembers the server packs a player chose (in
+  this browser's `localStorage`) and adds them again on the next visit if the server
+  still has them. The owner uploads and removes them on the Server disc page
+  (`DEPLOY_DOKPLOY.md` §8). `browser_check.mjs --real-server ... --packs-dir DIR
+  --server-packs FILE` chooses them from the list as a player does.
 - **The translation cache** (`src/module-cache.ts`, engine `wasm/module_cache.*`).
   After the first frame the Worker serializes the translator's output (the wasm
   binary and the tables the runtime fills from it, about 52 MB) and writes it to

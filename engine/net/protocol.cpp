@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <set>
+#include <string>
 
 #include "common/bytes.h"
 
@@ -264,6 +267,43 @@ std::optional<MsgType> peek_type(const u8* d, std::size_t n) {
   return static_cast<MsgType>(d[3]);
 }
 
+namespace {
+
+// "k=v;k=v" (net/identity.h) as a map.
+std::map<std::string, std::string> parse_settings(const std::string& s) {
+  std::map<std::string, std::string> m;
+  for (std::size_t at = 0; at < s.size();) {
+    std::size_t end = s.find(';', at);
+    if (end == std::string::npos) end = s.size();
+    const std::string kv = s.substr(at, end - at);
+    const std::size_t eq = kv.find('=');
+    if (!kv.empty()) m[kv.substr(0, eq)] = eq == std::string::npos ? "" : kv.substr(eq + 1);
+    at = end + 1;
+  }
+  return m;
+}
+
+// The settings that differ, by player ("key: player 1 v1, player 2 v2, ..."), and
+// whether they are all gameplay mods' (mods/gameplay/host.h: "mod" keys).
+std::string settings_difference(const Hello& p1, const Hello& p2, bool* mods_only) {
+  const auto a = parse_settings(p1.id.settings), b = parse_settings(p2.id.settings);
+  std::set<std::string> keys;
+  for (const auto& [k, v] : a) keys.insert(k);
+  for (const auto& [k, v] : b) keys.insert(k);
+  std::string out;
+  *mods_only = true;
+  for (const std::string& k : keys) {
+    const auto ia = a.find(k), ib = b.find(k);
+    const std::string va = ia == a.end() ? "(none)" : ia->second, vb = ib == b.end() ? "(none)" : ib->second;
+    if (va == vb) continue;
+    if (k.rfind("mod.", 0) != 0) *mods_only = false;
+    out += (out.empty() ? "" : ", ") + k + ": player 1 " + va + ", player 2 " + vb;
+  }
+  return out;
+}
+
+}  // namespace
+
 std::string incompatibility(const Hello& a, const Hello& b) {
   if (a.player == b.player)
     return "both players chose player " + std::to_string(a.player) + " (one must be player 1, the other player 2)";
@@ -281,7 +321,14 @@ std::string incompatibility(const Hello& a, const Hello& b) {
   if (a.id.cpi_milli != b.id.cpi_milli || a.id.di_latency_tb != b.id.di_latency_tb ||
       a.id.di_tb_per_kib != b.id.di_tb_per_kib)
     return "different engine timing constants (CLK2/DVD1)";
-  if (a.id.settings != b.id.settings) return "different settings (" + a.id.settings + " vs " + b.id.settings + ")";
+  if (a.id.settings != b.id.settings) {
+    const Hello& p1 = a.player == 1 ? a : b;
+    const Hello& p2 = a.player == 1 ? b : a;
+    bool mods_only = false;
+    const std::string diff = settings_difference(p1, p2, &mods_only);
+    if (mods_only) return "the players chose different gameplay mod settings (" + diff + "); both must choose the same";
+    return "different settings (" + diff + ")";
+  }
   if (a.hash_interval != b.hash_interval)
     return "different desync-check intervals (" + std::to_string(a.hash_interval) + " vs " +
            std::to_string(b.hash_interval) + ")";

@@ -416,9 +416,8 @@ try {
   if (expect) summary.expect = expect;
   rc = sameGuest && sameWindows && noDesync && stoppedAtN && matchesExpect && noGateMiss ? 0 : 1;
   if (expectReject) {
-    // Both refused at the handshake, for the roster packs, and neither booted.
-    const refused = [sa, sb].map((st) => st.net?.status?.state === 'rejected' &&
-                                         /different roster packs/.test(st.net.status.reason) && !st.stopped &&
+    // Both refused at the handshake (different roster packs, gameplay mod settings, ...) and neither booted.
+    const refused = [sa, sb].map((st) => st.net?.status?.state === 'rejected' && !st.stopped &&
                                          st.phases?.boot === undefined);
     summary.checks = { refused, reasons: [sa, sb].map((st) => st.net?.status?.reason ?? null),
                        errors: [sa, sb].map((st) => st.error?.message ?? null) };
@@ -436,6 +435,6 @@ console.log(JSON.stringify({ checks: summary.checks, exception: summary.exceptio
                              pages: summary.pages?.map((p) => ({ who: p.who, guestLine: p.guestLine, why: p.why, error: p.error,
                                                                  net: p.net?.status, route: p.net?.route, transport: p.net?.transport })) },
                            null, 2));
-console.log(rc === 0 ? (expectReject ? 'PASS: both browsers refused the game: different roster packs'
+console.log(rc === 0 ? (expectReject ? `PASS: both browsers refused the game: ${summary.checks?.reasons?.[0] ?? ''}`
                                      : 'PASS: both browsers stayed in lockstep') : 'FAIL');
 process.exit(rc);

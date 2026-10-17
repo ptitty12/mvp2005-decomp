@@ -11,6 +11,32 @@
 
 namespace mvp::rt {
 
+std::unique_ptr<Hardware> Hardware::snapshot() const {
+  auto s = std::make_unique<Hardware>(*this);
+  s->wgp_ = &s->own_wgp_;
+  s->own_wgp_ = *wgp_;
+  return s;
+}
+
+void Hardware::save_into(Hardware& snap) const {
+  snap = *this;  // vectors keep their capacity: no allocation after the first save
+  snap.wgp_ = &snap.own_wgp_;
+  snap.own_wgp_ = *wgp_;
+}
+
+void Hardware::restore_from(const Hardware& snap) {
+  WgpState* wgp = wgp_;
+  GfxObserver* gfx = gfx_;
+  ax::FrameObserver* ax_obs = ax_obs_;
+  vfs::Source* disc = disc_;
+  *this = snap;
+  wgp_ = wgp;
+  *wgp_ = snap.own_wgp_;
+  disc_ = disc;
+  ax_obs_ = ax_obs;
+  set_gfx_observer(gfx);
+}
+
 namespace {
 
 constexpr u32 kExiBase = 0xCC006800u, kExiStride = 0x14u;

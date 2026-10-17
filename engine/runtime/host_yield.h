@@ -51,6 +51,21 @@ class YieldingHooks : public SystemHooks {
 
   std::uint64_t yields = 0, repeats_skipped = 0, stops = 0;
 
+  // Save states: whether the next safe point repeats the one a stop or yield
+  // interrupted (a state saved at a stopped frame poll restores it too).
+  struct YieldState {
+    bool want = false, armed = false;
+    std::uint32_t pc = 0;
+    std::uint64_t ticks = 0;
+  };
+  YieldState yield_state() const { return {want_, armed_, pc_, ticks_}; }
+  void set_yield_state(const YieldState& s) {
+    want_ = s.want;
+    armed_ = s.armed;
+    pc_ = s.pc;
+    ticks_ = s.ticks;
+  }
+
  private:
   bool want_ = false;
   bool armed_ = false;  // the next safe point may be the one a yield interrupted

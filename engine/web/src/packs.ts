@@ -8,6 +8,12 @@
 // Both players of an online game must pick the same packs in the same order: the
 // set hash goes into the netplay handshake, which refuses a game otherwise.
 // The packs never leave the browser.
+//
+// On the owner's deployment the server also offers packs (/config.json "packs",
+// engine/server/src/pack_store.ts): a dropdown lists them, and choosing one
+// downloads its zip (behind the login) and adds it as if the player had picked
+// the file. The page remembers the server packs a player chose (this browser
+// only) and adds them again on the next visit, if the server still has them.
 
 import { EMPTY_SET_HASH, feedPacks, readPick, type PacksModule } from './packs-core.js';
 import type { PackInput, PackSetReport } from './protocol.js';
@@ -27,8 +33,11 @@ export class PackPanel {
   private readonly list: HTMLOListElement;
   private readonly summary: HTMLElement;
   private readonly issues: HTMLUListElement;
-  private readonly inputs: HTMLInputElement[] = [];
+  private readonly inputs: (HTMLInputElement | HTMLSelectElement)[] = [];
   private seq = 0;
+  private readonly row: HTMLDivElement;
+  private serverMsg: HTMLElement | null = null;
+  private readonly downloads = new Set<Promise<void>>();
 
   /** Called after every change (the page refreshes what depends on the set). */
   onChange: (state: PacksState) => void = () => {};
@@ -43,6 +52,7 @@ export class PackPanel {
       'game starts, in this order. In an online game both players need the same packs in the same order.';
     const row = document.createElement('div');
     row.className = 'packs-row';
+    this.row = row;
     row.append(this.picker('Add packs (.zip)', 'packs-zip', (input) => {
       input.accept = '.zip,application/zip';
       input.multiple = true;
@@ -58,6 +68,91 @@ export class PackPanel {
     this.issues.className = 'packs-issues';
     el.append(h, note, row, this.list, this.summary, this.issues);
     void this.refresh();
+  }
+
+  /**
+   * The packs the server offers (`listUrl`: GET -> {packs: [{file, name, version, size, sha256}]}): a
+   * dropdown before the file pickers. Choosing one adds it to the set; the choice is remembered.
+   */
+  async addServerList(listUrl: string, fetchFn: typeof fetch = fetch): Promise<void> {
+    let packs: ServerPack[] = [];
+    try {
+      const r = await fetchFn(listUrl, { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) return;
+      const j = (await r.json()) as { packs?: unknown };
+      packs = Array.isArray(j.packs) ? (j.packs as ServerPack[]).filter((p) => p && typeof p.file === 'string' && typeof p.name === 'string') : [];
+    } catch {
+      return;
+    }
+    if (!packs.length) return;
+    const label = document.createElement('label');
+    label.className = 'picker';
+    label.textContent = 'Packs on this server ';
+    const select = document.createElement('select');
+    select.id = 'packs-server';
+    const prompt = new Option('Choose a pack to add...', '');
+    select.append(prompt, ...packs.map((p) => new Option(`${p.name} ${p.version}`, p.file)));
+    label.append(select);
+    this.row.prepend(label);
+    this.inputs.push(select);
+    this.serverMsg = document.createElement('p');
+    this.serverMsg.className = 'note';
+    this.serverMsg.setAttribute('role', 'status');
+    this.row.after(this.serverMsg);
+    const base = new URL(listUrl, location.href);
+    const download = async (p: ServerPack, remembered: boolean) => {
+      if (this.packs.some((x) => x.server === p.file)) return;
+      this.say(`Downloading ${p.name} ${p.version} (${(p.size / 1048576).toFixed(1)} MB)...`);
+      let data: ArrayBuffer;
+      try {
+        const r = await fetchFn(new URL(`${base.pathname.replace(/\/$/, '')}/${encodeURIComponent(p.file)}`, base).href,
+          { credentials: 'same-origin' });
+        if (!r.ok) {
+          this.say(`Could not download ${p.name} (HTTP ${r.status}${r.status === 401 ? ': log in again' : ''}).`, true);
+          return;
+        }
+        data = await r.arrayBuffer();
+      } catch (e) {
+        this.say(`Could not download ${p.name}: ${String(e)}.`, true);
+        return;
+      }
+      if (this.state.locked || this.packs.some((x) => x.server === p.file)) return;
+      this.packs.push({ label: `${p.name} ${p.version}`, kind: 'zip', files: [{ path: p.file, data }], server: p.file });
+      this.say(remembered ? `${p.name} ${p.version} added again (you chose it last time).` : '');
+      rememberServerPacks(this.packs);
+      await this.refresh();
+    };
+    // Tracked, so a game started meanwhile waits for it (settled()).
+    const add = (p: ServerPack, remembered: boolean): Promise<void> => {
+      const job = download(p, remembered).finally(() => this.downloads.delete(job));
+      this.downloads.add(job);
+      return job;
+    };
+    select.addEventListener('change', () => {
+      const p = packs.find((x) => x.file === select.value);
+      select.value = '';
+      if (p) void add(p, false);
+    });
+    for (const file of recallServerPacks()) {
+      const p = packs.find((x) => x.file === file);
+      if (p) await add(p, true);
+    }
+  }
+
+  /** A server pack is downloading: starting the game now would leave it out. */
+  busy(): boolean {
+    return this.downloads.size > 0;
+  }
+
+  /** Resolves when no server pack is downloading. */
+  async settled(): Promise<void> {
+    while (this.downloads.size) await Promise.allSettled([...this.downloads]);
+  }
+
+  private say(text: string, err = false): void {
+    if (!this.serverMsg) return;
+    this.serverMsg.textContent = text;
+    this.serverMsg.className = err ? 'note err' : 'note';
   }
 
   /** The packs for the engine Worker (copies: the panel keeps its own). */
@@ -135,6 +230,7 @@ export class PackPanel {
     const j = i + d;
     if (j < 0 || j >= this.packs.length) return;
     [this.packs[i], this.packs[j]] = [this.packs[j]!, this.packs[i]!];
+    rememberServerPacks(this.packs);
     void this.refresh();
   }
 
@@ -161,6 +257,7 @@ export class PackPanel {
         li.append(btn('Up', 'Apply earlier', () => this.move(i, -1)), btn('Down', 'Apply later', () => this.move(i, 1)),
                   btn('Remove', 'Remove from the set', () => {
                     this.packs.splice(i, 1);
+                    rememberServerPacks(this.packs);
                     void this.refresh();
                   }));
       }
@@ -189,5 +286,34 @@ export class PackPanel {
       li.textContent = `${x.code} ${x.where}: ${x.message}`;
       return li;
     }));
+  }
+}
+
+/** A pack the server offers (engine/server/src/pack_store.ts). */
+interface ServerPack {
+  file: string;
+  name: string;
+  version: string;
+  size: number;
+  sha256?: string;
+}
+
+const REMEMBER_KEY = 'mvp.serverPacks';
+
+/** The server packs of the set, in order, for the next visit (this browser only; storage may be off). */
+function rememberServerPacks(packs: PackInput[]): void {
+  try {
+    localStorage.setItem(REMEMBER_KEY, JSON.stringify(packs.map((p) => p.server).filter(Boolean)));
+  } catch {
+    // no storage here: nothing is remembered
+  }
+}
+
+function recallServerPacks(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(REMEMBER_KEY) ?? '[]') as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
   }
 }

@@ -18,7 +18,9 @@
 // browser's storage and the engine reads it locally (disc-store.ts), instead of
 // over the network during play. "discPreparing" means the server is still
 // hashing the image (once after an upload or an update): the page asks again.
-// "discPage" names the Server disc page (the operator's upload page).
+// "discPage" names the Server disc page (the operator's upload page), and "packs"
+// the roster packs the server offers (GET: {packs: [...]}; packs.ts shows them in
+// a dropdown).
 //
 // fetch is a parameter so the unit tests (tests/disc.test.mjs) run these
 // against fake responses.
@@ -26,9 +28,9 @@
 import type { DiscOffer } from './disc-store.js';
 
 export type ServerDisc =
-  | { kind: 'url'; url: string; offer?: DiscOffer; preparing?: boolean; discPage?: string }
+  | { kind: 'url'; url: string; offer?: DiscOffer; preparing?: boolean; discPage?: string; packs?: string }
   // `deployment`: /config.json is there (the netplay server) but names no disc.
-  | { kind: 'none'; why: string; deployment?: boolean; discPage?: string }
+  | { kind: 'none'; why: string; deployment?: boolean; discPage?: string; packs?: string }
   | { kind: 'error'; message: string; login?: boolean };
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -61,9 +63,13 @@ export async function findServerDisc(base: string, fetchFn: Fetch = fetch): Prom
     }
   };
   const discPage = sameOrigin(c.discPage) ?? undefined;
+  const packs = sameOrigin(c.packs) ?? undefined;
   const disc = c.disc;
-  if (typeof disc !== 'string' || !disc)
-    return { kind: 'none', why: '/config.json names no disc', deployment: !!cfg && typeof cfg === 'object', discPage };
+  if (typeof disc !== 'string' || !disc) {
+    const none: ServerDisc & { kind: 'none' } = { kind: 'none', why: '/config.json names no disc', deployment: !!cfg && typeof cfg === 'object', discPage };
+    if (packs) none.packs = packs;
+    return none;
+  }
   let url: URL;
   try {
     url = new URL(disc, base);
@@ -74,6 +80,7 @@ export async function findServerDisc(base: string, fetchFn: Fetch = fetch): Prom
     return { kind: 'error', message: `/config.json: the disc must be on this site (${url.origin} is not)` };
   const found: ServerDisc & { kind: 'url' } = { kind: 'url', url: url.href };
   if (discPage) found.discPage = discPage;
+  if (packs) found.packs = packs;
   const manifest = sameOrigin(c.discManifest);
   if (typeof c.discHash === 'string' && /^[0-9a-f]{64}$/.test(c.discHash) && Number.isSafeInteger(c.discSize) &&
       (c.discSize as number) > 0 && manifest)

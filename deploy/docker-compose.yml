@@ -19,6 +19,8 @@
 #   state.json   the site password's scrypt hash (created on the first-run page)
 #   disc/        the disc image uploaded on the Server disc page (owner-only directory), and its
 #                piece hashes for the players' one-time download (GV4E69.manifest.json)
+#   packs/       roster packs uploaded on the same page (owner-only directory), offered to the
+#                players in the game page's Roster packs list
 #   turn/secret  the TURN shared secret, generated on the first start and read by coturn
 # The images hold no game data and no secrets.
 #

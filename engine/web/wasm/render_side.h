@@ -96,6 +96,20 @@ class RenderSide {
   }
   std::string digest_take();
 
+  // Gameplay mods' reviews (mods/gameplay/timeline.h): the GX processor's state
+  // saved with a save-state slot and restored with it; after a restore the
+  // renderer's textures and the GP's memory snapshots start over.
+  void save_view(int slot) {
+    if (!proc_) return;
+    if (views_[slot]) *views_[slot] = *proc_;
+    else views_[slot] = std::make_unique<gfx::GxProcessor>(*proc_);
+  }
+  void load_view(int slot) {
+    if (proc_ && views_[slot]) *proc_ = *views_[slot];
+    if (renderer_) renderer_->invalidate_textures();
+    gp_.field();
+  }
+
   // ",\"draws\":..." members for mvp_status (empty without a renderer).
   std::string status_json() const;
   std::uint64_t presents() const { return presents_; }
@@ -112,6 +126,7 @@ class RenderSide {
   gfx::GpMemory gp_;  // Q1: memory as the GP sees it; the processor, the renderer and the digest read it
   std::unique_ptr<gfx::Renderer> renderer_;
   std::unique_ptr<gfx::GxProcessor> proc_;
+  std::unique_ptr<gfx::GxProcessor> views_[2];  // save_view / load_view
   gfx::DigestTap digest_;
   XfbTap tap_;
   std::string digest_log_;

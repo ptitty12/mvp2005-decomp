@@ -80,6 +80,7 @@ ENV NODE_ENV=production \
     MVP_SITE=/app/site \
     MVP_STATE_FILE=/data/state.json \
     MVP_DISC_DIR=/data/disc \
+    MVP_PACKS_DIR=/data/packs \
     MVP_TURN_MODE=off \
     MVP_TURN_SECRET_FILE=/data/turn/secret \
     MVP_TURN_SECRET_CREATE=1 \
@@ -90,18 +91,18 @@ COPY --from=server /src/engine/server/package.json /app/server/package.json
 COPY --from=server /src/engine/server/dist/src /app/server/dist/src
 COPY --from=server /src/engine/server/node_modules /app/server/node_modules
 # The site is the engine's own file types only (as engine/server/tools/package.mjs); the manifest; the volume's
-# layout: /data (the state file, 0600), /data/disc (the uploaded disc, owner only), /data/turn (coturn's secret,
-# readable by coturn's own user in its container).
+# layout: /data (the state file, 0600), /data/disc (the uploaded disc, owner only), /data/packs (the uploaded
+# roster packs, owner only), /data/turn (coturn's secret, readable by coturn's own user in its container).
 RUN set -eu; \
     cd /app; \
     bad=$(find site -type f ! -regex '.*\.\(html\|css\|js\|wasm\|txt\|json\)$'); \
     if [ -n "$bad" ]; then echo "unexpected files in the site: $bad" >&2; exit 1; fi; \
     test -f site/index.html; test -f site/mvp-web.wasm; test -f site/main.js; test -f site/build-id.json; \
     find site server -type f | LC_ALL=C sort | xargs sha256sum > MANIFEST.txt; \
-    mkdir -p /data/disc /data/turn; \
-    chown node:node /data /data/disc /data/turn; \
+    mkdir -p /data/disc /data/packs /data/turn; \
+    chown node:node /data /data/disc /data/packs /data/turn; \
     chmod 0755 /data /data/turn; \
-    chmod 0700 /data/disc
+    chmod 0700 /data/disc /data/packs
 USER node
 WORKDIR /app/server
 VOLUME ["/data"]

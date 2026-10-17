@@ -32,6 +32,32 @@ void Machine::set_real_mode(bool on) {
   }
 }
 
+void Machine::save(Snapshot& s) const {
+  s.cpu = cpu_;
+  s.mem1.assign(mem1_.begin(), mem1_.end());  // keeps the snapshot's capacity: no allocation after the first
+  s.extra_ram = extra_ram_;
+}
+
+bool Machine::load(const Snapshot& s) {
+  if (s.mem1.size() != mem1_.size() || s.extra_ram.size() != extra_ram_.size()) return false;
+  for (std::size_t k = 0; k < extra_ram_.size(); ++k)
+    if (s.extra_ram[k].first != extra_ram_[k].first || s.extra_ram[k].second.size() != extra_ram_[k].second.size())
+      return false;
+  ppc::Memory* mem = cpu_.mem;
+  ppc::Hooks* hooks = cpu_.hooks;
+  void* env = cpu_.env;
+  cpu_ = s.cpu;
+  cpu_.mem = mem;
+  cpu_.hooks = hooks;
+  cpu_.env = env;
+  std::memcpy(mem1_.data(), s.mem1.data(), mem1_.size());
+  for (std::size_t k = 0; k < extra_ram_.size(); ++k)
+    std::memcpy(extra_ram_[k].second.data(), s.extra_ram[k].second.data(), extra_ram_[k].second.size());
+  constexpr u32 kXlat = ppc::msr::IR | ppc::msr::DR;
+  set_real_mode((cpu_.msr & kXlat) != kXlat);
+  return true;
+}
+
 bool Machine::code_intact(u32 ea) const {
   if (!dol_) return true;
   u32 block = ea & ~31u;

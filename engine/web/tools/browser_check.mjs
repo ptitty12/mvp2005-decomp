@@ -23,6 +23,10 @@
 //   --script   an mvp-input script file (runtime/input.h) for the run
 //   --packs    roster packs (E6), comma-separated pack folders or .zip files, in set
 //              order: given to the page's Roster packs panel before the disc
+//   --server-packs  roster packs the server offers, comma-separated file names
+//              (e.g. mlb-2026.zip): chosen from the panel's "Packs on this server"
+//              list, as a player does, after any --packs (needs --real-server and
+//              --packs-dir)
 //   --fields / --frames   stop there and print the guest line (MEM1 SHA-1)
 //   --fast     unpaced (as fast as possible); default paced to 59.94 fields/s
 //   --shots    VI fields at which to screenshot the canvas (approximately: the
@@ -38,6 +42,8 @@
 //   --real-server  E5's server (engine/server, built: dist/src/main.js) instead of
 //              the mock, with a throwaway password (the check logs in through its
 //              form) and the disc configured
+//   --packs-dir with --real-server: the server's packs directory (MVP_PACKS_DIR): the
+//              zips in it are the packs the page offers in its dropdown
 //   --disc-dir with --real-server: the server's disc directory (MVP_DISC_DIR, as the
 //              Docker deployment: DIR/GV4E69.img is the uploaded image) instead of
 //              MVP_DISC_IMAGE
@@ -158,6 +164,8 @@ const chromiumArgs = ['--enable-unsafe-webgpu', ...(audible ? [] : ['--mute-audi
                       // animation frames as fast as the browser can, like a high-refresh display)
                       ...opt('--chrome-args', '').split(' ').filter(Boolean)];
 const packPaths = opt('--packs', '').split(',').filter(Boolean).map((p) => resolve(p));
+const serverPacks = opt('--server-packs', '').split(',').filter(Boolean);
+const packsDir = opt('--packs-dir', '');
 const shots = opt('--shots', '').split(',').filter(Boolean).map(Number).sort((a, b) => a - b);
 const keys = opt('--keys', '').split(',').filter(Boolean).map((k) => {
   const [f, key] = k.split(':');
@@ -190,7 +198,8 @@ let server;
 if (realServer) {
   server = spawn(process.execPath, [realServer], {
     env: { ...process.env, MVP_PASSWORD: password, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
-           ...(discDir ? { MVP_DISC_DIR: resolve(discDir) } : { MVP_DISC_IMAGE: disc }) },
+           ...(discDir ? { MVP_DISC_DIR: resolve(discDir) } : { MVP_DISC_IMAGE: disc }),
+           ...(packsDir ? { MVP_PACKS_DIR: resolve(packsDir) } : {}) },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
 } else {
@@ -352,7 +361,14 @@ async function runOnce(context, run) {
     await page.setInputFiles(statSync(p).isDirectory() ? '#packs-folder' : '#packs-zip', p);
     await page.waitForFunction((n) => window.mvp.packs?.count === n && window.mvp.packs.report, i + 1, { timeout: 30000 });
   }
-  if (packPaths.length) {
+  // The server's packs: from the panel's dropdown (downloaded from the server behind the login).
+  for (const [i, file] of serverPacks.entries()) {
+    await page.waitForSelector('#packs-server', { timeout: 30000 });
+    await page.selectOption('#packs-server', file);
+    await page.waitForFunction((n) => window.mvp.packs?.count === n && window.mvp.packs.report, packPaths.length + i + 1,
+      { timeout: 120000 });
+  }
+  if (packPaths.length || serverPacks.length) {
     summary.packsPanel = await page.evaluate(() => window.mvp.packs.report);
     console.log(`packs: set ${summary.packsPanel.set_hash}, ${summary.packsPanel.issues.length} issue(s) before the disc`);
   }
@@ -406,7 +422,7 @@ async function runOnce(context, run) {
              paused: s.paused, pad: s.pad, probe: s.audioProbe(), discTrace: s.discTrace,
              packs: s.packs?.mounted ?? null, ioLog: s.ioLog, digest: s.digest,
              hint: s.hint ?? null, autoScale: s.autoScale ?? null,
-             log: s.log.filter((l) => /^picture: |WebGPU error/.test(l)).slice(0, 20) };
+             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time/.test(l)).slice(0, 20) };
   });
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
@@ -578,7 +594,7 @@ async function runOnce(context, run) {
     windows, final: state.stopped?.status ?? state.stats?.status ?? null, guestLine: state.stopped?.guestLine ?? null,
     packs: state.packs,
     error: state.error ?? null, consoleErrors: consoleErrors.slice(0, 20), hidden,
-    hint: state.hint, autoScale: state.autoScale, pictureLog: state.log,  // Q5
+    hint: state.hint, autoScale: state.autoScale, pictureLog: state.log,  // Q5; and a gameplay mod review's timing
     audio: { page: state.audio, attachedAtField: state.audioAttachedAtField, samples: audioSamples },
   });
   const origin = new URL(base).origin;

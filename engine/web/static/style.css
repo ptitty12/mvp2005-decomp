@@ -38,6 +38,11 @@ h1 span { color: var(--muted); font-weight: normal; font-size: 0.95rem; margin-l
 .error { background: var(--error-bg); color: var(--error-fg); padding: 0.6rem 0.8rem; border-radius: 6px; }
 progress { display: block; width: 100%; max-width: 960px; height: 6px; margin: 0 0 0.5rem; accent-color: var(--accent); }
 #stage { max-width: 960px; background: var(--screen); border-radius: 4px; position: relative; }
+.mod-banner { position: absolute; left: 50%; top: 12%; transform: translateX(-50%); max-width: 90%;
+  padding: 0.4rem 0.9rem; border-radius: 6px; background: rgba(0, 0, 0, 0.72); color: #fff;
+  font-weight: 600; text-align: center; pointer-events: none; }
+.mod-row { display: block; margin: 0.35rem 0; }
+.mod-title { font-weight: 600; }
 canvas { display: block; width: 100%; aspect-ratio: 4 / 3; background: var(--screen); border-radius: 4px; outline: none; }
 #stage:fullscreen { max-width: none; width: 100vw; height: 100vh; border-radius: 0;
   display: flex; align-items: center; justify-content: center; }
@@ -103,3 +108,40 @@ details { margin: 0.5rem 0; }
   margin: 0 0 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel); color: var(--fg); }
 .slow-hint button { padding: 0 0.5rem; line-height: 1.4; }
+
+/* The ABS challenge scene over the game (abs-scene.ts): while a review rewinds, then the verdict. */
+.abs-scene { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(8, 14, 30, 0.72), rgba(4, 7, 16, 0.9));
+  backdrop-filter: blur(3px); color: #fff; transition: opacity 450ms ease; z-index: 2; border-radius: inherit; }
+.abs-scene.abs-fading { opacity: 0; }
+.abs-card { width: min(360px, 78%); padding: 0.9rem 1.1rem 0.8rem; border-radius: 12px; text-align: center;
+  background: rgba(14, 21, 38, 0.94); border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45); animation: abs-pop 240ms ease-out; }
+.abs-title { font-weight: 800; text-transform: uppercase; letter-spacing: 0.14em; line-height: 1.2;
+  font-size: clamp(1rem, 3.4vw, 1.6rem); color: #8fb2ff; }
+.abs-overturned .abs-title { color: #4ade80; }
+.abs-stands .abs-title { color: #fbbf24; }
+.abs-sub { font-size: clamp(0.8rem, 2.2vw, 1rem); opacity: 0.88; margin-top: 0.15rem; }
+.abs-zone { display: block; width: 56%; max-width: 230px; margin: 0.6rem auto 0.2rem; overflow: visible; }
+.abs-zone-box { fill: rgba(255, 255, 255, 0.05); stroke: #fff; stroke-width: 2.5; }
+.abs-zone-grid { stroke: rgba(255, 255, 255, 0.28); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.abs-scan { fill: rgba(143, 178, 255, 0.4); animation: abs-scan 1.1s ease-in-out infinite alternate; }
+.abs-verdict .abs-scan { display: none; }
+.abs-ball { fill: #f87171; stroke: #fff; stroke-width: 2.5; transform-box: fill-box; transform-origin: center;
+  animation: abs-drop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+.abs-ball.abs-ball-strike { fill: #4ade80; }
+.abs-progress { height: 6px; margin-top: 0.55rem; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.16); }
+.abs-progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, #6d93ff, #b9ccff); transition: width 140ms linear; }
+.abs-status { font-size: 0.8rem; opacity: 0.78; margin-top: 0.4rem; }
+.abs-tag { position: absolute; top: 10px; left: 10px; z-index: 2; padding: 0.15rem 0.6rem; border-radius: 4px;
+  background: #d32f2f; color: #fff; font-weight: 800; font-size: 0.8rem; letter-spacing: 0.12em;
+  text-transform: uppercase; animation: abs-blink 1.2s ease-in-out infinite; pointer-events: none; }
+@keyframes abs-pop { from { transform: scale(0.92); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes abs-scan { from { transform: translateY(0); } to { transform: translateY(148px); } }
+@keyframes abs-drop { from { transform: scale(2.6); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes abs-blink { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .abs-card, .abs-ball, .abs-tag { animation: none; }
+  .abs-scan { animation: none; opacity: 0.25; }
+  .abs-scene { transition: none; }
+}

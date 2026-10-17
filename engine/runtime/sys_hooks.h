@@ -75,6 +75,23 @@ class SystemHooks : public ppc::Hooks {
   void reschedule(ppc::Cpu& c, bool external_pending);
 
  public:
+  // Save states (runtime/save_state.h): the clock's own state (time-base offset,
+  // decrementer, charge). The counters below are statistics and are not included.
+  struct ClockState {
+    ClockConfig clk;
+    std::uint64_t tb_offset = 0, dec_base = 0, dec_fire_tb = ~0ull;
+    u32 dec_value = 0;
+    bool dec_pending = false;
+  };
+  ClockState clock_state() const { return {clk_, tb_offset_, dec_base_, dec_fire_tb_, dec_value_, dec_pending_}; }
+  void set_clock_state(const ClockState& s) {
+    clk_ = s.clk;
+    tb_offset_ = s.tb_offset;
+    dec_base_ = s.dec_base;
+    dec_fire_tb_ = s.dec_fire_tb;
+    dec_value_ = s.dec_value;
+    dec_pending_ = s.dec_pending;
+  }
 
   std::uint64_t tick_limit = ~0ull;
   std::uint64_t syscalls = 0, icbi_blocks = 0, real_mode_switches = 0;

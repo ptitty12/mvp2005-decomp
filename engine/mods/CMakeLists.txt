@@ -9,6 +9,13 @@ add_library(engine_mods_host STATIC host.cpp)
 target_link_libraries(engine_mods_host PUBLIC engine_mods)
 target_compile_options(engine_mods_host PRIVATE ${ENGINE_WARN})
 
+# Gameplay mods (hook API v1, docs/mods/ABS_CHALLENGE.md §5): mods that run host
+# code at retail-address sites of the running game (runtime/mod_hooks.h).
+add_library(engine_gameplay_mods STATIC gameplay/host.cpp gameplay/abs.cpp gameplay/builtin.cpp gameplay/timeline.cpp)
+target_link_libraries(engine_gameplay_mods PUBLIC engine_runtime engine_common)
+target_compile_options(engine_gameplay_mods PRIVATE ${ENGINE_WARN})
+engine_test(test_gameplay SOURCES tests/test_gameplay.cpp LIBS engine_gameplay_mods)
+
 # mvp-pack: pack.py's commands on the engine's implementation (and mount-check).
 add_executable(mvp-pack tools/mvp_pack.cpp)
 target_link_libraries(mvp-pack PRIVATE engine_mods_host)
