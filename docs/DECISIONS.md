@@ -491,6 +491,24 @@ Agents may propose entries under "Open questions"; only the owner moves them to 
 
   | Before: region mean 32.8 → after 0.00 (pixel-identical); guest lines unchanged; netplay_check passes; msvc 48/49, emscripten 41/42 (+1 skip each), web shell 91/91. | merge of engine/q7-topleft
 
+- 2026-10-17 | **Q6: emulation-thread speed, second pass** (lead, under the owner's delegation; docs/engine/Q6_LOG.md).
+  - **Results against main:**
+    - hostSlow 2: 0.90× → 0.975×, with 51 new frames/s, up from 36-43.
+    - 4 efficiency cores: 0.92-0.94× → 0.993-1.000×.
+    - The laptop stand-in (hostSlow 1.3): 11.0-11.3 → 9.7-10.0 ms per field.
+  - **Q6-F2 (under F1):** the fast FP model drops NI's flush to zero.
+    - NaN results stay canonical after every result, because the game copies integer data through FP registers.
+    - The human-pitching reference line changes from `58631fe2` to `caec614c`.
+    - **Open:** the ABS challenge doc's reference lines were recorded with the old flush and may need re-recording by the mods work.
+  - **Q6-M1:** translated modules get MEM1's host address, and the memory helpers try MEM1 first.
+  - **Q6-N2 (extends Q4-N1):** native code may replace a looping function if it runs safe points where translated code does and keeps a handler's ticks. It is tested by `local_hle_native` with simulated handlers.
+  - **Q6-K1:** the GP's progress schedules a safe point only when it raises the CP interrupt.
+  - **Q6-G1:** native code that writes the GX pipe may hold the GP until its next safe point.
+  - **Q6-C1:** the threaded engine sends the render thread copies of what commands read instead of making guest writes wait. `rtTune`'s fifth value turns this off.
+  - **Q6-S0:** WebAssembly SIMD is not a page requirement; paired singles as SIMD measured no gain.
+
+  | Native lines unchanged except human pitching (F2); renderer digests equal main; netplay_check passes; save-state round trips IDENTICAL with the native loop active; Q7's scale-change check passes; msvc 48/49, emscripten 41/42 (+1 skip each). | merge of engine/q6-speed
+
 ## Open questions for owner
 
 - 2026-10-14 | **K1c (OSInit, DVDInit): the name commit is held on one verify.py false positive (owner).** *Status (2026-10-14, claude-w2):* blockers 1 and 2 are resolved on `work/k1c-finish`; blocker 3 is new. Naming fn_8043188C OSInit and fn_80422FD8 DVDInit (`tools/goals/renames/k1c.tsv`, evidence there) makes dtk's SDK signatures rename 150 more symbols. work/k1c landed everything that is correct on its own: six contract commits, the BB2 overlay without its macro, fn_8042515C's parameter renamed, the .bss data splits of the two linked units (fstload.c: bb2Buf and __fstLoad's static block; EXIBios.c: Ecb), and stateBusy's switch table in dvd's split (without it dtk exports the static as `stateBusy_8042427C` and verify counts fn_8042427C as 100% -> 0%). Blockers:
