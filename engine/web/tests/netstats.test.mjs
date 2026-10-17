@@ -103,6 +103,11 @@ test('Copy stats: a block of text with both columns, the notes and both machines
   assert.match(text, /This computer: 28 threads, nvidia lovelace, Chrome 155; threaded engine\./);
   assert.match(text, /Player 2's computer: 16 threads, amd rdna-3, Chrome 155; threaded engine\./);
   assert.match(text, /Pace: 0\.68x \(this side proposes 1\.00, the other 0\.68\); input lead 60 ms here, 61 ms there\./);
+  // Q5b: with roles, which one this side has.
+  const follows = copyText(ctx({ local: a.summary('x'), peer: b.summary('y'), pace: { ...pace, role: -1, sched: 0.695, trim: 0.012 } }), new Date());
+  assert.match(follows, /61 ms there; this side follows \(its schedule at 0\.69x, trim 1\.2 %\)\./);
+  const sets = copyText(ctx({ local: b.summary('y'), peer: a.summary('x'), pace: { ...pace, role: 1, sched: 0.8 } }), new Date());
+  assert.match(sets, /this side sets the pace and runs free \(its schedule at 0\.80x\)\./);
 });
 
 test('a peer\'s summary as received: known fields with their types only', () => {

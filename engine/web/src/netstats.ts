@@ -205,7 +205,11 @@ export function copyText(c: OverlayContext, when: Date): string {
   if (c.pace) out.push(`Pace: ${c.pace.rate.toFixed(2)}x (this side proposes ${c.pace.prop.toFixed(2)}, the other ` +
                        `${c.pace.peerProp === null ? '-' : c.pace.peerProp.toFixed(2)}); input lead ` +
                        `${c.pace.lead === null ? '-' : `${c.pace.lead.toFixed(0)} ms`} here, ` +
-                       `${c.pace.peerLead === null ? '-' : `${c.pace.peerLead.toFixed(0)} ms`} there.`);
+                       `${c.pace.peerLead === null ? '-' : `${c.pace.peerLead.toFixed(0)} ms`} there` +
+                       // Q5b: the roles (pacer.ts), and the pace this side's schedule runs at
+                       `${c.pace.role === 1 ? `; this side sets the pace and runs free (its schedule at ${(c.pace.sched ?? 1).toFixed(2)}x)`
+                         : c.pace.role === -1 ? `; this side follows (its schedule at ${(c.pace.sched ?? 1).toFixed(2)}x, trim ${((c.pace.trim ?? 0) * 100).toFixed(1)} %)`
+                         : ''}.`);
   return out.join('\n');
 }
 

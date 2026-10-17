@@ -38,6 +38,7 @@
 //                   (N passes), to try the Picture setting's Auto on a GPU that cannot keep up
 //   gpuTimer=0      development (Q5): the render passes are not timed on the GPU (Auto then goes by size alone)
 //   paceMargin=X    development (Q5): the online pace's margin over this machine's capacity (default 0.98)
+//   paceTune=K:V,.. development (Q5b): the pacer's options (pacer.ts) and the paced loop's (worker.ts)
 //   stats=1         the statistics overlay shown from the start (Q5; otherwise the Stats button or `)
 // The page publishes its state as `window.mvp` for the browser check.
 
@@ -150,6 +151,7 @@ const options: RunOptions = {
   gpuLoad: Number(params.get('gpuLoad') ?? 0) || undefined,
   gpuTimer: params.get('gpuTimer') !== '0',
   paceMargin: Number(params.get('paceMargin') ?? 0) || undefined,
+  paceTune: params.get('paceTune') ?? undefined,
   discCache: {
     blockKib: Number(params.get('discBlock') ?? 0) || undefined, maxBlocks: Number(params.get('discBlocks') ?? 0) || undefined,
     maxRun: Number(params.get('discRun') ?? 0) || undefined,

@@ -20,6 +20,7 @@ online play was "choppy/slow".
 | 3 | Automatic input delay from the measured link | Done (section 6) |
 | 4 | Picture Auto that respects the GPU | Done (section 7) |
 | 5 | A note when this machine is not keeping up | Done (section 8) |
+| Q5b | Win back the speed even pacing cost (roles), Auto delay measured twice | Done (section 15) |
 
 ## 2. How the measurements were made
 
@@ -561,3 +562,348 @@ On `engine/q5-netpace`, oldest first (not pushed; the lead integrates):
    Safari's timestamp queries (not checked).
 5. Rollback (after K5) would hide the input delay; the pacing and the lead measurement
    would carry over.
+
+## 15. Q5b: winning back the speed (roles)
+
+Branch `engine/q5b-pace` (from origin/main `ad92bce12`, Q5 merged; later merged with Q4's
+`10118e111`). The lead's follow-up: at a 1.3x slower partner Q5 had measured 0.81x -> 0.72x
+(section 5.1). The task was to win that speed back without losing the evenness: at 1.0 vs 1.3,
+at least 0.80x with the slower page's intervals over 50 ms at most 2 % and the faster page's
+waits low; no regression at the second scenario (1.6x, and 2x once Q4 had landed).
+
+### 15.1 Where the time went
+
+New statistics first. Every stats window (`worker.ts`) now carries:
+
+- the schedule time the paced loop gives up: after a wait, when behind by more than its debt,
+  and when far behind;
+- the time spent spinning.
+
+The pace state also carries the role, the trim and the schedule's own pace. `q5b.py` in the
+scratch reads them. With these numbers and single-page experiments:
+
+- **The slower machine sat idle.** Q5 left it busy 91-92 % of the wall time; the chase kept it
+  at 95.7 %. The idle came from four places:
+  - the 2 % margin under its measured capacity;
+  - proposals in steps of 0.01, raised only after half a second with room for two steps;
+  - fields that started late and were not all caught up (about 3 % of the time was given up
+    as debt);
+  - stretches where its schedule was slower than it could have run, because the scene got
+    lighter faster than the smoothed cost followed.
+
+  The simulation (`sim2.mjs` in the scratch: the section 10 model with per-field costs that
+  vary as the game's do) shows the same, at 94 % busy at Q5's pace.
+- **Fields run one at a time cost little or nothing more than the chase's two-field batches.**
+  This contradicts what section 5.4 suggested. Single-page runs at a simulated 1.6x slower
+  machine (CLK2's game, interleaved, a quiet machine) gave:
+  - the chase: 18.8 and 19.9 ms per field;
+  - one field per batch back to back (`paceTune=fixed:1`): 19.9, 20.1, 19.9 and 20.0 ms;
+  - switching off the GPU's timestamps (`gpuTimer=0`) did not help: 20.8 and 20.5 ms.
+
+  The 6.5 % dearer fields of section 5.1 came mostly from the machine's load at the time. In
+  this session's quietest round, Q5's fields cost what the chase's did (18.3-18.5 ms).
+- So the lever is the slower machine's idle time.
+
+### 15.2 Roles
+
+`src/pacer.ts`. Roles are on by default; `paceTune=roles:0` restores Q5's common pace.
+
+- **The setter.** Once one machine's capacity is 3 % below the other's for half a second, that
+  machine sets the pace. Its schedule runs 15 % past its own capacity. It is therefore always a
+  little behind, and runs each field as soon as the last is done: one field at a time, every
+  frame shown, never idle, at whatever its machine can do from one scene to the next.
+- **The follower.** The other machine follows it:
+  - its schedule runs at the capacity the setter reports;
+  - it moves its schedule toward equal input leads by itself, correcting the whole difference
+    at Q5's net speed (the setter does not move);
+  - it trims its pace by the phase difference that remains: an integral term, at most 4 %,
+    held while it runs at full speed.
+- **Agreement.** Player 1 decides the roles from the two capacities and reports its own in its
+  `pace` message (`role`); player 2 takes the opposite one, so the two always agree. A first
+  version let each side decide; in the simulation two equal machines could then both set the
+  pace for seconds.
+- **Scope.** Machines within 3 % of each other keep Q5's common pace. The roles last through
+  stretches where both machines run at full speed.
+- **Copy stats** says which role this side has, its schedule's pace and the trim.
+- **Rejected: the follower aiming 12 ms early** (`followEarlyMs`, kept as an option). The idea
+  was that the setter would never wait for the follower's inputs, but the setter waited about
+  once a second either way. At delay 2 and over the jittery link the follower could not get
+  that early: its trim wound up to the 4 % bound (`z2`, `z3`, `v2`, `v3`). At delay 2 it waited
+  4.2-4.4 times a second, against 1.9 without the bias (`g1_ra13`). (The message of commit
+  `68ae10d0f` says "0.3 without": that game ran at delay 6, see 15.3.)
+- **Rejected: counting the loop's own lateness in the cost per field** (`v1`-`v3`). It made no
+  difference and was dropped.
+
+Host timing only, as before: the roles decide when fields run, never what they compute.
+
+### 15.3 Measurements on the engine before Q4
+
+**Setup.** Two pages on this PC as in section 2: E5c's innings script, delay 3, fields
+4,300-6,900, `--separate --affinity FFFF`, player 2 at `hostSlow=1.3` or `1.6`.
+
+**Variants**, rotated in each round:
+- the chase: origin/main before Q5 (`site_base`);
+- Q5: `paceTune=roles:0`;
+- Q5b: the default.
+
+The `x1`/`x2` roles runs used the first roles build (each side deciding, 1 s hold, no roles
+at full speed); `x3` and later used the final one.
+
+**Conditions.** The machine was mostly quiet; runs started only below 75 % load (the load at
+each run's start and end is in the table).
+
+**How to read "busy".** It is the slower page's run time over the wall time: how much of its
+machine the pacing uses. Speed = busy x 16.68 ms / its cost per field. The cost per field moved
+5-10 % from run to run with the machine's load, which moves the speed with it. The busy share
+does not move with the load: it is the pacing's own number.
+
+1.0 vs 1.3:
+
+| Variant | Runs | Speed (range) | Slower page: busy | new frames/s | p95 | > 25 ms | > 50 ms | Faster page: waits/s (time waiting) | Underruns/min |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| chase | 3 | 0.852x (0.828-0.866) | 95.7 % | 36.5 | 48.3 ms | 44.8 % | 3.9 % | 37.4 (19.1 %) | 0.4 |
+| Q5 | 5 | 0.796x (0.768-0.832) | 91.3 % | 47.3 | 33.9 ms | 19.0 % | 0.3 % | 1.5 (0.1 %) | 0 |
+| **Q5b** | 5 | **0.837x (0.782-0.869)** | 94.5 % | 49.7 | 31.8 ms | 13.8 % | 0.3 % | 2.2 (0.1 %) | 0 |
+
+1.0 vs 1.6:
+
+| Variant | Runs | Speed (range) | Slower page: busy | new frames/s | p95 | > 25 ms | > 50 ms | Faster page: waits/s (time waiting) | Underruns/min |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| chase | 2 | 0.684x (0.681-0.687) | 96.5 % | 26.4 | 60.2 ms | 73.2 % | 17.8 % | 35.0 (33.5 %) | 0 |
+| Q5 | 2 | 0.653x (0.650-0.656) | 92.9 % | 38.9 | 39.6 ms | 44.7 % | 0.8 % | 1.6 (0.2 %) | 0.5 |
+| **Q5b** | 2 | **0.671x (0.669-0.672)** | 96.3 % | 39.8 | 39.8 ms | 40.8 % | 1.1 % | 2.3 (0.2 %) | 0 |
+
+Per run (the slower page, the faster page's waits):
+
+| Run | Variant | CPU load | Speed | Slower page: ms/field | busy | new frames/s | > 50 ms | Faster page: waits/s |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `x1_b13` | chase (before Q5) | 0-16 % | 0.866x | 18.46 | 95.7 % | 36.8 | 3.5 % | 34.3 |
+| `x1_q13` | Q5 | 9-5 % | 0.832x | 18.33 | 91.3 % | 49.5 | 0.2 % | 1.3 |
+| `x1_r13` | Q5b roles | 6-1 % | 0.855x | 18.32 | 93.8 % | 50.9 | 0.3 % | 2 |
+| `x2_r13` | Q5b roles | 5-2 % | 0.858x | 18.39 | 94.5 % | 50.9 | 0.2 % | 2.2 |
+| `x2_b13` | chase (before Q5) | 12-18 % | 0.861x | 18.55 | 95.6 % | 38 | 3.9 % | 43.3 |
+| `x2_q13` | Q5 | 8-15 % | 0.768x | 19.99 | 91.9 % | 45.7 | 0.3 % | 1.4 |
+| `x3_q13` | Q5 | 28-0 % | 0.788x | 19.38 | 91.5 % | 46.8 | 0.2 % | 1.5 |
+| `x3_r13` | Q5b roles | 1-13 % | 0.782x | 20.31 | 95.1 % | 46.4 | 0.3 % | 2.2 |
+| `x3_b13` | chase (before Q5) | 2-18 % | 0.828x | 19.29 | 95.7 % | 34.8 | 4.2 % | 34.7 |
+| `y1_r13` | Q5b roles | 35-17 % | 0.820x | 19.31 | 94.9 % | 48.7 | 0.3 % | 2.2 |
+| `y1_q13` | Q5 | 8-5 % | 0.808x | 18.75 | 90.6 % | 47.9 | 0.2 % | 1.7 |
+| `y2_q13` | Q5 | 10-13 % | 0.783x | 19.52 | 91.4 % | 46.5 | 0.4 % | 1.4 |
+| `y2_r13` | Q5b roles | 7-2 % | 0.869x | 18.05 | 93.9 % | 51.6 | 0.2 % | 2.2 |
+| `x4_q16` | Q5 | 23-3 % | 0.656x | 23.64 | 92.9 % | 39.1 | 0.8 % | 1.7 |
+| `x4_r16` | Q5b roles | 4-9 % | 0.669x | 24.05 | 96.5 % | 39.8 | 1.1 % | 2.3 |
+| `x4_b16` | chase (before Q5) | 26-19 % | 0.687x | 23.50 | 96.6 % | 27 | 16.2 % | 35.1 |
+| `x5_b16` | chase (before Q5) | 40-3 % | 0.681x | 23.62 | 96.4 % | 25.8 | 19.3 % | 35 |
+| `x5_r16` | Q5b roles | 12-0 % | 0.672x | 23.87 | 96.2 % | 39.8 | 1.2 % | 2.3 |
+| `x5_q16` | Q5 | 12-23 % | 0.650x | 23.87 | 92.9 % | 38.7 | 0.8 % | 1.5 |
+
+**Other conditions**, Q5b against Q5 at 1.0 vs 1.3, single runs:
+
+| Condition | Variant | Speed | Slower page: new frames/s | > 50 ms | Faster page: waits/s (time waiting) |
+|---|---|---:|---:|---:|---:|
+| Delay Auto (both pages chose 2) | Q5 | 0.792x | 47.1 | 0.4 % | 2.6 (0.1 %) |
+| Delay Auto (both pages chose 2) | Q5b | 0.827x | 49.1 | 0.4 % | 4.4 (0.1 %) |
+| Simulated internet: 30 ms ± 10 ms each way, delay 4 | Q5 | 0.792x | 47.2 | 0.2 % | 3.2 (0.5 %) |
+| Simulated internet: 30 ms ± 10 ms each way, delay 4 | Q5b | 0.871x | 52.0 | 0.2 % | 6.4 (1.1 %) |
+| Equal machines (1.0 vs 1.0) | Q5 | 0.934x | 55.5 | 0.2 % | 0.5 |
+| Equal machines (1.0 vs 1.0) | Q5b | 0.962x | 56.8 | 0.2 % | 0.7 |
+
+Notes:
+- These Q5b runs still had the follower aiming 12 ms early, which wound up its trim at delay 2
+  and on the jittery link (section 15.2).
+- With the final build (no early bias), over the same simulated link (`u2_rn13`): 0.908x, the
+  faster page waiting 6 times a second (1.1 % of the time). That is the link's jitter at
+  delay 4.
+- **One Auto game chose delay 6 on the local link** (`u1_ra13`). Player 1's page was busy for
+  half a second while it measured: its pings came back up to 500 ms late. The session took
+  the larger proposal (6 against player 2's 2).
+- **The fix** (`delay.ts`, `netplay.ts`): each page measures twice (two rounds of 20 pings,
+  one second more before an Auto game) and proposes the lower of the two rounds' delays. A
+  stall shows in one round, a real link's latency and jitter in both.
+- **Checked on the final build:**
+  - the local link gave 2 on both pages (`g1_ra13`);
+  - 30 ms ± 10 ms each way gave 3 and 4 (the rounds: 3/4 and 4/4), so the session used 4
+    (`g2_rn13`);
+  - `tests/delay.test.mjs` replays the stalled measurement.
+
+### 15.4 After Q4's merge
+
+Q4 made the emulation about 20 % faster: at `hostSlow=1.3` the game runs at full speed solo
+(Q4_LOG). The scenarios became:
+- 1.0 vs 1.3: does it run at full speed online, and does the pace stay at 1.0?
+- 1.0 vs 2: the old-laptop case, now about 0.8x solo, in place of 1.6.
+
+The chase on this engine is the same build with `paceTune=chase:1`: online games pace as solo
+ones (development).
+
+**The quiet rounds.** These are the runs whose machine load stayed under about 20 % at both
+ends. The other runs swung with other sessions' builds and benchmarks; they are all in the
+per-run table below.
+
+| Scenario | Variant | Runs | Speed | Slower page: busy | new frames/s | p95 | > 25 ms | > 50 ms | Faster page: waits/s |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 1.0 vs 1.3 | chase | `a4`, `f1` | 0.984x, 0.984x | 81 % | 55.6 | 31 ms | 9.4 % | 0.4 % | 5.1, 18.6 |
+| 1.0 vs 1.3 | Q5 | `f1` | 0.955x | 81 % | 55.6 | 29 ms | 9.9 % | 0.2 % | 1.0 |
+| 1.0 vs 1.3 | **Q5b** | `a1`, `f1` | **0.976x, 0.975x** | 79 % | 57.4 | 26 ms | 6.5 % | 0.2 % | 0.8 |
+| 1.0 vs 2 | chase | `a5`, `e1`, `f3` | 0.772x, 0.775x, 0.777x | 98.8 % | 30.6 | 54 ms | 60 % | 8.0 % | 42 |
+| 1.0 vs 2 | Q5 | `a5`, `f3` | 0.757x, 0.744x | 93.1 % | 44.6 | 34 ms | 21.7 % | 0.3 % | 1.8 |
+| 1.0 vs 2 | **Q5b** | `a5`, `e1`, `f3` | **0.756x, 0.775x, 0.751x** | 95.6 % | 45.2 | 33 ms | 20.3 % | 0.3 % | 2.0 |
+
+**1.0 vs 1.3: full speed, except where this machine cannot keep up.**
+- The pace sat at 1.0 for 91-92 % of the time (`a1_r13`, `f1_r13`) and went back to 1.0
+  after each dip.
+- The dips are the innings demo's heavy stretch around fields 6,120-6,300 (about three
+  seconds). There the 1.3x machine runs at 0.72-0.80x whatever the pacing: the chase dips the
+  same way (`f1_c13`, `a4_c13`). The CPU-vs-CPU session that Q4 measured solo has no such
+  stretch.
+- Over the whole measured stretch: Q5b 0.975-0.976x, the chase 0.984x, Q5 0.955x.
+- Against the chase, Q5b's slower page has more new frames, the shorter p95 and fewer
+  intervals over 25 ms, and the faster page waits under once a second instead of 5-19 times.
+
+**1.0 vs 2 (the old laptop):**
+- **Speed:** Q5b 0.751-0.775x against the chase's 0.772-0.777x, the same in one round and
+  2-3 % below in two.
+- **Smoothness:** the slower page shows 45 new frames a second instead of 31, with 0.3 %
+  of its intervals over 50 ms instead of 8 %. The faster page waits twice a second
+  instead of 42 times.
+- **Where the last 2-3 % goes:**
+  - The chase's slower page is busy 98.8 % of the time, Q5b's 95.6 %. Between two
+    one-field batches the Worker spends about 0.45 ms on its other messages and task hops
+    (`lateMs`): 2 % at 21 ms a field.
+  - One field per batch costs 1.4 % more per field than the chase's mix of one and two
+    (solo at 2x, Q4's engine, interleaved: 18.34 and 18.53 ms against 18.09 and 18.26 ms).
+- **Two things tried that did not help:**
+  - running two one-field batches per task without a hop (`paceTune=burst:2`, `e1`/`e2`:
+    the same late time per field, 0.43-0.60 ms);
+  - starting fields on the animation frames at full speed instead of on the slot timers
+    (`p1`/`p2`: intervals over 25 ms 10.9 % against 9.9 % at 1.3x, 5.3 % against 6.0 % for
+    equal machines).
+
+  Both were removed. What is left is the price of presenting every field.
+
+**Presents over 25 ms at 1.3x, and a field of run-ahead.**
+- Measured: online at 1.3x, the slower page's new-frame intervals over 25 ms are 6.3-6.7 %
+  in the quiet rounds (over 50 ms 0.2 %). Two equal full-speed machines on this PC give
+  5.3-6.0 % (`p3`): most of them come from presenting two browsers on one GPU and display,
+  not from the slower machine.
+- Q4's suggestion was one field of run-ahead. The pacing alone cannot give it: a frame is
+  shown at the first display refresh after its batch ends, so starting fields earlier moves
+  the frames earlier without evening their intervals.
+- It needs the render thread to hold a finished frame until its slot's refresh: a display
+  queue one frame deep. Because the game copies every field into the same XFB address
+  (0x00888080 in the presentation trace), that queue needs a copy of the scan-out per frame.
+- It would add up to a field (16.7 ms) of input latency, solo and online.
+- Not done here. It is in the render thread (P2 and Q4's code); worth it only if the owner
+  sees hitches at the laptop.
+
+Per run:
+
+| Run | Variant | CPU load | Speed | Slower page: ms/field | busy | new frames/s | p95 | > 25 ms | > 50 ms | Faster page: waits/s |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `a1_r13` | Q5b roles | 12-15 % | 0.976x | 13.40 | 78.4 % | 57.5 | 25.9 ms | 6.3 % | 0.2 % | 0.8 |
+| `a1_q13` | Q5 | 9-37 % | 0.832x | 16.80 | 83.6 % | 48.8 | 36.6 ms | 17.4 % | 1.4 % | 1.5 |
+| `a1_c13` | chase | 69-69 % | 0.950x | 16.14 | 91.9 % | 47.9 | 39.3 ms | 21.8 % | 1.8 % | 31.5 |
+| `a4_c13` | chase | 7-17 % | 0.984x | 13.72 | 81.0 % | 55.4 | 31.2 ms | 9.3 % | 0.4 % | 5.1 |
+| `a4_r13` | Q5b roles | 45-71 % | 0.917x | 15.32 | 84.1 % | 53.8 | 29.9 ms | 12.3 % | 0.3 % | 1.5 |
+| `a4_q13` | Q5 | 85-7 % | 0.902x | 15.09 | 81.5 % | 53.4 | 29.6 ms | 11.9 % | 0.7 % | 1.5 |
+| `p1_t13` | Q5b roles | 37-66 % | 0.927x | 15.67 | 87.0 % | 54.9 | 27.5 ms | 9.7 % | 0.2 % | 1.4 |
+| `p2_t13` | Q5b roles | 34-24 % | 0.942x | 14.97 | 84.5 % | 55.3 | 29.1 ms | 10.2 % | 0.3 % | 1.3 |
+| `f1_c13` | chase | 0-0 % | 0.984x | 13.62 | 80.3 % | 55.7 | 31.6 ms | 9.4 % | 0.4 % | 18.6 |
+| `f1_r13` | Q5b roles | 8-8 % | 0.975x | 13.57 | 79.3 % | 57.2 | 26.7 ms | 6.7 % | 0.2 % | 0.8 |
+| `f1_q13` | Q5 | 9-12 % | 0.955x | 14.20 | 81.2 % | 55.6 | 28.9 ms | 9.9 % | 0.2 % | 1 |
+| `f2_r13` | Q5b roles | 0-71 % | 0.749x | 20.67 | 93.1 % | 44.5 | 38.1 ms | 27 % | 1 % | 1.7 |
+| `f2_q13` | Q5 | 90-20 % | 0.934x | 15.10 | 84.5 % | 54.8 | 28.7 ms | 9.4 % | 0.2 % | 1.3 |
+| `f2_c13` | chase | 84-57 % | 0.961x | 15.62 | 90.0 % | 51 | 36.3 ms | 16 % | 1.6 % | 30.9 |
+| `a2_q20` | Q5 | 31-0 % | 0.557x | 27.34 | 91.2 % | 33.2 | 44.1 ms | 68.7 % | 1.7 % | 2.6 |
+| `a2_r20` | Q5b roles | 1-6 % | 0.665x | 24.18 | 96.4 % | 39.6 | 40.6 ms | 37.2 % | 1.2 % | 2.4 |
+| `a2_c20` | chase | 2-28 % | 0.755x | 21.85 | 98.9 % | 29.5 | 56.8 ms | 61.9 % | 11.4 % | 40.1 |
+| `a3_c20` | chase | 76-85 % | 0.493x | 33.61 | 99.4 % | 18.9 | 87.4 ms | 93.1 % | 51.1 % | 29.5 |
+| `a3_q20` | Q5 | 94-27 % | 0.700x | 22.21 | 93.2 % | 41.7 | 35.6 ms | 33 % | 0.3 % | 2.2 |
+| `a3_r20` | Q5b roles | 24-0 % | 0.764x | 20.82 | 95.3 % | 45.3 | 33.6 ms | 19.6 % | 0.4 % | 1.9 |
+| `a5_r20` | Q5b roles | 12-8 % | 0.756x | 21.11 | 95.6 % | 45 | 33.5 ms | 21.5 % | 0.3 % | 1.9 |
+| `a5_c20` | chase | 7-4 % | 0.772x | 21.38 | 98.8 % | 31.1 | 54.2 ms | 57 % | 7.9 % | 39.7 |
+| `a5_q20` | Q5 | 0-7 % | 0.757x | 20.54 | 93.2 % | 45 | 33.8 ms | 20.1 % | 0.2 % | 1.7 |
+| `e1_r20` | Q5b roles | 2-3 % | 0.775x | 20.64 | 95.8 % | 46.1 | 32.2 ms | 17.9 % | 0.3 % | 1.9 |
+| `e1_c20` | chase | 3-1 % | 0.775x | 21.31 | 98.9 % | 29.5 | 53.6 ms | 65.6 % | 8.1 % | 42.3 |
+| `e2_c20` | chase | 1-59 % | 0.670x | 24.61 | 98.7 % | 26.7 | 73.2 ms | 64.1 % | 17.6 % | 35.9 |
+| `e2_r20` | Q5b roles | 11-34 % | 0.671x | 23.72 | 95.5 % | 39.9 | 39.3 ms | 38.3 % | 1.2 % | 2.4 |
+| `f3_q20` | Q5 | 1-9 % | 0.744x | 20.88 | 93.0 % | 44.1 | 34.5 ms | 23.3 % | 0.3 % | 1.8 |
+| `f3_c20` | chase | 4-15 % | 0.777x | 21.22 | 98.8 % | 31.2 | 54.4 ms | 56 % | 8 % | 45.4 |
+| `f3_r20` | Q5b roles | 6-5 % | 0.751x | 21.18 | 95.3 % | 44.6 | 34 ms | 21.6 % | 0.4 % | 2.3 |
+
+(`p1_t13`/`p2_t13` ran the final pacing; `a*` the same behaviour as the final; `e1`/`e2` the build
+that also carried the two experiments of this section, both inactive below full speed and at
+`burst:1`; `f*` the final build.)
+
+### 15.5 Exactness and tests
+
+The roles, the delay's two rounds, the statistics and the development switches are host-side.
+They decide when fields run and which delay is proposed, never what a field computes.
+
+**Guest lines, solo**, final build, Chrome 155, unpaced, threaded and single-threaded. All six
+equal WEB.md's checkpoints:
+
+| Fields | Instructions | Time base | Polls | MEM1 |
+|---|---:|---:|---:|---|
+| 700 | 4,547,010,125 | 473,646,888 | 360 | `53221c4a...` |
+| 2,400 | 15,574,026,125 | 1,622,294,388 | 1,882 | `4285f135...` |
+| 3,600 | 23,357,802,126 | 2,433,104,388 | 2,747 | `40a7692d...` |
+
+**Every Q5b two-page game.** 81 games to frame 6,000, at 1.0/1.0, 1.0/1.3, 1.0/1.6 and 1.0/2,
+on both engines, every variant. In each, both pages had identical guest lines and all 100
+window hashes, with no desync and no gate miss. By delay:
+
+| Delay | Games | Instructions | MEM1 |
+|---:|---:|---:|---|
+| 3 | 67 | 44,816,368,162 | `992cb7bd...` |
+| 2 | 6 | 44,822,998,467 | `cf2da995...` |
+| 4 | 7 | 44,933,331,331 | `b6d747fe...` |
+| 6 | 1 (`u1_ra13`) | 44,817,092,629 | `55f983ce...` |
+
+Each line equals native `mvp-netplay solo --delay D` on the merged engine.
+
+**Tests**, final build:
+
+| Suite | Result |
+|---|---|
+| Native (`ctest --preset msvc`) | data-free 35 of 35; local 13: 12 passed, `local_disasm` skipped as always (`local_netplay_lockstep`, `local_netplay_lossy` and Q4's `local_hle_native` included) |
+| Emscripten (`ctest --preset emscripten`) | 41: 40 passed, `local_disasm` skipped |
+| Web shell | 90 of 90 |
+
+New shell tests:
+- `tests/pacer.test.mjs`: the roles; the follower's trim; player 1 deciding; the early-bias
+  option; two simulated players with fields that vary (Q5b faster than Q5, still even).
+- `tests/delay.test.mjs`: the stalled measurement and the two rounds.
+- `tests/netstats.test.mjs`: the role in Copy stats.
+
+### 15.6 Decisions to record (for the lead)
+
+- **Q5b-N1, roles:**
+  - Online, once one machine's capacity is 3 % below the other's for half a second, that
+    machine sets the pace and runs free: its schedule runs 15 % past its capacity, one field
+    at a time.
+  - The other follows at the capacity the setter reports. It is phase-locked to equal input
+    leads, with an integral trim of at most 4 %.
+  - Player 1 decides the roles and reports them; player 2 takes the opposite one.
+  - Machines within 3 % keep Q5-N1's common pace.
+  - Host timing only. `paceTune=roles:0` (development) restores Q5-N1.
+- **Q5b-N2, Auto delay measured twice:** two rounds of 20 pings; each page proposes the lower of
+  the two rounds' delays (amends Q5-N2). Auto games take a second longer to start.
+- **Q5b-T1, comparing pacing variants:** compare them by the slower page's busy share (run time
+  over wall time) as well as by speed. On this shared PC the cost per field varies 5-10 %
+  between consecutive runs.
+
+### 15.7 Next
+
+1. **Field data from the owner,** as in section 14. Copy stats now also says which computer
+   sets the pace and the follower's trim.
+2. **At the old laptop (2x) the price of every frame shown is 2-3 % of speed.** It comes from
+   the Worker's per-batch work and messages (about 0.45 ms a field) and the dearer one-field
+   batches. A cheaper batch boundary (fewer messages between the page, the Worker and the
+   render thread per field) would close it. That is mostly outside the pacing.
+3. **A display queue one frame deep** in the render thread would hide single slow fields
+   (section 15.4), at up to a field of input latency. Worth it only if the owner sees hitches
+   at the laptop.
+4. **Solo play** keeps Q2's chase. The roles' "run free, one field at a time" is, solo, Q2's
+   `slowMotion=1`. Whether to make that the default below full speed is the owner's call on
+   feel: every frame shown at 2-3 % less speed.

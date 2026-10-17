@@ -24,9 +24,9 @@ import type { MvpEngine, MvpEngineOptions } from './mvp-web.js';
 import { probeDiscUrl } from './disc.js';
 import { cacheKey, clearCache, readCached, writeCached } from './module-cache.js';
 import { feedPacks, readReport, summarize } from './packs-core.js';
-import { FIELD_MS, Pacer, Schedule } from './pacer.js';
+import { DEFAULT_PACER, FIELD_MS, Pacer, Schedule, type PacerOptions } from './pacer.js';
 import type {
-  CacheReport, DiscSource, FromWorker, NetOptions, NetStatus, Pad, RunOptions, Status, ToWorker, WorkletIn,
+  CacheReport, DiscSource, FromWorker, NetOptions, NetStatus, Pad, PaceLoss, RunOptions, Status, ToWorker, WorkletIn,
 } from './protocol.js';
 
 interface WorkerScope {
@@ -133,6 +133,7 @@ async function startNetplay(o: NetOptions, symbols: Uint8Array): Promise<boolean
   };
   const chosen = await channelOpened;
   const delay = chosen ?? o.delay;
+  pacer.o.decide = o.player === 1 ? 1 : 0;  // Q5b: player 1 decides the roles (pacer.ts)
   const r = crypto.getRandomValues(new Uint32Array(2));
   const nonce = r[0]! * 2 ** 21 + (r[1]! & 0x1fffff);  // 53 bits, exact in a double
   const ok = withBytes(new TextEncoder().encode(build), (p, n) => M!._mvp_net_begin(o.player, delay, o.hashEvery, p, n, nonce));
@@ -343,6 +344,8 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
                      options: RunOptions): Promise<void> {
   opts = options;
   if (options.paceMargin) pacer = new Pacer({ margin: options.paceMargin });  // Q5 (development): tuning
+  tune(options.paceTune);
+  if (loop.fixed > 0) sched.setRate(loop.fixed, performance.now());
   const phase = (name: string, t0: number, detail?: unknown) =>
     post({ type: 'phase', name, ms: performance.now() - t0, detail });
 
@@ -519,7 +522,7 @@ function afterRun(ran: number, ms: number): boolean {
     const sat = saturatedMs + (saturated ? now - saturatedSince : 0);
     post({ type: 'stats', status: status(),
            window: { fields: winFields, ms: winMs, wallMs: now - winWall, trace, digest, saturatedMs: sat,
-                     fieldCost, cap: pacer.capacity(), rate: sched.rate } });
+                     fieldCost, cap: pacer.capacity(), rate: sched.rate, lost: { ...lost }, spinMs, lateMs } });
     winFields = 0;
     winMs = 0;
     winWall = now;
@@ -551,6 +554,32 @@ let pacer = new Pacer();
 const PACE_TICK_MS = 250;
 let pendingWork = 0, lastPace = -Infinity, audioPace = 1;
 
+// Q5b: the paced loop's knobs online (development: paceTune=key:value,... sets these and the
+// pacer's options), and the schedule time it gave up (statistics).
+interface LoopOptions {
+  debt: number;      // fields a side behind its schedule catches up (one at a time)
+  gateDebt: number;  // ... after a wait for the other player's input
+  spin: number;      // ms: the next slot, when this close, is waited for by spinning (0: a timer)
+  fixed: number;     // development: one field per slot at this fixed pace, solo too (0: off)
+  chase: number;     // development: 1 = online games pace as solo ones (the chase, before Q5), for comparisons
+}
+const loop: LoopOptions = { debt: 2, gateDebt: 1, spin: 0, fixed: 0, chase: 0 };
+const lost: PaceLoss = { gate: 0, debt: 0, far: 0 };
+let spinMs = 0;
+
+function tune(spec: string | undefined): void {
+  if (!spec) return;
+  const p: Partial<Record<keyof PacerOptions, number>> = {};
+  for (const kv of spec.split(',')) {
+    const [k, v] = kv.split(':');
+    const n = Number(v);
+    if (!k || v === undefined || !Number.isFinite(n)) continue;
+    if (k in loop) loop[k as keyof LoopOptions] = n;
+    else if (k in DEFAULT_PACER) p[k as keyof PacerOptions] = n;
+  }
+  pacer = new Pacer({ ...pacer.o, ...p });
+}
+
 function noteWork(ran: number, ms: number): void {
   if (ran > 0) {
     pacer.noteWork(ran, ms + pendingWork);
@@ -566,14 +595,14 @@ function paceTick(now: number): void {
   const raw = M._mvp_net_lead();
   const lead = Number.isFinite(raw) ? raw : null;
   const step = pacer.tick(now, lead);
-  if (step.rate !== sched.rate) sched.setRate(step.rate, now);
+  if (step.sched !== sched.rate) sched.setRate(step.sched, now);
   if (step.shiftMs) sched.shift(step.shiftMs);
   paceAudio();
   const peer = pacer.peerFresh(now) ? pacer.peer : null;
   post({ type: 'pace', report: pacer.report(lead),
          state: { rate: pacer.rate, prop: pacer.prop, cost: pacer.cost, cap: pacer.capacity(), lead,
                   peerProp: peer?.prop ?? null, peerCap: peer?.cap ?? null, peerLead: peer?.lead ?? null,
-                  shifted: pacer.shifted } });
+                  shifted: pacer.shifted, role: pacer.role, trim: pacer.trim, sched: sched.rate } });
 }
 
 // The worklet plays the sound at the game's pace from the start of a slower stretch, instead
@@ -631,24 +660,32 @@ chase.port1.onmessage = () => {
 
 function runPaced(now: number): void {
   if (!running || paused || !M) return;
-  if (net) {
+  const even = (!!net && !loop.chase) || loop.fixed > 0;
+  if (even) {
     // Q5: an online game runs at the two players' common pace (pacer.ts). After a wait for the
     // other player's input the schedule moves on from now instead of catching up, and a side that
     // fell behind catches up one field at a time (never two-field batches: every frame is shown).
-    sched.limitDebt(now, gated ? 1 : 2);
-    paceTick(now);
+    const gave = sched.limitDebt(now, gated ? loop.gateDebt : loop.debt);
+    if (gated) lost.gate += gave;
+    else lost.debt += gave;
+    if (net && !loop.chase) paceTick(now);
   }
   let due = sched.due(now);
   const slowMotion = saturated && mt && opts?.slowMotion === true;  // opt-in (slowMotion=1), threaded only
   if (due > (slowMotion ? 2 : MAX_FIELDS_PER_FRAME * 2)) {
     // Too far behind (a slow stretch, a background tab, a slow machine): drop the debt.
-    sched.limitDebt(now, 1);
+    lost.far += sched.limitDebt(now, 1);
     due = 1;
   }
   const rafOnly = opts?.pacing === 'raf';
-  due = Math.min(due, rafOnly ? MAX_FIELDS_PER_FRAME : slowMotion ? 1 : due >= 3 ? CHASE_FIELDS : 1);
+  due = Math.min(due, rafOnly ? MAX_FIELDS_PER_FRAME : slowMotion || even ? 1 : due >= 3 ? CHASE_FIELDS : 1);
   if (due <= 0) return;
   const t0 = performance.now();
+  // Q5b (statistics): how long a due field waited for the loop itself (after the last batch, not
+  // after a wait for the other player): task hops and the Worker's other messages.
+  if (even && !gated && lastEnd > 0) {
+    lateMs += Math.min(FIELD_MS, Math.max(0, t0 - Math.max(lastEnd, sched.start + (sched.fields + 1) * sched.period())));
+  }
   const ran = M._mvp_run_fields(due);
   const ms = performance.now() - t0;
   sched.fields += Math.max(0, ran);
@@ -665,6 +702,7 @@ function runPaced(now: number): void {
   gated = !!net && ran >= 0 && ran < due;
   const ok = afterRun(ran, ms);
   noteWork(ran, performance.now() - t0);
+  lastEnd = performance.now();
   if (!ok || rafOnly || gated) return;
   // Still behind: the next batch now, in its own task (this one's frame is presented when it ends).
   const after = performance.now();
@@ -675,8 +713,22 @@ function runPaced(now: number): void {
   }
   // Q5, online: the next field at its own time, not at the next animation frame (up to a refresh
   // later): a machine running near its capacity loses no time waiting for one, and fields start evenly.
-  if (net && !slotTimer) {
+  if (even && !slotTimer) {
     const wait = sched.start + (sched.fields + 1) * sched.period() - after;
+    if (wait > 0 && wait <= loop.spin) {
+      // Q5b: a slot this close is waited for by spinning, then the field runs in its own task
+      // (datagrams that came meanwhile are handled first).
+      const until = after + wait;
+      while (performance.now() < until) {
+        // spin
+      }
+      spinMs += performance.now() - after;
+      if (!chasePending) {
+        chasePending = true;
+        chase.port2.postMessage(0);
+      }
+      return;
+    }
     if (wait > 0 && wait < FIELD_MS) {
       slotTimer = setTimeout(() => {
         slotTimer = 0;
@@ -686,6 +738,8 @@ function runPaced(now: number): void {
   }
 }
 let slotTimer = 0;
+let lastEnd = 0;     // Q5b: when the paced loop's last batch ended
+let lateMs = 0;      // Q5b (statistics): the time due fields waited for the loop itself
 
 function frame(now: number): void {
   runPaced(now);

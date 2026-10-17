@@ -482,3 +482,13 @@
   - **Q3 (controllers):** Xbox, PlayStation, Switch Pro, GameCube adapters (guided setup) and generic pads; a Controls panel with remapping; per-player controllers online. Rumble from the game is not done.
   - **Running:** Q4, emulation-thread speed for weaker machines (worktree decompile_mvp_04-e2, branch engine/q4-speed).
   | Owner: redeploy once in Dokploy to get Q1–Q3 (players re-translate once). Optional: the other computer's CPU and browser, to target Q4.
+- 2026-10-16/17 | lead + agents | engine: speed and online play between unequal machines | On main:
+  - **F1 (owner):** the engine need not be bit-exact to the GameCube, only deterministic across players.
+  - **Q4:** emulation 11.4-12.5 → 9.2-10.0 ms per field on the dev PC (i7-14700K).
+    - Laptop stand-in (hostSlow 1.3) 0.94× → 1.000×; hostSlow 2 0.65× → 0.8×.
+    - Levers: GX pipe path, FPR cache, fast FP model, the first native game function.
+  - **Q5:** even lockstep pacing; Auto input delay; the Stats overlay with Copy stats; GPU-aware Picture Auto; a slow-machine note.
+  - **Q5b:** pacing roles. 1.0 vs 1.3 online now runs at 0.975×, with the pace at 1.0 about 91% of the time; 1.0 vs 2 runs at 0.76× and smooth.
+  - **The owner's field test:** desktop + ThinkPad (Ryzen 7 PRO 7840U) online was choppy and slow before Q4/Q5.
+  - **Running:** Q6, more emulation speed (worktree decompile_mvp_04-e2, branch engine/q6-speed). Targets: hostSlow 2 ≥ 0.95×, 4 E-cores 1.0×, ≤ 10 ms per field at hostSlow 1.3.
+  | Owner: redeploy, then paste Copy stats from both machines after an online game.

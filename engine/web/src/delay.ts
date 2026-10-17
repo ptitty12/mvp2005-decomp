@@ -10,8 +10,11 @@
 // (55.4 frame polls per guest second in the menus).
 //
 // Before the game starts, each page measures the link over the data channel
-// (netplay.ts: about 20 small text pings, which the engine never sees) and picks
-// D with chooseDelay(). Each player proposes their D and the session uses the
+// (netplay.ts: two rounds of 20 small text pings, which the engine never sees) and
+// picks D with chooseDelay() for each round, then the lower of the two
+// (lowerDelay(): Q5b, a page busy for a moment while it measured, its pings
+// answered half a second late, chose 6 on a local link once; a real link's
+// latency and jitter show in both rounds). Each player proposes their D and the session uses the
 // larger proposal (HELLO), so both games run with the same D. It is a session
 // constant: the engine's determinism does not depend on how it was chosen.
 // The lobby's manual choice (2 to 6) overrides it.
@@ -42,4 +45,13 @@ export function chooseDelay(rtts: readonly number[], minSamples = 5): DelayChoic
   const need = oneWay + OVERHEAD_MS + jitter;
   const delay = Math.max(MIN_DELAY, Math.min(MAX_DELAY, Math.ceil(need / FRAME_MS)));
   return { delay, samples: v.length, rttMs: rtt, minMs: min, jitterMs: jitter, oneWayMs: oneWay, needMs: need };
+}
+
+/** Q5b: of the rounds' choices, the one with the lower delay (then the lower need); null without any. */
+export function lowerDelay(choices: readonly (DelayChoice | null)[]): DelayChoice | null {
+  let best: DelayChoice | null = null;
+  for (const c of choices) {
+    if (c && (!best || c.delay < best.delay || (c.delay === best.delay && c.needMs < best.needMs))) best = c;
+  }
+  return best;
 }

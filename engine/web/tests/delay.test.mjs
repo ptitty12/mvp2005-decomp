@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { load } from './site.mjs';
 
-const { chooseDelay, FRAME_MS, OVERHEAD_MS } = await load('delay.js');
+const { chooseDelay, lowerDelay, FRAME_MS, OVERHEAD_MS } = await load('delay.js');
 
 const around = (ms, spread, n = 20) => Array.from({ length: n }, (_, k) => ms + (spread * k) / (n - 1));
 
@@ -44,4 +44,19 @@ test('never above 6, never below 2; too few answers: no choice (the page keeps 3
   assert.equal(chooseDelay([1, 2, 3]), null);
   assert.equal(chooseDelay([1, 2, NaN, -1, Infinity, 3, 4]), null);
   assert.equal(chooseDelay([1, 2, 3, 4, 5]).delay, 2);
+});
+
+test('Q5b: two rounds, the lower delay: a page busy for half a second inflates one round, not the link', () => {
+  // As measured once on this PC (u1_ra13): one page's pings answered up to half a second late.
+  const stalled = around(0.4, 0.3);
+  for (let k = 6; k < 16; ++k) stalled[k] = 500 - 40 * (k - 6);
+  const clean = around(0.4, 0.3);
+  assert.equal(chooseDelay(stalled).delay, 6);
+  const c = lowerDelay([chooseDelay(stalled), chooseDelay(clean)]);
+  assert.equal(c.delay, 2);
+  // A real link shows in both rounds; the lower need wins a tie; no answers at all: null.
+  const a = chooseDelay(around(80, 20)), b = chooseDelay(around(84, 20));
+  assert.equal(lowerDelay([b, a]), a);
+  assert.equal(lowerDelay([null, b]), b);
+  assert.equal(lowerDelay([null, null]), null);
 });

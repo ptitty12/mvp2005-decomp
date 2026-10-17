@@ -79,6 +79,9 @@ export interface PaceState {
   peerCap: number | null;
   peerLead: number | null;
   shifted: number;         // ms the schedule was moved in all (phase)
+  role?: number;           // Q5b: 1 = this side sets the pace (runs free), -1 = it follows, 0 = neither
+  trim?: number;           // Q5b: the follower's trim of the pace
+  sched?: number;          // Q5b: the pace this side's schedule runs at
 }
 
 // Roster packs (E6, docs/MODDING.md): what the player picked on the page, in set
@@ -141,6 +144,7 @@ export interface RunOptions {
   gpuLoad?: number;    // development (Q5): extra GPU work per present, in proportion to the picture's pixels
   gpuTimer?: boolean;  // development (Q5): false = the render passes are not timed on the GPU
   paceMargin?: number; // development (Q5): the online pace's margin (pacer.ts; default 0.98)
+  paceTune?: string;   // development (Q5b): the pacer's and the paced loop's tuning, `key:value,...` (worker.ts)
   scale?: number;      // Q1: the internal resolution, 1-3 times the console's (the Picture setting)
   discCache?: { blockKib?: number; maxBlocks?: number; maxRun?: number; ahead?: number };  // the server image's cache
 }
@@ -235,11 +239,22 @@ export type FromWorker =
                 saturatedMs?: number;  // Q2: wall ms so far with the machine saturated (one-field batches)
                 fieldCost?: number;  // ... the smoothed host time per field, as a share of a field
                 cap?: number;        // Q5: the speed this machine could run at (pacer.ts)
-                rate?: number } }    // Q5: the pace the paced loop runs at
+                rate?: number;       // Q5: the pace the paced loop runs at
+                lost?: PaceLoss;     // Q5b: schedule time given up so far (worker.ts)
+                spinMs?: number;     // Q5b: wall ms so far spent spinning to a field's slot
+                lateMs?: number } }  // Q5b: wall ms so far due fields waited for the loop itself
   | { type: 'stopped'; status: Status; guestLine: string; discTrace?: string; ioLog?: string; inputLog?: string }
   | { type: 'net-send'; data: ArrayBuffer }  // a datagram for the other player
   | { type: 'net'; status: NetStatus; windows?: string; diagnostic?: string }
   | { type: 'pace'; report: PaceReport; state: PaceState };  // Q5: for the other player (text message), and the overlay
+
+// Q5b: the paced loop's schedule time given up so far (ms), by reason: after a wait for the
+// other player (`gate`), behind by more fields than the loop catches up (`debt`), far behind (`far`).
+export interface PaceLoss {
+  gate: number;
+  debt: number;
+  far: number;
+}
 
 // Worker (or page) -> AudioWorklet.
 export type WorkletIn =

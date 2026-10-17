@@ -16,7 +16,7 @@
 //                   up to J ms of jitter, and drop a fraction P of them
 
 import type { ClientMsg, IceServer, ServerMsg, SignalData } from '../../server/src/lobby_protocol.js';
-import { chooseDelay, type DelayChoice } from './delay.js';
+import { chooseDelay, lowerDelay, type DelayChoice } from './delay.js';
 import type { PaceReport } from './pacer.js';
 import type { NetOptions, NetStatus, PaceState } from './protocol.js';
 
@@ -44,7 +44,7 @@ export interface OnlineState {
 
 const HASH_EVERY = 60;
 // Q5: the link probe before an Auto game: this many pings, this far apart, and how long to wait for the last.
-const PINGS = 20, PING_MS = 50, PING_WAIT_MS = 600;
+const PINGS = 20, PING_ROUNDS = 2, PING_MS = 50, PING_WAIT_MS = 600;
 
 export class Online {
   readonly state: OnlineState = { available: false, peer: false, channel: 'none' };
@@ -65,7 +65,7 @@ export class Online {
   private chosenDelay: number | undefined;
   private ready = false;
   private pings = new Map<number, number>();  // Q5: ping id -> when sent
-  private rtts: number[] = [];
+  private rtts: number[][] = [];  // per round (Q5b)
   // A simulated slow network for tests (?netsim=latency,jitter,loss).
   private readonly sim: { latency: number; jitter: number; loss: number } | null;
 
@@ -210,7 +210,7 @@ export class Online {
       const at = this.pings.get(m.id);
       if (at !== undefined) {
         this.pings.delete(m.id);
-        this.rtts.push(performance.now() - at);
+        (this.rtts[Math.floor(m.id / PINGS)] ??= []).push(performance.now() - at);
       }
       return;
     }
@@ -250,18 +250,20 @@ export class Online {
   // Q5: an Auto game: about a second of pings over the data channel (the other page answers each at once),
   // then the delay for the round trips measured (delay.ts). Without answers it takes 3.
   private async measureLink(): Promise<number> {
-    for (let k = 0; k < PINGS; ++k) {
+    for (let k = 0; k < PINGS * PING_ROUNDS; ++k) {
       this.pings.set(k, performance.now());
       this.sendText({ mvp: 'ping', v: 1, id: k });
       await new Promise((r) => setTimeout(r, PING_MS));
     }
     await new Promise((r) => setTimeout(r, PING_WAIT_MS));
-    const choice = chooseDelay(this.rtts);
+    // Q5b: the lower of the two rounds' delays (delay.ts): a moment's stall on either page
+    // shows in one round, the link's own latency and jitter in both.
+    const choice = lowerDelay(Array.from({ length: PING_ROUNDS }, (_, r) => chooseDelay(this.rtts[r] ?? [])));
     if (!choice) {
       this.say('Could not measure the connection; using input delay 3.');
       return 3;
     }
-    this.state.link = { ...choice, pings: PINGS };
+    this.state.link = { ...choice, pings: PINGS * PING_ROUNDS };
     this.say(`Measured the connection: round trip ${choice.rttMs.toFixed(0)} ms, jitter ${choice.jitterMs.toFixed(0)} ms: ` +
              `input delay ${choice.delay}.`);
     return choice.delay;

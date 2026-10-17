@@ -98,7 +98,12 @@ Everything below is run by agents; the owner never runs commands.
    process), `--affinity HEXMASK` and `--delay auto`, and its summary's `measured`
    gives each page's game speed, emulation ms per field, new frames per second, the
    new-frame interval p95 and share over 25 ms, waits per second and the share of
-   time waiting, underruns per minute and the pace; `netplay_check.mjs
+   time waiting, underruns per minute and the pace (Q5b: each stats window also
+   carries the schedule time the paced loop gave up, by reason, and the time due
+   fields waited for the loop itself, and the pace state its role; the page
+   parameter `paceTune=key:value,...` sets the pacer's options, e.g. `roles:0`
+   for Q5's common pace, and the loop's: `debt`, `gateDebt`, `spin`, `fixed`,
+   and `chase:1` for the pacing before Q5 online); `netplay_check.mjs
    --server-disc` runs E5's two-page check the deployment's way. It starts the server, opens the page with Playwright,
    and writes `summary-BROWSER[-TAG].json` and the screenshots to `--out`
    (default `build/engine/web-check`; screenshots are game-derived and stay under
@@ -209,7 +214,9 @@ Everything below is run by agents; the owner never runs commands.
   sustainable pace, one field per slot on both sides (each started at its slot's
   time by a timer, not at the next animation frame), a wait for the other player
   moving the schedule on instead of being caught up, and the schedule nudged
-  toward equal input leads so neither side waits. A batch that ran no field (an
+  toward equal input leads so neither side waits; (Q5b) once one machine is
+  clearly slower, it runs each field as soon as the last is done and the other
+  follows it (NETPLAY.md, "Roles"). A batch that ran no field (an
   online game waiting at a frame poll) ends without presenting again. `fast=1` runs
   fields back to back for 40 ms per task instead (measurements). **Wall time
   decides only how many fields run, never what happens inside one**: guest state

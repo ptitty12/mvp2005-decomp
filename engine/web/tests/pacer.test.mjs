@@ -145,12 +145,13 @@ test('schedule: the pace changes the period and keeps the position; debts and sh
 // same latency; a wait moves the schedule on (limitDebt). Without, the schedule runs at full speed
 // and catches up after waits (the chase: two fields per batch when three are due), the earlier loop.
 function simulate({ costA, costB, latency = 5, jitter = 0, delay = 3, seconds = 30, pacing = true,
-                    offsetB = 0, step = 0.25, seed = 1 }) {
+                    offsetB = 0, step = 0.25, seed = 1, tune = {} }) {
   let rnd = seed;
   const random = () => ((rnd = (rnd * 1103515245 + 12345) % 2147483648) / 2147483648);
   const players = [costA, costB].map((cost, i) => ({
-    i, cost, sched: new Schedule(), pacer: new Pacer(), frame: 0, busyUntil: 0, inbox: new Map(),
+    i, cost, sched: new Schedule(), pacer: new Pacer({ decide: i === 0 ? 1 : 0, ...tune }), frame: 0, busyUntil: 0, inbox: new Map(),
     waiting: false, waitFrom: 0, waits: 0, waitMs: 0, shown: [], leads: [], reports: [], lastTick: -1e9, debtFields: 0,
+    busy: 0, ran: [],
   }));
   players[1].sched.start = offsetB;
   const end = seconds * 1000;
@@ -164,7 +165,7 @@ function simulate({ costA, costB, latency = 5, jitter = 0, delay = 3, seconds = 
         const recent = p.leads.slice(-24).sort((x, y) => x - y);
         const lead = recent.length ? recent[recent.length >> 1] : null;
         const st = p.pacer.tick(t, lead);
-        p.sched.setRate(st.rate, t);
+        p.sched.setRate(st.sched, t);
         p.sched.shift(st.shiftMs);
         q.reports.push({ at: t + latency, r: p.pacer.report(lead) });
       }
@@ -196,12 +197,14 @@ function simulate({ costA, costB, latency = 5, jitter = 0, delay = 3, seconds = 
       // here too); a batch shows its last picture when it ends.
       const next = f + 1 < delay ? -Infinity : p.inbox.get(f + 1);
       const batch = !pacing && due >= 3 && next !== undefined && next <= t ? 2 : 1;
-      const c = p.cost(t) * batch;
+      const c = p.cost(t, f) * batch;
       // Each field samples this side's input for its frame + D: the other side has it after the latency.
       q.inbox.set(f + delay, t + latency + jitter * random());
       if (batch === 2) q.inbox.set(f + 1 + delay, t + c / 2 + latency + jitter * random());
       p.busyUntil = t + c;
+      p.busy += c;
       p.shown.push(t + c);
+      p.ran.push([t + c, batch]);
       p.frame += batch;
       p.sched.fields += batch;
       p.pacer.noteWork(batch, c);
@@ -278,4 +281,104 @@ test('lockstep over a slower, jittery link: still even, the leads equal', () => 
   const period = FIELD_MS / a.pacer.rate;
   assert.ok(sa.p95 < period + 3 && sb.p95 < period + 3, JSON.stringify([sa, sb, period]));
   assert.ok(a.waitMs < 500 && b.waitMs < 500, `waited ${a.waitMs} / ${b.waitMs}`);
+});
+
+// ---- Q5b: roles ----
+
+test('roles: the clearly slower side sets the pace and runs free; the other follows and trims its pace', () => {
+  const a = new Pacer(), b = new Pacer({ decide: 0 });  // roles are on by default; a (player 1) decides them
+  for (let k = 0; k < 300; ++k) {
+    a.noteWork(1, 11);
+    b.noteWork(1, 24);  // capacity 0.695
+  }
+  const exchange = (t) => {
+    a.onPeer(b.report(null), t);
+    b.onPeer(a.report(null), t);
+  };
+  a.tick(0, null);
+  b.tick(0, null);
+  exchange(10);
+  let sa = a.tick(250, null), sb = b.tick(250, null);
+  assert.equal(sa.rate, 0.68);
+  assert.equal(sb.rate, 0.68);
+  assert.equal(a.role, 0);  // not before the difference has held a second
+  assert.equal(sa.sched, 0.68);
+  for (let t = 500; t <= 1500; t += 250) {
+    exchange(t - 1);
+    sa = a.tick(t, null);
+    sb = b.tick(t, null);
+  }
+  assert.equal(b.role, 1);
+  assert.equal(a.role, -1);
+  assert.ok(Math.abs(sb.sched - (FIELD_MS / 24) * 1.15) < 1e-9, `setter ${sb.sched}`);  // past its capacity: it never idles
+  assert.equal(sb.shiftMs, 0);
+  assert.equal(sa.sched, 0.695);  // the setter's capacity, as it reports it
+  assert.equal(sa.rate, 0.68);    // the pace the overlay and the sound go by: as before
+  // The follower corrects the whole lead difference itself, and trims its pace by it: its lead is
+  // 40 ms smaller (it runs 20 ms early), so it moves later and runs a little slower.
+  a.onPeer({ ...b.report(50), n: 99 }, 1600);
+  const st = a.tick(1750, 10);
+  assert.ok(Math.abs(st.shiftMs - 20 * 2 * 0.6 * 0.25) < 1e-9, `shift ${st.shiftMs}`);
+  assert.ok(Math.abs(a.trim + 3e-4 * 20 * 0.25) < 1e-12, `trim ${a.trim}`);
+  assert.ok(Math.abs(st.sched - 0.695 * (1 - 3e-4 * 20 * 0.25)) < 1e-12, `sched ${st.sched}`);
+  // followEarlyMs (development): it aims to run that much earlier than the setter.
+  const early = new Pacer({ followEarlyMs: 12 }), setter = new Pacer({ decide: 0 });
+  for (let k = 0; k < 300; ++k) {
+    early.noteWork(1, 11);
+    setter.noteWork(1, 24);
+  }
+  setter.tick(0, null);  // its proposal: below full speed
+  let sf;
+  for (let t = 0; t <= 1500; t += 250) {
+    early.onPeer({ ...setter.report(50), n: t + 1 }, t);
+    sf = early.tick(t, 10);
+  }
+  assert.equal(early.role, -1);
+  assert.ok(Math.abs(sf.shiftMs - 8 * 2 * 0.6 * 0.25) < 1e-9, `shift ${sf.shiftMs}`);
+  // Close capacities: no roles (both alike, as in Q5); and none at full speed.
+  const c = new Pacer(), d = new Pacer();
+  for (let k = 0; k < 300; ++k) {
+    c.noteWork(1, 24);
+    d.noteWork(1, 24.5);
+  }
+  for (let t = 0; t <= 3000; t += 250) {
+    c.onPeer(d.report(null), t);
+    c.tick(t, null);
+    d.tick(t, null);
+  }
+  assert.equal(c.role, 0);
+  assert.equal(c.tick(3250, null).sched, c.rate);
+  // At full speed the roles stay (for the next slower stretch), and both schedules run at 1.
+  const e = new Pacer();
+  for (let k = 0; k < 300; ++k) e.noteWork(1, 10);
+  let se;
+  for (let t = 0; t <= 3000; t += 250) {
+    e.onPeer({ v: 1, n: t + 1, cap: 1.2, prop: 1, lead: 20 }, t);
+    se = e.tick(t, 30);
+  }
+  assert.equal(e.role, -1);
+  assert.equal(e.rate, 1);
+  assert.equal(se.sched, 1);
+  assert.equal(e.trim, 0);  // the trim waits at full speed
+});
+
+test('roles: two players in lockstep, one 1.3x slower, fields that vary: faster than alike, still even', () => {
+  // The slower machine's fields cost 21 ms on average, from 13 to 33 ms; the faster one's 1.3x less.
+  const vary = (f) => 1 + 0.55 * ((((f * 7919) % 101) / 100) - 0.5) + (f % 37 === 0 ? 0.5 : 0);
+  const slow = (t, f) => 21 * vary(f), fast = (t, f) => (21 / 1.3) * vary(f + 13);
+  const run = (tune) => simulate({ costA: fast, costB: slow, seconds: 40, latency: 1, jitter: 0.5, tune });
+  const speed = (p) => p.ran.filter(([x]) => x >= 10000).reduce((n, [, k]) => n + k, 0) / 30 / 59.94;
+  const alike = run({ roles: 0 });  // Q5: both alike
+  const roles = run({});
+  const [a, b] = roles;
+  const cap = FIELD_MS / 21.3;
+  assert.equal(b.pacer.role, 1);
+  assert.equal(a.pacer.role, -1);
+  assert.ok(speed(b) > speed(alike[1]) + 0.01, `speed ${speed(b)} against ${speed(alike[1])}`);
+  assert.ok(speed(b) > 0.95 * cap, `speed ${speed(b)} capacity ${cap}`);
+  // Even: the follower shows its frames at the pace's period; the setter at its fields' cost.
+  const sa = stats(a, 10000, 40000), sb = stats(b, 10000, 40000);
+  assert.ok(sa.p95 < FIELD_MS / a.pacer.rate + 6, JSON.stringify(sa));
+  assert.ok(sb.p95 < 35, JSON.stringify(sb));
+  assert.ok(a.waitMs < 1200 && b.waitMs < 600, `waited ${a.waitMs} / ${b.waitMs} ms`);
 });

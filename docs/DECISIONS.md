@@ -464,6 +464,20 @@ Agents may propose entries under "Open questions"; only the owner moves them to 
 
   | WEB.md checkpoints unchanged; match-session lines equal native; netplay_check passes; a full CPU vs CPU game ran to Game Over. | merge of engine/q4-speed
 
+- 2026-10-17 | **Q5b: pacing roles; Auto delay measured twice** (lead, under the owner's delegation; docs/engine/Q5_LOG.md §15).
+  - **Q5b-N1, pacing roles:** online, a machine whose capacity is 3% below the other's for half a second sets the pace and runs one field at a time without idling.
+    - The other machine follows the reported capacity, locked to equal input leads (a correction of at most 4%).
+    - Player 1 decides the roles. Machines within 3% of each other keep Q5-N1.
+    - Results on the merged engine:
+      - 1.0 vs 1.3: 0.975×, with the pace at 1.0 about 91% of the time.
+      - 1.0 vs 2: 0.75-0.78× (the chase 0.77×). The slow page shows 45 vs 31 new frames/s, frames over 50 ms fall from 8% to 0.3%, and the fast page's waits fall from 42 to 2 per second.
+    - Host timing only.
+  - **Q5b-N2, Auto delay measured twice:** two rounds of 20 pings, and the lower result is proposed (amends Q5-N2).
+  - **Q5b-T1:** pacing variants are compared by the slow page's busy share as well as speed, because the per-field cost varies 5-10% between runs on this shared PC.
+  - **Not built, run-ahead:** it needs a one-frame display queue in the render thread and adds up to 16.7 ms of input latency. Only if the owner sees hitches.
+
+  | 81 two-page games, 0 desyncs; each line equals native at its delay; WEB.md checkpoints unchanged; web shell 90/90. | merge of engine/q5b-pace
+
 ## Open questions for owner
 
 - 2026-10-14 | **K1c (OSInit, DVDInit): the name commit is held on one verify.py false positive (owner).** *Status (2026-10-14, claude-w2):* blockers 1 and 2 are resolved on `work/k1c-finish`; blocker 3 is new. Naming fn_8043188C OSInit and fn_80422FD8 DVDInit (`tools/goals/renames/k1c.tsv`, evidence there) makes dtk's SDK signatures rename 150 more symbols. work/k1c landed everything that is correct on its own: six contract commits, the BB2 overlay without its macro, fn_8042515C's parameter renamed, the .bss data splits of the two linked units (fstload.c: bb2Buf and __fstLoad's static block; EXIBios.c: Ecb), and stateBusy's switch table in dvd's split (without it dtk exports the static as `stateBusy_8042427C` and verify counts fn_8042427C as 100% -> 0%). Blockers:

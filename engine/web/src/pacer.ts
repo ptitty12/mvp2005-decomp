@@ -52,6 +52,7 @@ export interface PaceReport {
   cap: number;          // the speed this machine could run the game at (1 = full speed)
   prop: number;         // the pace it proposes (its capacity with the margin, in steps, at most 1)
   lead: number | null;  // its input lead, ms (median of its last frames), or null before any
+  role?: number;        // Q5b: its role (1: it sets the pace, -1: it follows, 0: neither)
 }
 
 export interface PacerOptions {
@@ -66,16 +67,27 @@ export interface PacerOptions {
   slew: number;           // at most this many ms of schedule shift per ms of time
   staleMs: number;        // the other side's report counts this long
   minPace: number;        // the pace never goes below this
+  roles: number;          // Q5b: 1 = the slower side runs free and the other follows it (below), 0 = both alike
+  boost: number;          // Q5b: the slower side's schedule runs this much faster than its capacity ...
+  roleMargin: number;     // ... once its capacity is below the other's by this share (the follower's: above) ...
+  roleHoldMs: number;     // ... for this long
+  trimGain: number;       // Q5b: the follower's pace trim per ms of phase difference per second ...
+  trimMax: number;        // ... at most this much either way
+  followEarlyMs: number;  // Q5b: the follower aims to run this much earlier than the side it follows
+  decide: number;         // Q5b: 1 = this side decides the roles (player 1), 0 = it takes the other's
 }
 
 export const DEFAULT_PACER: PacerOptions = {
   margin: 0.98, step: 0.01, raiseAfterMs: 500, raiseSteps: 2, windowFields: 15, attackFields: 30, releaseFields: 30,
   phaseGain: 0.6, slew: 0.03, staleMs: 2000, minPace: 0.25,
+  roles: 1, boost: 1.15, roleMargin: 0.03, roleHoldMs: 500, trimGain: 3e-4, trimMax: 0.04,
+  followEarlyMs: 0, decide: 1,
 };
 
 /** One step of the pacing: the pace to run at and how far to move the schedule. */
 export interface PaceStep {
   rate: number;     // the common pace (1 = full speed)
+  sched: number;    // the pace this side's schedule runs at (Q5b: the common pace, but for roles)
   shiftMs: number;  // move the schedule this much later (negative: earlier)
 }
 
@@ -91,6 +103,10 @@ export class Pacer {
   private seq = 0;
   private lastTick = -1;
   private raiseSince = -1;
+  /** Q5b: this side's role (1: it sets the pace and runs free, -1: it follows, 0: neither), its trim. */
+  role = 0;
+  trim = 0;
+  private roleSince = -1;
   // Statistics: schedule shifts (ms, in all), fields measured.
   shifted = 0;
   fields = 0;
@@ -137,7 +153,8 @@ export class Pacer {
 
   /** This side's report for the other. */
   report(lead: number | null): PaceReport {
-    return { v: 1, n: ++this.seq, cap: round3(this.capacity()), prop: this.prop, lead: lead === null ? null : round1(lead) };
+    return { v: 1, n: ++this.seq, cap: round3(this.capacity()), prop: this.prop, lead: lead === null ? null : round1(lead),
+             role: this.role };
   }
 
   /**
@@ -167,15 +184,55 @@ export class Pacer {
     }
     const fresh = this.peerFresh(now);
     this.rate = fresh ? Math.min(this.prop, this.peer!.prop) : this.prop;
+    if (fresh && o.roles) {
+      // One side decides (player 1), so both always agree; the other takes the opposite role.
+      this.role = o.decide ? this.roleNow(this.peer!, now) : -(this.peer!.role ?? 0) || 0;
+    } else {
+      this.role = 0;
+      this.roleSince = -1;
+    }
+    if (this.role !== -1) this.trim = 0;
+    let sched = this.rate;
     // The phase: half the difference of the two leads, a little at a time.
     let shiftMs = 0;
-    if (fresh && lead !== null && this.peer!.lead !== null && dt > 0) {
-      const e = (this.peer!.lead - lead) / 2;  // > 0: this side's lead is smaller, it runs early
+    if (this.role === 1) {
+      sched = Math.min(1, this.capacity() * o.boost);
+    } else if (fresh && lead !== null && this.peer!.lead !== null && dt > 0) {
+      // > 0: this side's lead is smaller, it runs early (Q5b: a follower, earlier than it aims to).
+      const e = (this.peer!.lead - lead) / 2 - (this.role === -1 && this.rate < 1 ? o.followEarlyMs : 0);
       const limit = o.slew * dt;
-      shiftMs = Math.max(-limit, Math.min(limit, e * o.phaseGain * (dt / 1000)));
+      // Q5b: a follower corrects the whole difference itself (the side it follows does not), and
+      // trims its pace by the difference that remains (the other's measured capacity is not exact).
+      const gain = this.role === -1 ? 2 * o.phaseGain : o.phaseGain;
+      shiftMs = Math.max(-limit, Math.min(limit, e * gain * (dt / 1000)));
       this.shifted += shiftMs;
+      if (this.role === -1 && this.peer!.cap * (1 + this.trim) < 1) {  // (at full speed the trim waits)
+        this.trim = Math.max(-o.trimMax, Math.min(o.trimMax, this.trim - o.trimGain * e * (dt / 1000)));
+      }
     }
-    return { rate: this.rate, shiftMs };
+    if (this.role === -1) sched = Math.min(1, this.peer!.cap * (1 + this.trim));
+    return { rate: this.rate, sched, shiftMs };
+  }
+
+  // Q5b: with roles, the side whose machine is clearly slower (its capacity `roleMargin` below
+  // the other's for `roleHoldMs`) sets the pace: its schedule runs a little faster than its
+  // capacity (`boost`), so it is always a little behind and runs each field as soon as the last
+  // is done (one at a time, every frame shown), at what its machine can do. The other follows
+  // it at that capacity (its reports), moving its schedule toward equal input leads (less
+  // `followEarlyMs`) and trimming its pace by what is left. Close capacities keep the roles
+  // they have (from the start: both alike, as without roles); the roles last through stretches
+  // both machines run at full speed.
+  private roleNow(peer: PaceReport, now: number): number {
+    const mine = this.capacity(), theirs = peer.cap, m = this.o.roleMargin;
+    const want = mine < theirs * (1 - m) ? 1 : mine > theirs * (1 + m) ? -1 : this.role;
+    if (want === this.role) {
+      this.roleSince = -1;
+      return this.role;
+    }
+    if (this.roleSince < 0) this.roleSince = now;
+    if (now - this.roleSince < this.o.roleHoldMs) return this.role;
+    this.roleSince = -1;
+    return want;
   }
 }
 
@@ -224,9 +281,15 @@ export class Schedule {
     this.start = now - pos * this.period();
   }
 
-  /** At most `max` fields due from now on (a wait, or a debt too large to catch up, is not made up). */
-  limitDebt(now: number, max: number): void {
-    this.start = Math.max(this.start, now - (this.fields + max) * this.period() - 1e-3);
+  /**
+   * At most `max` fields due from now on (a wait, or a debt too large to catch up, is not made
+   * up). Returns the schedule time given up (ms).
+   */
+  limitDebt(now: number, max: number): number {
+    const start = Math.max(this.start, now - (this.fields + max) * this.period() - 1e-3);
+    const gave = start - this.start;
+    this.start = start;
+    return gave;
   }
 
   shift(ms: number): void {

@@ -44,12 +44,15 @@ session's 10 s timeout.
   the input of frame F + D. Frames 0 .. D-1 have neutral input on both ports. Each
   player proposes D and the session uses the larger proposal. The lobby's choice
   (the creator's, shown to the joiner) is **Auto** by default (Q5): once the data
-  channel is open, each page sends 20 small text pings (50 ms apart, answered at
-  once by the other page) and picks D from the round trips (`web/src/delay.ts`):
-  D x 18 ms must cover half the median round trip, about 10 ms for the Worker hop
-  and a field's run, and the one-way jitter (half the spread from the fastest to
-  the 90th-percentile round trip), with D between 2 and 6. A local link gives 2,
-  E5's simulated 40-50 ms one way gives 4. A manual choice (2 to 6) overrides it.
+  channel is open, each page sends two rounds of 20 small text pings (50 ms apart,
+  answered at once by the other page) and picks D from each round's round trips
+  (`web/src/delay.ts`): D x 18 ms must cover half the median round trip, about 10
+  ms for the Worker hop and a field's run, and the one-way jitter (half the spread
+  from the fastest to the 90th-percentile round trip), with D between 2 and 6. It
+  proposes the lower of the two rounds' D (Q5b: a page busy for a moment while it
+  measured once chose 6 on a local link; a stall shows in one round, a real link
+  in both). A local link gives 2, E5's simulated 40-50 ms one way gives 4. A
+  manual choice (2 to 6) overrides it.
   D is agreed before the game starts (HELLO), so how it was chosen cannot change
   what the guest computes.
 - **The gate.** A frame runs only when both ports' inputs for it are known. The
@@ -123,6 +126,21 @@ the Worker's paced loop):
   settle equal: as far from waiting as the delay allows on both sides.
 - **Sound.** The Worker tells the AudioWorklet the pace, so Q2's time-stretch
   plays at it from the start instead of finding it from a buffer that runs low.
+- **Roles (Q5b).** Even pacing at 98 % of the slower machine's measured
+  capacity left that machine idle part of the time, behind a schedule it could
+  not quite keep, or ahead of one it could have beaten. Now, once one machine's
+  capacity is 3 % below the other's for half a second, it *sets the pace*: its
+  schedule runs 15 % past its capacity, so it is always a little behind and runs
+  each field as soon as the last is done (still one field at a time, every frame
+  shown), as fast as its machine can. The other *follows* it: its schedule runs
+  at the capacity the setter reports, it moves its schedule toward equal input
+  leads by itself (the setter does not), and it trims its pace by the phase
+  difference that remains (an integral term, at most 4 %, held at full speed).
+  Player 1 decides the roles from both capacities and reports its own in its
+  `pace` message (`role`); player 2 takes the opposite one, so the two always
+  agree. Machines within 3 % of each other keep the common pace above; the roles
+  last through stretches both run at full speed. `paceTune=roles:0` (a page
+  parameter for development) restores Q5's common pace.
 
 All of it is host timing: it decides when fields run, never what they compute.
 The two games' guest lines and state hashes stay identical (Q5_LOG.md).
@@ -252,8 +270,8 @@ negotiated data channel. Once the channel is open the lobby is no longer needed.
 Besides the engine's binary datagrams, the pages send each other small JSON text
 messages on that channel, which the engine never sees: `pad` (controller
 readiness, Q3), `ping`/`pong` (the link measured for an Auto delay), `pace` (four
-times a second: capacity, proposed pace, input lead) and `stats` (once a second:
-the overlay's numbers) (Q5).
+times a second: capacity, proposed pace, input lead; Q5b: the sender's role) and
+`stats` (once a second: the overlay's numbers) (Q5).
 
 ## 5. The server (`engine/server/`)
 
