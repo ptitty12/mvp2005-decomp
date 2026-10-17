@@ -147,7 +147,10 @@ void GxFifo::execute(const std::uint8_t* cmd, std::size_t len, Effects& fx, bool
       ++bp_loads_;
       std::uint32_t v = be32_at(cmd + 1);
       std::uint32_t reg = v >> 24;
-      if (reg == 0x45 && (v & 2)) fx.draw_done = true;
+      if (reg == 0x45 && (v & 2)) {
+        fx.draw_done = true;
+        ++fx.draw_dones;
+      }
       if (reg == 0x47 || reg == 0x48) {
         fx.token_set = true;
         fx.token = static_cast<std::uint16_t>(v);

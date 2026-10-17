@@ -42,9 +42,10 @@ struct Store {
 // MMIO: every store recorded with the guest PC and ticks it was made at.
 struct Recorder : ppc::Io {
   ppc::Cpu* c = nullptr;
+  std::uint64_t bias = 0;  // ticks that "interrupt handlers" added (QuietHooks)
   std::vector<Store> log;
   u32 read(u32, int) override { return 0; }
-  void write(u32 a, u32 v, int size) override { log.push_back({a, v, size, c->pc, c->ticks}); }
+  void write(u32 a, u32 v, int size) override { log.push_back({a, v, size, c->pc, c->ticks - bias}); }
 };
 
 std::uint64_t g_seed = 0x2545F4914F6CDD1Dull;
@@ -224,6 +225,126 @@ int check_803EB000(Machine& m, Recorder& io, int trials) {
   return failures ? 1 : 0;
 }
 
+// Safe points that count, make the next one due a few instructions later, and
+// now and then stand for an interrupt handler that ran and came back (the time
+// it took added to c.ticks, nothing else changed). The reference interpreter has
+// none, so the state must not depend on them but for those ticks.
+struct QuietHooks : ppc::Hooks {
+  std::uint64_t safepoints = 0, handlers = 0;
+  Recorder* io = nullptr;
+  std::uint64_t time_base(ppc::Cpu&) override { return 0; }
+  void set_time_base(ppc::Cpu&, std::uint64_t) override {}
+  u32 decrementer(ppc::Cpu&) override { return 0; }
+  void set_decrementer(ppc::Cpu&, u32) override {}
+  void msr_changed(ppc::Cpu&, u32) override {}
+  void icbi(ppc::Cpu&, u32) override {}
+  void system_call(ppc::Cpu&) override {}
+  void safepoint(ppc::Cpu& c) override {
+    ++safepoints;
+    if (rnd() % 4 == 0) {
+      const std::uint64_t ran = 1 + rnd() % 5000;
+      c.ticks += ran;
+      io->bias += ran;
+      ++handlers;
+    }
+    c.next_event = c.ticks + 1 + rnd() % 200;
+  }
+};
+
+// fn_803EA3EC (Q6): the skinning loop, n matrices from the weights at r3, with
+// fn_803EB000 inside; the pipe's address and the two headers at 0x8062C750.
+int check_803EA3EC(Machine& m, Recorder& io, int trials) {
+  constexpr u32 kFn = 0x803EA3EC, kTable = 0x8062C750;
+  const int index = hle_index_at(kFn);
+  if (index < 0) {
+    std::printf("FAIL: no native implementation registered at %08X\n", kFn);
+    return 1;
+  }
+  constexpr u32 kArgs = 0x81000000, kMatrix = 0x81000400, kBones = 0x81010000, kOut = 0x81020000,
+                kStack = 0x81028000, kWin = 0x81000000, kWinEnd = 0x81030000;
+  ppc::Cpu& c = m.cpu();
+  u8* mem1 = m.mem1();
+  auto host = [&](u32 ea) { return mem1 + (ea - 0x80000000u); };
+  QuietHooks hooks;
+  hooks.io = &io;
+  int failures = 0, fallbacks_expected = 0;
+  std::uint64_t matrices = 0;
+  g_fallbacks = 0;
+  for (int t = 0; t < trials; ++t) {
+    const u32 n = 1 + rnd() % 8;
+    matrices += n;
+    for (u32 k = 0; k < 4 * n; ++k) put_be32(host(kArgs + 4 * k), rnd_single());
+    for (u32 k = 0; k < n; ++k)
+      if (rnd() % 4 == 0) put_be32(host(kArgs + 16 * k + 4), rnd() & 0x80000000u);  // one matrix
+    for (u32 k = 0; k < 16; ++k) put_be32(host(kMatrix + 4 * k), rnd_single());
+    for (u32 k = 0; k < 256 * 16; ++k) put_be32(host(kBones + 4 * k), rnd() % 8 ? rnd_single() : rnd());
+    const bool to_memory = rnd() % 8 == 0;
+    put_be32(host(kTable), to_memory ? kOut + 4 * (rnd() % 8) : 0xCC008000u);
+    put_be32(host(kTable + 4), rnd());
+    put_be32(host(kTable + 8), rnd());
+    for (int r = 0; r < 32; ++r) c.gpr[r] = rnd();
+    for (int r = 0; r < 32; ++r) c.fpr[r] = {rnd_double(), rnd_double()};
+    if (rnd() % 2) c.fpr[0].ps0 = 0;
+    if (rnd() % 2) c.fpr[4].ps0 = 0;
+    c.gpr[1] = kStack;
+    c.gpr[3] = kArgs;
+    c.gpr[4] = n;
+    c.gpr[5] = kBones;
+    c.gpr[6] = kMatrix;
+    c.cr = rnd();
+    c.lr = kRet;
+    c.ctr = rnd();
+    c.msr = ppc::msr::FP;
+    c.fpscr = ppc::fpscr::NI;
+    c.spr[ppc::spr::GQR0] = 0;
+    bool expect_fallback = false;
+    if (rnd() % 64 == 0) {
+      c.fpscr = ppc::fpscr::NI | 1;
+      expect_fallback = true;
+    }
+    fallbacks_expected += expect_fallback;
+    c.ticks = 1000000 + rnd() % 1000;
+    c.pc = kFn;
+    c.hooks = nullptr;
+    const ppc::Cpu before = c;
+    std::vector<u8> win(host(kWin), host(kWinEnd));
+    io.log.clear();
+    interpret(c);
+    Snapshot ref{c, std::vector<u8>(host(kWin), host(kWinEnd)), io.log};
+    c = before;
+    c.hooks = &hooks;
+    c.next_event = rnd() % 2 ? c.ticks : ~0ull;  // safe points due at once (then every few instructions), or never
+    std::memcpy(host(kWin), win.data(), win.size());
+    io.log.clear();
+    io.bias = 0;
+    hle_call(c, index, &counted_original);
+    c.hooks = nullptr;
+    c.next_event = ref.cpu.next_event;
+    c.ticks -= io.bias;  // the handlers' time
+    io.bias = 0;
+    std::string what;
+    bool ok = same(ref.cpu, c, &what);
+    if (ok && ref.stores != io.log) {
+      ok = false;
+      what = "stores differ (" + std::to_string(ref.stores.size()) + " vs " + std::to_string(io.log.size()) + ")";
+    }
+    if (ok && std::memcmp(ref.mem.data(), host(kWin), ref.mem.size()) != 0) {
+      ok = false;
+      what = "memory differs";
+    }
+    if (!ok && ++failures <= 10) std::printf("trial %d (n %u): %s\n", t, n, what.c_str());
+  }
+  std::printf("fn_803EA3EC: %d trials (%llu matrices, %llu safe points, %llu with a handler), %d ran the original "
+              "(%d expected), %d differences\n",
+              trials, static_cast<unsigned long long>(matrices), static_cast<unsigned long long>(hooks.safepoints),
+              static_cast<unsigned long long>(hooks.handlers), g_fallbacks, fallbacks_expected, failures);
+  if (g_fallbacks != fallbacks_expected) {
+    std::printf("FAIL: the original ran %d times, expected %d\n", g_fallbacks, fallbacks_expected);
+    return 1;
+  }
+  return failures ? 1 : 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -247,6 +368,7 @@ int main(int argc, char** argv) {
   io.c = &m.cpu();
   m.memory().io = &io;
   int rc = check_803EB000(m, io, trials);
+  rc |= check_803EA3EC(m, io, trials / 10);
   std::printf(rc ? "FAIL\n" : "PASS\n");
   return rc;
 }

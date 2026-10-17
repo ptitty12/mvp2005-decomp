@@ -77,18 +77,25 @@ constexpr Ty kImportType[kImports] = {tV_II,   tV_I,  tI_IIIL, tI_IIIL, tI_IIIL,
 // Helpers defined in every module, after the imports.
 enum Hlp : u32 {
   hRd8 = kImports, hRd16, hRd32, hWr8, hWr16, hWr32, hCmps, hCmpu, hDivw, hDivwu, hS2D, hD2S,
-  hLmw, hStmw, hPsqL, hPsqSt, hRd64, hWr64, hLfs, hStfs, kFirstGuest
+  hLmw, hStmw, hPsqL, hPsqSt, hRd64, hWr64, hLfs, hStfs,
+  // Q6: the page-table paths behind the memory helpers' fronts (the helpers above
+  // of the same name try MEM1 first, then tail-call these).
+  hRd8P, hRd16P, hRd32P, hWr8P, hWr16P, hWr32P, hRd64P, hWr64P, hLfsP, hStfsP, kFirstGuest
 };
 constexpr u32 kHelperCount = static_cast<u32>(kFirstGuest) - static_cast<u32>(kImports);
 constexpr Ty kHelperType[kHelperCount] = {tI_IIIL,  tI_IIIL,  tI_IIIL,   tV_IIIIL,  tV_IIIIL, tV_IIIIL,
                                           tI_III,   tI_III,   tI_II,     tI_II,     tL_I,     tI_L,
                                           tV_IIIIL, tV_IIIIL, tV_IIIIIL, tV_IIIIIL, tL_IIIL, tV_IILIL,
-                                          tL_IIIL,  tV_IILIL};
+                                          tL_IIIL,  tV_IILIL,
+                                          tI_IIIL,  tI_IIIL,  tI_IIIL,   tV_IIIIL,  tV_IIIIL, tV_IIIIL,
+                                          tL_IIIL,  tV_IILIL, tL_IIIL,   tV_IILIL};
 constexpr const char* kHelperName[kHelperCount] = {"rd8",  "rd16", "rd32", "wr8",   "wr16", "wr32", "cmps", "cmpu",
                                                    "divw", "divwu", "s2d", "d2s",   "lmw",  "stmw", "psq_l", "psq_st",
-                                                   "rd64", "wr64", "lfs", "stfs"};
+                                                   "rd64", "wr64", "lfs", "stfs",
+                                                   "rd8.page", "rd16.page", "rd32.page", "wr8.page", "wr16.page",
+                                                   "wr32.page", "rd64.page", "wr64.page", "lfs.page", "stfs.page"};
 // Imported globals (immutable i32): the table base and three runtime addresses.
-enum Glb : u32 { gTableBase, gUnwinding, gResume, gHook, gWgp, gGpPages, kGlobals };
+enum Glb : u32 { gTableBase, gUnwinding, gResume, gHook, gWgp, gGpPages, gMem1, kGlobals };
 
 // ---- per-instruction classification ----
 enum Kind : u8 {
@@ -2214,8 +2221,8 @@ void FuncGen::emit_fp(const InsnInfo& x) {
 // Q4, F1: the fast model of ppc/fp.h (its comment has the rules), for every
 // instruction emit_fp computes but fctiw (exact in both models). Every step is one
 // IEEE double operation in the order fp.cpp writes it, a single result is the
-// double rounded to f32 and back, a result below the normal range of its
-// precision becomes a signed zero, and a NaN result becomes the default NaN,
+// double rounded to f32 and back (Q6: subnormal results stay), and a NaN result
+// becomes the default NaN,
 // whatever bits the host's arithmetic gave it. Called inside emit_fp's fast-path
 // block, after the FPSCR check; the sources are in their locals.
 void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
@@ -2223,7 +2230,7 @@ void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
   const Insn i{x.word};
   const Op o = x.op;
   const u32 rD = i.rD(), rA = i.rA(), rB = i.rB(), rC = i.rC();
-  constexpr u64 kOne = 0x3FF0000000000000ull, kMinSingle = 0x3810000000000000ull, kMinDouble = 0x0010000000000000ull;
+  constexpr u64 kOne = 0x3FF0000000000000ull;
   auto ld = [&](u32 off) { fp_get(off); };
   // The result for the double in L_r, as i64 bits into `out` (fp::fast_finish).
   auto fin = [&](bool single, u32 out) {
@@ -2233,17 +2240,7 @@ void FuncGen::emit_fp_fast(const InsnInfo& x, std::uint64_t) {
       b.op(op::f32_demote_f64);
       b.op(op::f64_promote_f32);
     }
-    b.set(L_fa);
-    b.f64c_bits(0);
-    b.get(L_fa);
-    b.op(op::f64_copysign);
-    b.get(L_fa);
-    b.get(L_fa);
-    b.op(op::f64_abs);
-    b.f64c_bits(single ? kMinSingle : kMinDouble);
-    b.op(op::f64_lt);
-    b.op(op::select);  // below the normal range: a signed zero
-    b.op(op::i64_reinterpret_f64);
+    b.op(op::i64_reinterpret_f64);  // Q6: no flush below the normal range
     b.get(L_r);
     b.get(L_r);
     b.op(op::f64_ne);
@@ -3033,6 +3030,157 @@ void host_addr(Fn& h, u32 p_local) {
   h.op(op::i32_add);
 }
 
+// Q6: MEM1's own path (env.mem1, WasmMem1Layout): an access of up to 8 bytes at
+// 0x80000000 + t with t < limit is at base + t, the host address `access` finds
+// in the i32 local `a`; `access` ends with a return. The page table maps the
+// same bytes there (Machine), so the result is the same.
+void mem1_path(Fn& h, u32 a, const std::function<void()>& access) {
+  using M = WasmMem1Layout;
+  h.get(1);
+  h.i32c(0x80000000u);
+  h.op(op::i32_sub);
+  h.tee(a);
+  h.global(gMem1);
+  h.mem(op::i32_load, 2, M::kLimit);
+  h.op(op::i32_lt_u);
+  h.if_();
+  h.global(gMem1);
+  h.mem(op::i32_load, 2, M::kBase);
+  h.get(a);
+  h.op(op::i32_add);
+  h.set(a);
+  access();
+  h.end();
+}
+
+// Q6: a memory helper's front: MEM1's own path, else a tail call of its page-
+// table path (`page`, the same parameters). Small, so V8 inlines it into hot
+// callers. The forms: read (cpu, ea, pc, ticks) -> i32 of 1, 2 or 4 bytes;
+// write (cpu, ea, value, pc, ticks); read64 -> i64; write64 (cpu, ea, i64, pc,
+// ticks); lfs (read32 as a double's bits); stfs (an i64 double stored as single).
+enum class Front { Read, Write, Read64, Write64, Lfs, Stfs };
+void double_to_single_word(Fn& h, u32 bits);  // below
+void single_to_double_inline(Fn& h, u32 word);
+Fn helper_front(Front f, int bytes, u32 page) {
+  Fn h;
+  const bool wr = f == Front::Write || f == Front::Write64 || f == Front::Stfs;
+  const u32 params = wr ? 5 : 4;
+  const u32 a = params, w = params + 1;  // the host address; a word
+  h.uleb(1);
+  h.uleb(2);
+  h.byte(kI32);
+  auto gp = [&](u32 n) {
+    gp_check(h, [&] { h.get(1); }, [&] {
+      h.get(1);
+      if (n > 1) {
+        h.i32c(n - 1);
+        h.op(op::i32_add);
+      }
+    });
+  };
+  if (f == Front::Stfs) {  // the word first (the page path converts again)
+    double_to_single_word(h, 2);
+    h.set(w);
+  }
+  mem1_path(h, a, [&] {
+    switch (f) {
+      case Front::Read:
+        h.get(a);
+        if (bytes == 1) {
+          h.mem(op::i32_load8_u, 0, 0);
+        } else if (bytes == 2) {
+          h.mem(op::i32_load16_u, 0, 0);
+          h.tee(w);
+          h.i32c(8);
+          h.op(op::i32_shl);
+          h.get(w);
+          h.i32c(8);
+          h.op(op::i32_shr_u);
+          h.op(op::i32_or);
+          h.i32c(0xFFFF);
+          h.op(op::i32_and);
+        } else {
+          h.mem(op::i32_load, 0, 0);
+          h.tee(w);
+          swap32_from_local(h, w);
+        }
+        break;
+      case Front::Write:
+        gp(static_cast<u32>(bytes));
+        h.get(a);
+        if (bytes == 1) {
+          h.get(2);
+          h.mem(op::i32_store8, 0, 0);
+        } else if (bytes == 2) {
+          h.get(2);
+          h.i32c(8);
+          h.op(op::i32_shl);
+          h.get(2);
+          h.i32c(8);
+          h.op(op::i32_shr_u);
+          h.i32c(0xFF);
+          h.op(op::i32_and);
+          h.op(op::i32_or);
+          h.mem(op::i32_store16, 0, 0);
+        } else {
+          h.get(2);
+          swap32_from_local(h, 2);
+          h.mem(op::i32_store, 0, 0);
+        }
+        break;
+      case Front::Read64:
+        for (u32 off : {0u, 4u}) {
+          h.get(a);
+          h.mem(op::i32_load, 0, off);
+          h.tee(w);
+          swap32_from_local(h, w);
+          h.op(op::i64_extend_i32_u);
+          if (!off) {
+            h.i64c(32);
+            h.op(op::i64_shl);
+          }
+        }
+        h.op(op::i64_or);
+        break;
+      case Front::Write64:
+        gp(8);
+        for (u32 off : {0u, 4u}) {
+          h.get(a);
+          h.get(2);
+          if (!off) {
+            h.i64c(32);
+            h.op(op::i64_shr_u);
+          }
+          h.op(op::i32_wrap_i64);
+          h.tee(w);
+          swap32_from_local(h, w);
+          h.mem(op::i32_store, 0, off);
+        }
+        break;
+      case Front::Lfs:
+        h.get(a);
+        h.mem(op::i32_load, 0, 0);
+        h.tee(w);
+        swap32_from_local(h, w);
+        h.set(w);
+        single_to_double_inline(h, w);
+        break;
+      case Front::Stfs:
+        gp(4);
+        h.get(a);
+        h.get(w);
+        swap32_from_local(h, w);
+        h.mem(op::i32_store, 0, 0);
+        break;
+    }
+    h.op(op::return_);
+  });
+  for (u32 k = 0; k < params; ++k) h.get(k);
+  h.return_call(page);
+  h.byte(op::end);
+  return h;
+}
+
 // (cpu, ea, pc, ticks) -> value: a mapped page and no page crossing read the
 // big-endian bytes directly; anything else is ppc::readN in the runtime.
 Fn helper_read(int bytes, u32 slow) {
@@ -3181,16 +3329,10 @@ Fn helper_load_single() {
   return h;
 }
 
-// Q4: stfs: (cpu, ea, double bits, pc, ticks): fp::double_to_single (the bit
-// formula, or h.d2s where the result is a single denormal, exponents 874-896)
-// and write32 (a mapped page without crossing: a plain store after the threaded
-// engine's check; else h.wr32), in one call.
-Fn helper_store_single() {
-  Fn h;
-  h.uleb(1);
-  h.uleb(2);
-  h.byte(kI32);  // local 5: the page pointer; 6: the word
-  h.get(2);
+// fp::double_to_single of the i64 local `bits`, pushed as an i32: the bit
+// formula, or h.d2s where the result is a single denormal (exponents 874-896).
+void double_to_single_word(Fn& h, u32 bits) {
+  h.get(bits);
   h.i64c(52);
   h.op(op::i64_shr_u);
   h.op(op::i32_wrap_i64);
@@ -3201,16 +3343,16 @@ Fn helper_store_single() {
   h.i32c(896 - 874);
   h.op(op::i32_le_u);
   h.if_i32();
-  h.get(2);
+  h.get(bits);
   h.call(hD2S);
   h.else_();
-  h.get(2);
+  h.get(bits);
   h.i64c(32);
   h.op(op::i64_shr_u);
   h.op(op::i32_wrap_i64);
   h.i32c(0xC0000000u);
   h.op(op::i32_and);
-  h.get(2);
+  h.get(bits);
   h.i64c(29);
   h.op(op::i64_shr_u);
   h.op(op::i32_wrap_i64);
@@ -3218,6 +3360,18 @@ Fn helper_store_single() {
   h.op(op::i32_and);
   h.op(op::i32_or);
   h.end();
+}
+
+// Q4: stfs: (cpu, ea, double bits, pc, ticks): fp::double_to_single (the bit
+// formula, or h.d2s where the result is a single denormal, exponents 874-896)
+// and write32 (a mapped page without crossing: a plain store after the threaded
+// engine's check; else h.wr32), in one call.
+Fn helper_store_single() {
+  Fn h;
+  h.uleb(1);
+  h.uleb(2);
+  h.byte(kI32);  // local 5: the page pointer; 6: the word
+  double_to_single_word(h, 2);
   h.set(6);
   page_ptr(h, 5);
   h.if_();
@@ -3369,49 +3523,11 @@ Fn helper_write(int bytes, u32 slow) {
   h.uleb(1);
   h.uleb(3);
   h.byte(kI32);  // local 5: the page pointer; 6, 7: the write-gather state and its count
-  page_ptr(h, 5);
-  h.if_();
-  if (bytes != 1) {
-    h.get(1);
-    h.i32c(0xFFFF);
-    h.op(op::i32_and);
-    h.i32c(0x10000 - bytes);
-    h.op(op::i32_le_u);
-    h.if_();
-  }
-  gp_check(h, [&] { h.get(1); }, [&] {
-    h.get(1);
-    if (bytes > 1) {
-      h.i32c(static_cast<u32>(bytes - 1));
-      h.op(op::i32_add);
-    }
-  });
-  host_addr(h, 5);
-  if (bytes == 1) {
-    h.get(2);
-    h.mem(op::i32_store8, 0, 0);
-  } else if (bytes == 2) {
-    h.get(2);
-    h.i32c(8);
-    h.op(op::i32_shl);
-    h.get(2);
-    h.i32c(8);
-    h.op(op::i32_shr_u);
-    h.i32c(0xFF);
-    h.op(op::i32_and);
-    h.op(op::i32_or);
-    h.mem(op::i32_store16, 0, 0);
-  } else {
-    h.get(2);
-    swap32_from_local(h, 2);
-    h.mem(op::i32_store, 0, 0);
-  }
-  h.op(op::return_);
-  if (bytes != 1) h.end();
-  h.end();
   // The write-gather pipe (an unmapped page, so the runtime's path otherwise):
   // any address in its 4 KiB block, as Hardware::write takes them (Q4: a psq_st
-  // writes its second element to 0xCC008004).
+  // writes its second element to 0xCC008004). Q6: first, before the page table
+  // (the pipe's stores are this helper's common case: MEM1's go through the
+  // front); `fast` is only ever set by a Hardware, whose pipe page is unmapped.
   using L = WasmWgpLayout;
   h.get(1);
   h.i32c(0xCC008000u);
@@ -3475,6 +3591,46 @@ Fn helper_write(int bytes, u32 slow) {
   h.call(iWgpStore);
   h.op(op::return_);
   h.end();
+  h.end();
+  page_ptr(h, 5);
+  h.if_();
+  if (bytes != 1) {
+    h.get(1);
+    h.i32c(0xFFFF);
+    h.op(op::i32_and);
+    h.i32c(0x10000 - bytes);
+    h.op(op::i32_le_u);
+    h.if_();
+  }
+  gp_check(h, [&] { h.get(1); }, [&] {
+    h.get(1);
+    if (bytes > 1) {
+      h.i32c(static_cast<u32>(bytes - 1));
+      h.op(op::i32_add);
+    }
+  });
+  host_addr(h, 5);
+  if (bytes == 1) {
+    h.get(2);
+    h.mem(op::i32_store8, 0, 0);
+  } else if (bytes == 2) {
+    h.get(2);
+    h.i32c(8);
+    h.op(op::i32_shl);
+    h.get(2);
+    h.i32c(8);
+    h.op(op::i32_shr_u);
+    h.i32c(0xFF);
+    h.op(op::i32_and);
+    h.op(op::i32_or);
+    h.mem(op::i32_store16, 0, 0);
+  } else {
+    h.get(2);
+    swap32_from_local(h, 2);
+    h.mem(op::i32_store, 0, 0);
+  }
+  h.op(op::return_);
+  if (bytes != 1) h.end();
   h.end();
   h.get(0);
   h.get(1);
@@ -4451,12 +4607,12 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
     code.uleb(fn.b.size());
     code.append(fn.b);
   };
-  put(helper_read(1, iRead8));
-  put(helper_read(2, iRead16));
-  put(helper_read(4, iRead32));
-  put(helper_write(1, iWrite8));
-  put(helper_write(2, iWrite16));
-  put(helper_write(4, iWrite32));
+  put(helper_front(Front::Read, 1, hRd8P));
+  put(helper_front(Front::Read, 2, hRd16P));
+  put(helper_front(Front::Read, 4, hRd32P));
+  put(helper_front(Front::Write, 1, hWr8P));
+  put(helper_front(Front::Write, 2, hWr16P));
+  put(helper_front(Front::Write, 4, hWr32P));
   put(helper_cmp(true));
   put(helper_cmp(false));
   put(helper_div(true));
@@ -4467,6 +4623,16 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
   put(helper_multiple(true));
   put(helper_psq_load());
   put(helper_psq_store());
+  put(helper_front(Front::Read64, 8, hRd64P));
+  put(helper_front(Front::Write64, 8, hWr64P));
+  put(helper_front(Front::Lfs, 4, hLfsP));
+  put(helper_front(Front::Stfs, 4, hStfsP));
+  put(helper_read(1, iRead8));  // Q6: the page-table paths (hRd8P ...)
+  put(helper_read(2, iRead16));
+  put(helper_read(4, iRead32));
+  put(helper_write(1, iWrite8));
+  put(helper_write(2, iWrite16));
+  put(helper_write(4, iWrite32));
   put(helper_read64());
   put(helper_write64());
   put(helper_load_single());
@@ -4599,7 +4765,7 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
     im.byte(kFuncRef);
     im.byte(0x00);
     im.uleb(1);
-    for (const char* g : {"table_base", "unwinding", "resume", "entry_hook", "wgp", "gp_pages"}) {
+    for (const char* g : {"table_base", "unwinding", "resume", "entry_hook", "wgp", "gp_pages", "mem1"}) {
       im.name("env");
       im.name(g);
       im.byte(0x03);

@@ -621,6 +621,16 @@ emulation thread's) time per field 14.7-14.8 -> 11.4 ms (CPU vs CPU) and 13.7 ->
 -> 20-21 ms with 0.5-0.8%; new frames shown 51-55 -> 58-59 a second. The render
 thread works 4.7-6.0 ms per field.
 
+**Q6 (2026-10-17; Q6_LOG.md section 11).** Chrome 155 headed, paced, the same two
+sessions, interleaved against origin/main (Q4's engine with Q5b's shell), up to three
+rounds. Four efficiency cores: human pitching 0.87-0.91x -> **1.000x**, CPU vs CPU
+0.91-0.93x -> **0.993x**, new frames shown 34-44 -> 55-57 a second, composited p95 46-52
+-> 21-23 ms. hostSlow 2: 0.89-0.90x -> **0.970-0.985x**, 36-42 -> 49-52 new frames a
+second. hostSlow 1.3 (the laptop's stand-in): full speed before and after, emulation 11.0-12.1
+-> **9.6-10.1 ms** per field. This PC: 8.7-10.4 -> 7.4-7.9 ms per field. The emulation
+thread alone (Node) is 14 % faster; on the slower machines most of the gain is that the
+emulation no longer waits for the render thread (Q6's copies, Q6_LOG.md section 9).
+
 ## 4. Determinism
 
 The browser's guest line (`mvp_guest_line`: instructions, time base, frame
@@ -666,6 +676,24 @@ isolated page and without isolation, and in Firefox 157 threaded (700 and 3,600)
 two threaded pages in a netplay game agree with native `mvp-netplay solo`; the
 renderer digests of the threaded and the inline engine agree in every field of
 both match sessions (P2_LOG.md section 3).
+
+**Q6 (2026-10-17): the human-pitching line changed; the lines were re-recorded.**
+Q6 stopped modeling NI's flush to zero in the fast floating-point model (the owner's
+F1; Q6_LOG.md section 2), which changes what the guest computes for results below the
+normal range. The three checkpoints above are unchanged (re-recorded: native, and
+Chrome 155 threaded and single-threaded, paced, without isolation). The two match
+sessions' lines, which earlier logs carried (the input scripts of P2's CPU vs CPU and
+human-pitching sessions):
+
+| Run | Guest line | Matches |
+|---|---|---|
+| CPU vs CPU, 11,600 fields | 75,249,642,125 instructions, time base 7,838,504,388, 10,544 polls, MEM1 `d8c30e9a...` (unchanged) | native; Chrome 155 threaded (paced and unpaced) and single-threaded (unpaced) |
+| Human pitching, 9,000 fields | 58,384,794,125, 6,081,749,388, 8,054 polls, MEM1 **`caec614c...`** (before Q6: `58631fe2...`) | native; Chrome 155 threaded (paced and unpaced) and single-threaded (unpaced) |
+
+The renderer digests of the threaded engine (with Q6's copies, Q6_LOG.md section 9) and
+the inline engine agree in every field of both sessions; for CPU vs CPU they also equal
+the digests before Q6. Two threaded pages in a netplay game agree with native
+`mvp-netplay solo` (`2a8de818...`, unchanged).
 
 ## 5. Limits and next steps
 

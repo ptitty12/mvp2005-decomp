@@ -70,14 +70,15 @@ inline bool pipe_stores(Cpu& c, Hardware* hw, u32 ea) {
 
 }  // namespace
 
-// fn_803EB000 (hle_game.h). Its two paths share their last 29 instructions (the
-// tail from `lwz r12, 4(r14)` to the blr), at 0x803EB14C after 83 instructions
-// or at 0x803EB238 after 37.
-void hle_fn_803EB000(Cpu& c, GuestFn original) {
+// fn_803EB000 (hle_game.h), from its first instruction to its blr (c.pc is left
+// as it is; the caller returns to LR). Its two paths share their last 29
+// instructions (the tail from `lwz r12, 4(r14)` to the blr), at 0x803EB14C after
+// 83 instructions or at 0x803EB238 after 37. False, with nothing changed: the
+// state is not the one this is written for (the original must run).
+static bool run_803EB000(Cpu& c) {
   const u32 g = c.spr[ppc::spr::GQR0];
   if (!(c.msr & ppc::msr::FP) || !ppc::fp::fast_model(c.fpscr) || ((g >> 16) & 7) >= 4 || (g & 7) >= 4) {
-    original(c);
-    return;
+    return false;
   }
   // Every load before the first store is from plain memory (no side effects), so
   // they may run in any order; anything else runs the original.
@@ -86,8 +87,7 @@ void hle_fn_803EB000(Cpu& c, GuestFn original) {
   const u8* p6 = ppc::host_span(c, r6, 0x3C);
   const u8* p14 = ppc::host_span(c, r14, 8);
   if (!p3 || !p6 || !p14) {
-    original(c);
-    return;
+    return false;
   }
   const u32 i0 = (be32(p3) & 0xFF) << 6, i1 = (be32(p3 + 4) & 0xFF) << 6, i2 = (be32(p3 + 8) & 0xFF) << 6;
   // fsub f0, f0, f0; three lfs; fcmpu cr1, f30, f0; beq cr1 (one matrix).
@@ -99,8 +99,7 @@ void hle_fn_803EB000(Cpu& c, GuestFn original) {
   const u8* m1 = one ? m0 : ppc::host_span(c, r5 + i1, 64);
   const u8* m2 = one ? m0 : ppc::host_span(c, r5 + i2, 64);
   if (!m0 || !m1 || !m2) {
-    original(c);
-    return;
+    return false;
   }
   const std::uint64_t t0 = c.ticks;
   ppc::sem::set_cr_field(c, 1, cr1);
@@ -188,7 +187,155 @@ void hle_fn_803EB000(Cpu& c, GuestFn original) {
   c.fpr[21] = {f21.p0, f21.p1};
   c.fpr[22] = {f22.p0, f22.p1};
   c.fpr[23] = {f23.p0, f23.p1};
-  c.ticks = tail + 29;  // through the blr; hle_call returns to LR
+  c.ticks = tail + 29;  // through the blr
+  return true;
+}
+
+void hle_fn_803EB000(Cpu& c, GuestFn original) {
+  Hardware* const hw = hardware_of(c);
+  if (hw) hw->gp_defer(true);  // Q6: the GP reads its bursts in one piece (Hardware::gp_defer)
+  const bool done = run_803EB000(c);
+  if (hw) hw->gp_defer(false);
+  if (!done) original(c);
+}
+
+namespace {
+
+// Q6: a safe point where translated code has one (before a back edge's branch,
+// taken or not; a function's entry): rt.safepoint when c.ticks >= c.next_event,
+// with c.pc there and every register in c.
+enum class Safe { Go, Ran, Leave };
+Safe safe_point(Cpu& c, u32 at) {
+  if (c.ticks < c.next_event) return Safe::Go;
+  const std::uint64_t t = c.ticks;
+  c.pc = at;
+  c.hooks->safepoint(c);
+  if (g_unwinding || c.pc != at) {
+    // Translated code would leave or resume elsewhere: leave, and the dispatcher
+    // goes on at c.pc (the original's remains run in the interpreter).
+    g_unwinding = true;
+    return Safe::Leave;
+  }
+  return c.ticks == t ? Safe::Go : Safe::Ran;  // Ran: an interrupt handler ran and came back here
+}
+
+// Whether the state fn_803EB000 and its loop are written for holds.
+bool fp_state_fits(const Cpu& c) {
+  const u32 g = c.spr[ppc::spr::GQR0];
+  return !g_entry_hook && (c.msr & ppc::msr::FP) && ppc::fp::fast_model(c.fpscr) && ((g >> 16) & 7) < 4 &&
+         (g & 7) < 4;
+}
+
+}  // namespace
+
+// fn_803EA3EC (hle_game.h): its prologue, the loop (fn_803EB000 natively, then
+// the normal and the second matrix loads), its epilogue; the safe points before
+// the bdnz (every iteration) and at fn_803EB000's entry where translated code has
+// them. The loop head is instruction 23, its body 28 instructions plus the
+// callee's, the epilogue 19.
+void hle_fn_803EA3EC(Cpu& c, GuestFn original) {
+  constexpr u32 kBack = 0x803EA4B0u, kCallee = 0x803EB000u, kRet = 0x803EA448u;
+  const u32 n = c.gpr[4], r1 = c.gpr[1];
+  if (!fp_state_fits(c) || n == 0 || n > 4096 || !ppc::host_span(c, r1 - 0x7C, 0x84)) {
+    original(c);
+    return;
+  }
+  static constexpr u8 kSaved[14] = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 31, 30, 29};
+  // mflr r0; stw r0, 4(r1); stwu r1, -0x7c(r1); stfd f14-f24, f31, f30, f29;
+  // stw r14, 0x78(r1); lis/addi r14 = 0x8062C750; li r10, 0; mtctr r4.
+  const std::uint64_t t0 = c.ticks;
+  c.gpr[0] = c.lr;
+  ppc::write32(c, r1 + 4, c.gpr[0]);
+  const u32 sp = r1 - 0x7C;
+  ppc::write32(c, sp, r1);
+  c.gpr[1] = sp;
+  for (u32 k = 0; k < 14; ++k) ppc::write64(c, sp + 8 + 8 * k, c.fpr[kSaved[k]].ps0);
+  ppc::write32(c, sp + 0x78, c.gpr[14]);
+  c.gpr[14] = 0x8062C750u;
+  c.gpr[10] = 0;
+  c.ctr = n;
+  c.ticks = t0 + 22;
+  Hardware* const hw = hardware_of(c);
+  for (;;) {
+    // bl fn_803EB000, and the callee's entry's safe point.
+    c.ticks += 1;
+    c.lr = kRet;
+    switch (safe_point(c, kCallee)) {
+      case Safe::Leave: return;
+      case Safe::Ran:
+        if (!fp_state_fits(c)) return void(g_unwinding = true);
+        break;
+      case Safe::Go: break;
+    }
+    if (hw) hw->gp_defer(true);  // Q6: the GP reads this pass's bursts before the back edge's safe point
+    if (!run_803EB000(c)) {  // the original runs there instead, from the dispatcher
+      if (hw) hw->gp_defer(false);
+      c.pc = kCallee;
+      g_unwinding = true;
+      return;
+    }
+    // Back at 0x803EA448: 27 instructions, j from 1, in program order.
+    const std::uint64_t tb = c.ticks;
+    auto pc = [&](u32 j) { return kRet + 4 * (j - 1); };
+    auto tk = [&](u32 j) { return tb + j; };
+    const u32 r14 = c.gpr[14], r4 = c.gpr[4];
+    Stores st{c, pipe_stores(c, hw, r4) ? hw : nullptr};
+    auto psq_st = [&](u32 j, u32 f) {
+      st.word(r4, ppc::fp::double_to_single_ftz(c.fpr[f].ps0), pc(j), tk(j));
+      st.word(r4 + 4, ppc::fp::double_to_single_ftz(c.fpr[f].ps1), pc(j), tk(j));
+    };
+    auto stfs = [&](u32 j, u32 f) { st.word(r4, ppc::fp::double_to_single(c.fpr[f].ps0), pc(j), tk(j)); };
+    c.pc = pc(1);
+    c.ticks = tk(1);
+    c.gpr[12] = ppc::read32(c, r14 + 8);  // lwz r12, 8(r14)
+    st.word(r4, c.gpr[12], pc(2), tk(2));  // stw r12, 0(r4)
+    st.byte(r4, c.gpr[11], pc(3), tk(3));  // stb r11, 0(r4)
+    psq_st(4, 14);
+    stfs(5, 15);
+    psq_st(6, 20);
+    stfs(7, 21);
+    psq_st(8, 22);
+    stfs(9, 23);
+    c.gpr[11] = c.gpr[10] * 12 + 0x78;  // mulli r11, r10, 12; addi r11, r11, 0x78
+    c.fpr[4].ps0 = ppc::fp::sub(c.fpr[4].ps0, c.fpr[4].ps0, Prec::Double, c.fpscr);  // fsub f4, f4, f4
+    c.pc = pc(13);
+    c.ticks = tk(13);
+    c.gpr[12] = ppc::read32(c, r14 + 4);  // lwz r12, 4(r14)
+    st.word(r4, c.gpr[12], pc(14), tk(14));
+    st.byte(r4, c.gpr[11], pc(15), tk(15));
+    psq_st(16, 14);
+    stfs(17, 15);
+    stfs(18, 4);
+    psq_st(19, 20);
+    stfs(20, 21);
+    stfs(21, 4);
+    psq_st(22, 22);
+    stfs(23, 23);
+    stfs(24, 4);
+    c.gpr[3] += 0x10;
+    c.gpr[10] += 1;
+    if (hw) hw->gp_defer(false);
+    c.ticks = tk(26);
+    switch (safe_point(c, kBack)) {  // the back edge's (an interrupt handler that ran counted its own)
+      case Safe::Leave: return;
+      case Safe::Ran:
+        if (!fp_state_fits(c)) return void(g_unwinding = true);
+        break;
+      case Safe::Go: break;
+    }
+    c.ticks += 1;
+    if (--c.ctr == 0) break;  // bdnz
+  }
+  // lwz r0, 0x80(r1); mtlr r0; lfd f14-f24, f31, f30, f29; lwz r14, 0x78(r1);
+  // addi r1, r1, 0x7c; blr (hle_call returns to LR).
+  const std::uint64_t te = c.ticks;
+  c.pc = 0x803EA4B4u;
+  c.gpr[0] = ppc::read32(c, sp + 0x80);
+  c.lr = c.gpr[0];
+  for (u32 k = 0; k < 14; ++k) c.fpr[kSaved[k]].ps0 = ppc::read64(c, sp + 8 + 8 * k);
+  c.gpr[14] = ppc::read32(c, sp + 0x78);
+  c.gpr[1] = sp + 0x7C;
+  c.ticks = te + 19;
 }
 
 }  // namespace mvp::rt

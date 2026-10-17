@@ -729,6 +729,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   setup_boot_environment(*g.m, *g.disc);
   g.hw = std::make_unique<Hardware>(&g.m->cpu(), g.m->mem1(), Machine::kMem1Size);
   g.hw->set_wgp_state(wasm_wgp_state());  // P2: the translated code appends to the write-gather pipe itself
+  set_wasm_mem1(g.m->mem1(), Machine::kMem1Size);  // Q6: and reads and writes MEM1 directly
   g.timed = std::make_unique<TimedSource>(g.disc->image.get());
   if (g_io_logging) g.timed->log = &g_io_log;
   g.hw->set_disc(g.timed.get());
@@ -910,11 +911,11 @@ EMSCRIPTEN_KEEPALIVE void mvp_set_threaded(int on) {
 EMSCRIPTEN_KEEPALIVE int mvp_threaded() { return g.threaded ? 1 : 0; }
 // Development (P2): the render thread's waiting (render_thread.h, render_tune).
 EMSCRIPTEN_KEEPALIVE void mvp_render_tune(double fence_spin_us, double render_spin_ms, int publish_kib,
-                                          int sync_fences) {
+                                          int sync_fences, int copies) {
 #ifdef MVP_WEB_THREADS
-  web::render_tune(fence_spin_us, render_spin_ms, publish_kib, sync_fences);
+  web::render_tune(fence_spin_us, render_spin_ms, publish_kib, sync_fences, copies);
 #else
-  (void)fence_spin_us, (void)render_spin_ms, (void)publish_kib, (void)sync_fences;
+  (void)fence_spin_us, (void)render_spin_ms, (void)publish_kib, (void)sync_fences, (void)copies;
 #endif
 }
 

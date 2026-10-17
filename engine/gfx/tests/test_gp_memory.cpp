@@ -81,6 +81,39 @@ TEST_CASE("the render thread's form: activate a range, contents for some lines")
   CHECK(g.view(0xFFFF, 2) == nullptr);  // outside memory
 }
 
+TEST_CASE("Q6: copies stand for memory until they end") {
+  std::vector<std::uint8_t> mem(1 << 16, 0);
+  GpMemory g;
+  g.attach(mem.data(), static_cast<std::uint32_t>(mem.size()));
+  std::vector<std::uint8_t> copy(0x80, 0x22);
+  g.shadow(0x4000, 0x80, copy.data());  // two entries, as memory was when the command was issued
+  std::memset(mem.data() + 0x4000, 0x33, 0xC0);  // the guest's later writes (after the commands)
+  // A view inside the copies is the copy itself.
+  const std::uint8_t* v = g.view(0x4010, 0x40);
+  CHECK(v[0] == 0x22);
+  CHECK(v[0x3F] == 0x22);
+  // Partly: the copies laid over the view without them.
+  v = g.view(0x4070, 0x20);
+  CHECK(v[0x0F] == 0x22);  // 0x407F
+  CHECK(v[0x10] == 0x33);  // 0x4080: memory
+  // With a snapshot under the rest: both.
+  std::uint8_t line[32];
+  std::memset(line, 0x44, sizeof line);
+  g.set_lines(0x4080 >> 5, 1, line);
+  g.activate(0x4080, 0x20);
+  v = g.view(0x4060, 0x40);
+  CHECK(v[0x1F] == 0x22);
+  CHECK(v[0x20] == 0x44);
+  // The first entry ends (the guest writes there next): memory again; the second stays.
+  g.end_shadow(0x4000, 0x40);
+  CHECK(g.view(0x4000, 0x40) == mem.data() + 0x4000);
+  CHECK(g.view(0x4040, 1)[0] == 0x22);
+  g.end_shadow(0x4040, 0x40);
+  CHECK(g.view(0x4040, 1) == mem.data() + 0x4040);
+  CHECK(g.stats().shadows == 1);
+  CHECK(g.stats().shadow_bytes == 0x80);
+}
+
 TEST_CASE("the GX processor reads vertex arrays as the GP sees them") {
   // Positions f32 xyz by 8-bit index at 0x1000; the game flushed (1, 1, 0) for
   // each vertex, then wrote (2, 2, 0) (the next sprite's, still in the cache).

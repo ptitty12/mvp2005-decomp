@@ -246,6 +246,8 @@ const std::vector<HleEntry>& hle_table() {
       // Q4: the hottest game functions, natively (runtime/hle_game.h).
       {"fn_803EB000", &hle_fn_803EB000, "blends skinning matrices and loads the result into XF (natively)",
        0x803EB000u, HleKind::Native},
+      {"fn_803EA3EC", &hle_fn_803EA3EC, "the skinning loop around fn_803EB000 (natively)", 0x803EA3ECu,
+       HleKind::Native},
     };
     // Gameplay mod sites (hook API v1, runtime/mod_hooks.h): a Before hook each,
     // calling whatever handler a mod bound there (nothing when none is bound).

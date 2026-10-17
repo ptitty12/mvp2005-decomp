@@ -53,7 +53,7 @@ static void install_fp_handler(Machine& m) {
   m.set_real_mode(true);  // the vector runs at its physical address
 }
 
-static void run_case(bool inline_ops) {
+static void run_case(bool inline_ops, bool mem1 = false) {
   xlat::synth::Program prog = xlat::synth::make();
   auto syms = xlat::SymbolTable::parse(prog.symbols);
   auto dol = vfs::Dol::parse(prog.dol);
@@ -90,6 +90,11 @@ static void run_case(bool inline_ops) {
   WasmLoadStats ls;
   REQUIRE_MESSAGE(load_wasm_module(mod, &ls, &err), err);
   REQUIRE_FALSE(g_native.empty());
+  // Q6: the helpers' own MEM1 path (env.mem1), against the interpreter's page table.
+  struct Mem1 {
+    explicit Mem1(Machine* m) { if (m) set_wasm_mem1(m->mem1(), Machine::kMem1Size); }
+    ~Mem1() { set_wasm_mem1(nullptr, 0); }
+  } mem1_view(mem1 ? &nat : nullptr);
 
   std::uint64_t unwinds = g_unwinds, inframe = g_inframe_resumes, entries = g_resume_entries,
                 interpreted = g_interpreted;
@@ -121,6 +126,11 @@ TEST_CASE("wasm-emitted synthetic program matches the interpreter in lockstep (i
 
 TEST_CASE("wasm-emitted synthetic program matches the interpreter in lockstep (runtime helpers only)") {
   run_case(false);
+}
+
+TEST_CASE("Q6: the same with the memory helpers' own MEM1 path") {
+  run_case(true, true);
+  run_case(false, true);
 }
 
 // E5c: in wasm-emitted code too, the frame poll stops the run before it consumes

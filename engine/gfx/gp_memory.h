@@ -54,13 +54,33 @@ class GpMemory {
 
   bool active_line(std::uint32_t line) const { return line < lines_ && gen_of_[line] == gen_; }
 
+  // Q6: copies (the threaded engine's render thread, web/wasm/render_thread.cpp).
+  // When a command that reads memory is issued, the emulation may send a copy of
+  // what it reads (whole 64-byte entries) instead of making the guest's next
+  // write there wait for the render thread; the copy stays until the guest
+  // writes there, and the emulation sends end_shadow before that write. Until
+  // then the copy holds what view() gives without it (the emulation copies only
+  // entries where the GP sees memory as it is: no snapshot over them, or one that
+  // memory still matches; a later snapshot takes the same bytes, and so does
+  // memory after a field), so view() takes it while memory itself may already
+  // hold the guest's later writes. Never used inline: the renderer reads memory
+  // as it is.
+  static constexpr std::uint32_t kShadowShift = 6;  // ppc::kGpShift
+  void shadow(std::uint32_t addr, std::uint32_t len, const std::uint8_t* data);
+  void end_shadow(std::uint32_t addr, std::uint32_t len);
+
   // The GP's view of [addr, addr + len) (physical; null if outside memory):
   // memory itself where no snapshot covers it, else a copy with the snapshots
   // laid over it, valid until the next view() of the same slot.
   const std::uint8_t* view(std::uint32_t addr, std::uint32_t len, int slot = 0) {
     addr &= 0x01FFFFFFu;
     if (!live_ || addr > size_ || len > size_ - addr) return nullptr;
-    if (!len || !any_active_) return live_ + addr;
+    if (!len) return live_ + addr;
+    if (shadows_) {  // Q6: copies
+      for (std::uint32_t p = addr >> kPageShift, e = (addr + len - 1) >> kPageShift; p <= e; ++p)
+        if (shadow_page_[p]) return shadowed(addr, len, slot);
+    }
+    if (!any_active_) return live_ + addr;
     for (std::uint32_t p = addr >> kPageShift, e = (addr + len - 1) >> kPageShift; p <= e; ++p)
       if (page_gen_[p] == gen_) return overlay(addr, len, slot);
     return live_ + addr;
@@ -71,11 +91,20 @@ class GpMemory {
     std::uint64_t overlays = 0;                     // views that laid snapshots over memory
     std::uint64_t overlaid_lines = 0;               // lines those views took from snapshots
     std::uint64_t drops = 0;                        // snapshots ended by writes without the cache
+    std::uint64_t shadows = 0, shadow_bytes = 0;     // Q6: copies received (and their bytes)
+    std::uint64_t shadow_views = 0;                 // Q6: views that took copies
   };
   const Stats& stats() const { return stats_; }
 
  private:
   const std::uint8_t* overlay(std::uint32_t addr, std::uint32_t len, int slot);
+  const std::uint8_t* plain_view(std::uint32_t addr, std::uint32_t len, int slot) {
+    if (!any_active_) return live_ + addr;
+    for (std::uint32_t p = addr >> kPageShift, e = (addr + len - 1) >> kPageShift; p <= e; ++p)
+      if (page_gen_[p] == gen_) return overlay(addr, len, slot);
+    return live_ + addr;
+  }
+  const std::uint8_t* shadowed(std::uint32_t addr, std::uint32_t len, int slot);
   void mark(std::uint32_t first_line, std::uint32_t last_line);
 
   const std::uint8_t* live_ = nullptr;
@@ -86,6 +115,11 @@ class GpMemory {
   std::vector<std::uint32_t> gen_of_;      // per line: the generation of its last flush, 0 none
   std::vector<std::uint32_t> page_gen_;    // per 4 KiB: the latest generation of a flush in it
   std::vector<std::uint8_t> scratch_[2];
+  // Q6: the copies, at their addresses; per 64-byte entry whether it holds one;
+  // per 4 KiB page how many entries do; how many in all.
+  std::vector<std::uint8_t> shadow_, shadow_valid_;
+  std::vector<std::uint16_t> shadow_page_;
+  std::uint32_t shadows_ = 0;
   Stats stats_;
 };
 

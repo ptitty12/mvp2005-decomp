@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 
 #include "ppc/fp.h"
 
@@ -406,4 +407,68 @@ TEST_CASE("host-arithmetic shortcuts give exactly the results of the exact code"
         ++checked;
       }
   MESSAGE("shortcut comparisons: ", checked);
+}
+
+// Q4, Q6 (F1): the fast model's rules, the engine's default with FPSCR[RN] = 0 and
+// NI = 1: one IEEE double operation per step in a fixed order, single results
+// rounded to f32, NaN results the default NaN, subnormal results kept (no flush).
+TEST_CASE("the fast model: host IEEE steps, singles rounded, NaNs canonical, no flush") {
+  g_model = Model::Fast;
+  constexpr u32 kNI = 4;  // round to nearest, NI set
+  std::uint64_t s = 0x9E3779B97F4A7C15ull;
+  auto next = [&] {
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    return s;
+  };
+  auto pick = [&]() -> u64 {
+    const u64 r = next();
+    switch (r % 10) {
+      case 0: return r & kSign;                                        // +-0
+      case 1: return (r & kSign) | kExpMask;                           // +-inf
+      case 2: return (r & kSign) | kExpMask | ((r >> 12) & kFracMask) | 1;  // NaN (any payload)
+      case 3: return (r & (kSign | kFracMask));                        // subnormal double
+      case 4: return bits(static_cast<double>(flt(static_cast<u32>(r >> 9) & 0x807FFFFFu)));  // subnormal single
+      case 5: return bits(static_cast<double>(flt((static_cast<u32>(r >> 7) & 0x80FFFFFFu) | 0x00800000u)));  // tiny single
+      case 6: return r;                                                // any double
+      default: return bits(static_cast<double>(flt(static_cast<u32>(r >> 5) & 0xBFFFFFFFu)));  // a single, |x| < 2
+    }
+  };
+  auto expect = [](double r, bool single) -> u64 {
+    if (r != r) return kDefaultNaN;
+    if (single) r = static_cast<double>(static_cast<float>(r));
+    return bits(r);
+  };
+  int failures = 0;
+  auto check = [&](u64 got, u64 want, const char* what) {
+    if (got != want && ++failures <= 5) MESSAGE(what, ": got ", got, " want ", want);
+  };
+  for (int k = 0; k < 200000; ++k) {
+    const u64 a = pick(), b = pick(), c = pick();
+    const double da = dbl(a), db = dbl(b), dc = dbl(c);
+    for (bool single : {false, true}) {
+      const Prec p = single ? Prec::Single : Prec::Double;
+      check(add(a, b, p, kNI), expect(da + db, single), "add");
+      check(sub(a, b, p, kNI), expect(da - db, single), "sub");
+      check(mul(a, c, p, kNI), expect(da * dc, single), "mul");
+      check(div(a, b, p, kNI), expect(da / db, single), "div");
+      const double prod = da * dc;
+      check(madd(a, c, b, false, false, p, kNI), expect(prod + db, single), "madd");
+      check(madd(a, c, b, true, false, p, kNI), expect(prod - db, single), "msub");
+      check(madd(a, c, b, false, true, p, kNI), expect(-(prod + db), single), "nmadd");
+      check(madd(a, c, b, true, true, p, kNI), expect(-(prod - db), single), "nmsub");
+    }
+    check(force25(c, kNI), c, "force25");
+    check(round_to_single(a, kNI), expect(da, true), "frsp");
+    check(reciprocal_estimate(b, kNI), expect(1.0 / db, true), "fres");
+    check(rsqrt_estimate(b, kNI), expect(1.0 / std::sqrt(db), false), "frsqrte");
+  }
+  CHECK(failures == 0);
+  // No flush: a single product just below 2^-126 is the subnormal IEEE gives.
+  CHECK(mul(bits(0x1p-126), bits(0.5), Prec::Single, kNI) == bits(0x1p-127));
+  CHECK(add(bits(0x1p-1022), bits(-0x1p-1023), Prec::Double, kNI) == bits(0x1p-1023));
+  // Any other FPSCR keeps the exact model (NI clear: no flush either way; round toward zero).
+  CHECK(mul(bits(0x1p-126), bits(0.5), Prec::Single, kNI | 1) == 0);  // exact model, NI: flushed
+  g_model = Model::Exact;
 }

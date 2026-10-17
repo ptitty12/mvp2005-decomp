@@ -118,6 +118,20 @@ class Hardware : public ppc::Io {
   // the poll detector's run for (as write() does: WgpState), while `fast` is set
   // (nothing is logged): what write() does for it from there on.
   void wgp_store_counted(u32 value, int size) { wgp_write(value, size); }
+  // Q6: host code that runs a game function natively (runtime/hle_game.h) may
+  // let the GP read its bursts at once: between gp_defer(true) and
+  // gp_defer(false) a completed burst still goes to memory and moves the CPU
+  // FIFO's write pointer, and the GP reads everything written at the end. No
+  // guest code runs in between and the effects (the PE token, the finish flag,
+  // the CP's pointers) land in the state before the next safe point either way,
+  // so the guest sees the same; the commands are parsed in one piece.
+  void gp_defer(bool on) {
+    gp_defer_ = on;
+    if (!on && gp_deferred_) {
+      gp_deferred_ = false;
+      gp_run();
+    }
+  }
   // Q4: a store of `size` bytes (`value` right-aligned, masked to its size) to the
   // write-gather pipe, at an address write() takes for it, by host code that runs
   // a game function natively (runtime/hle_game.h) for the instruction at `pc`,
@@ -300,11 +314,13 @@ class Hardware : public ppc::Io {
   u32 cp32(u32 lo_off) const { return cp16(lo_off) | u32(cp16(lo_off + 2)) << 16; }
   void set_cp32(u32 lo_off, u32 v);
   u32 cp_status() const;
+  bool cp_cause() const;  // Q6: the CP interrupt's cause (a watermark or the breakpoint, enabled)
   u32 gp_distance() const;
   bool gp_at_breakpoint() const;
   WgpState own_wgp_;            // the write-gather buffer (P2: or the runtime's, set_wgp_state)
   WgpState* wgp_ = &own_wgp_;
   std::uint64_t wgp_dropped_ = 0;
+  bool gp_defer_ = false, gp_deferred_ = false;  // Q6: gp_defer
   std::uint64_t gp_bursts_ = 0;
   std::uint64_t fifo_bytes_ = 0, draw_dones_ = 0;
   static constexpr std::size_t kFifoKeep = 1u << 20;

@@ -290,6 +290,10 @@ void Hardware::wgp_burst() {
   }
   set_reg(0xCC003014u, pa | wrap, 4);
   if (cp16(0x02) & 0x10) set_cp32(0x34, pa);  // linked: the GP's write pointer follows
+  if (gp_defer_) {  // Q6: read at gp_defer(false)
+    gp_deferred_ = true;
+    return;
+  }
   gp_run();
 }
 
@@ -298,16 +302,25 @@ void Hardware::gp_run() {
   u32 base = cp32(0x20) & 0x03FFFFE0u, end = cp32(0x24) & 0x03FFFFFFu;
   u32 wp = cp32(0x34) & 0x03FFFFE0u, rp = cp32(0x38) & 0x03FFFFE0u;
   bool moved = false;
+  const bool bp = (cp16(0x02) & 0x2) != 0;
   while (rp != wp && !gp_at_breakpoint()) {
-    if (rp + 32 > mem1_size_) throw StopRun{"GX FIFO read outside MEM1"};
-    gp_consume(mem1_ + rp, 32);
-    rp += 32;
+    // Q6: everything up to the write pointer at once when no wrap and no
+    // breakpoint is in the way (the breakpoint stops the GP at a burst).
+    const u32 n = (!bp && wp > rp && wp - 32 <= end) ? wp - rp : 32;
+    if (rp + n > mem1_size_) throw StopRun{"GX FIFO read outside MEM1"};
+    gp_consume(mem1_ + rp, n);
+    rp += n;
     if (rp > end) rp = base;
     set_cp32(0x38, rp);
     moved = true;
   }
-  if (moved || gp_at_breakpoint()) kick();
-  if (gfx_ && gp_at_breakpoint()) gfx_->gp_sync();  // P2: the guest can see where the GP stopped
+  // Q6: the GP's progress raises nothing but the CP interrupt (a watermark or
+  // the breakpoint, each with its enable): a safe point is due only when that
+  // cause is up. (Any other cause kicks where it is raised; a safe point with
+  // nothing to deliver changes nothing, so the guest sees the same.)
+  const bool at_bp = gp_at_breakpoint();
+  if ((moved || at_bp) && cp_cause()) kick();
+  if (gfx_ && at_bp) gfx_->gp_sync();  // P2: the guest can see where the GP stopped
 }
 
 void Hardware::gp_consume(const u8* bytes, std::size_t n) {
@@ -318,7 +331,7 @@ void Hardware::gp_consume(const u8* bytes, std::size_t n) {
   if (fx.token_int) pe_ctrl_ |= 0x4;
   if (fx.draw_done) {
     pe_ctrl_ |= 0x8;
-    ++draw_dones_;
+    draw_dones_ += fx.draw_dones;
   }
   if (fx.token_int || fx.draw_done) kick();
   // P2: from here the guest can know that the GP consumed every command so far.
@@ -707,6 +720,13 @@ u32 Hardware::vi_current_line() const {
   return static_cast<u32>(((now() - frame_start_tb_) % kFrameTb) / line_tb()) + 1;
 }
 
+bool Hardware::cp_cause() const {
+  const u32 cr = cp16(0x02);
+  if (!(cr & (0x4 | 0x8 | 0x20))) return false;  // Q4: the CP status only when it can raise one
+  const u32 sr = cp_status();
+  return ((sr & 0x1) && (cr & 0x4)) || ((sr & 0x2) && (cr & 0x8)) || ((sr & 0x10) && (cr & 0x20));
+}
+
 u32 Hardware::pi_cause() const {
   u32 cause = 0x10000;  // RSWST: the reset switch is not pressed
   for (int n = 0; n < 4; ++n) {
@@ -719,10 +739,7 @@ u32 Hardware::pi_cause() const {
   if (((di_sr_ & 0x4) && (di_sr_ & 0x2)) || ((di_sr_ & 0x10) && (di_sr_ & 0x8)) || ((di_sr_ & 0x40) && (di_sr_ & 0x20)) ||
       ((di_cvr_ & 0x4) && (di_cvr_ & 0x2)))
     cause |= 0x4;  // DI
-  if (const u32 cr = cp16(0x02); cr & (0x4 | 0x8 | 0x20)) {  // Q4: the CP status only when it can raise one
-    const u32 sr = cp_status();
-    if (((sr & 0x1) && (cr & 0x4)) || ((sr & 0x2) && (cr & 0x8)) || ((sr & 0x10) && (cr & 0x20))) cause |= 0x800;  // CP
-  }
+  if (cp_cause()) cause |= 0x800;  // CP
   if ((pe_ctrl_ & 0x4) && (pe_ctrl_ & 0x1)) cause |= 0x200;  // PE token
   if ((pe_ctrl_ & 0x8) && (pe_ctrl_ & 0x2)) cause |= 0x400;  // PE finish
   if (((dsp_cr_ & 0x08) && (dsp_cr_ & 0x10)) || ((dsp_cr_ & 0x20) && (dsp_cr_ & 0x40)) ||

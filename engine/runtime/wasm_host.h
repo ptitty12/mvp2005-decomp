@@ -29,4 +29,9 @@ bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::stri
 struct WgpState;
 WgpState* wasm_wgp_state();
 
+// Q6: MEM1 of the machine whose Cpu runs translated modules (xlat::WasmMem1Layout):
+// the modules' memory helpers read and write [0x80000000, +size) there directly.
+// Call once the machine exists, before its code runs; null turns it off.
+void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size);
+
 }  // namespace mvp::rt

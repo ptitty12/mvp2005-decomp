@@ -32,10 +32,15 @@
 //   step, in the order written: a*c, then +-b (no fused multiply-add), then the
 //   negation of the nm forms; no force25;
 // - a single-precision result is that double rounded to single (round to
-//   nearest), as a double; a result below the normal range of its precision
-//   (single: 2^-126, double: 2^-1022) flushes to a signed zero (NI);
+//   nearest), as a double; results below the normal range stay as IEEE gives
+//   them (Q6: NI's flush to zero is not modeled; IEEE subnormals are the same
+//   on every host);
 // - a NaN result is the default NaN 0x7FF8000000000000 (operand payloads do not
-//   propagate: hosts differ there);
+//   propagate: hosts differ there). Q6: this stays per result, not only where
+//   bits leave the registers: lfd/stfd, lfs/stfs and psq_l/psq_st move NaN bit
+//   patterns exactly (copies through FP registers of integer data such as -1),
+//   so a store cannot tell a loaded NaN, which it must keep, from a computed one,
+//   whose bits differ between hosts; the check costs about 1 %, the flush 5 %;
 // - reciprocal and reciprocal square root estimates: 1/b rounded to single, and
 //   1/sqrt(b) in double.
 // Every step is IEEE round to nearest without flush to zero, so the results are
@@ -67,17 +72,14 @@ inline constexpr u64 kDefaultNaN = 0x7FF8000000000000ull;
 
 // Q4, F1: the fast model's last step for the double r one IEEE operation gave
 // (fp.cpp's arithmetic, and host code that runs a game function natively,
-// runtime/hle_game.cpp): rounded to single for Single, a result below the normal
-// range of its precision flushed to a signed zero, a NaN made the default NaN.
+// runtime/hle_game.cpp): a NaN made the default NaN, rounded to single for
+// Single (Q6: no flush below the normal range).
 inline double to_f64(u64 x) { return std::bit_cast<double>(x); }
 inline u64 to_bits(double d) { return std::bit_cast<u64>(d); }
 inline u64 fast_result(double r, Prec p) {
   if (r != r) return kDefaultNaN;
   if (p == Prec::Single) r = static_cast<double>(static_cast<float>(r));
-  u64 b = to_bits(r);
-  const u64 min_normal = p == Prec::Single ? 0x3810000000000000ull : 0x0010000000000000ull;  // 2^-126, 2^-1022
-  if ((b & ~kSign) < min_normal) b &= kSign;  // a signed zero
-  return b;
+  return to_bits(r);
 }
 
 inline bool is_nan(u64 x) { return (x & ~kSign) > kExpMask; }

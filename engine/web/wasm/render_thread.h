@@ -15,7 +15,11 @@
 // the ring position after the command). Every guest write path (the
 // interpreter's and the translated module's stores, the write-gather pipe's
 // bursts, DI and ARAM DMA) checks the table and, where the render thread has
-// not yet passed that position, waits for it (RenderRing::wait_read). A
+// not yet passed that position, waits for it (RenderRing::wait_read). Q6: what
+// a command reads of vertex arrays, indexed XF loads, palettes and preloads goes
+// into the ring as a copy instead, ahead of the command (gfx/gp_memory.h,
+// GpMemory::shadow), and a guest write there ends the copy (a record ahead of
+// the write) rather than waiting; textures and EFB-copy ranges are marked. A
 // primitive too large for the ring is read in place, behind a fence. The
 // guest's GPU sync points (runtime/gx_fifo.h, GfxObserver::gp_sync: draw done,
 // PE tokens, CP status reads, a CP breakpoint) can be fences as well
@@ -56,8 +60,10 @@ bool render_thread_running();
 // polling for records (ms), the publishing step (KiB); negative or 0: unchanged.
 // `sync_fences` 1: also wait at the guest's GPU sync points (draw done, tokens,
 // ...), 0: only where a guest write meets memory the render thread still reads
-// (the default); -1: unchanged.
-void render_tune(double fence_spin_us, double render_spin_ms, int publish_kib, int sync_fences);
+// (the default); -1: unchanged. `copies` (Q6) 1: what commands read of vertex
+// arrays, XF loads, palettes and preloads goes to the render thread as a copy
+// (the default), 0: guest writes there wait for it instead; -1: unchanged.
+void render_tune(double fence_spin_us, double render_spin_ms, int publish_kib, int sync_fences, int copies);
 // Development (Q2): a slower machine, simulated: after each stretch of work the
 // render thread spins (factor - 1) times as long (1: off).
 void render_host_slow(double factor);
