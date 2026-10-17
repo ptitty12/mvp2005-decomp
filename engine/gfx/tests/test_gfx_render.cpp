@@ -473,6 +473,63 @@ TEST_CASE("internal resolution: 2x and 3x frames and copies show the 1x picture 
   CHECK(gpu().errors() == 0);
 }
 
+// Q7: the game copies a block of the EFB to a texture and draws it back in every
+// frame (its top-left 128 x 128 save and restore). A change of scale replaces
+// every EFB-copy texture; the draws that sample the copy must see the new copy at
+// once, not the texture it replaced (in the browser a bind group cached for the
+// old texture could be found again for the new one, and the block stayed frozen).
+TEST_CASE("an EFB copy redone at a new scale is the one sampled (Q7)") {
+  Scene sc;
+  // One frame: a 64 x 64 square of `rgba` at (0, 0), copied (RGBA8) to 0x60000,
+  // then drawn from that copy over (300, 200)-(428, 328); the XFB copy ends it.
+  auto frame = [&](u32 rgba) {
+    Stream s = base();
+    quad(s, 0, 0, 64, 64, rgba);
+    s.bp(bp::kEfbTL, 0);
+    s.bp(bp::kEfbWH, 63u | 63u << 10);
+    s.bp(bp::kXfbAddr, 0x60000 >> 5);
+    s.bp(bp::kTriggerCopy, ((6u & 7) << 1 | 6u >> 3) << 3 | 1u << 11);  // RGBA8, clear
+    s.xf(xf::kNumTexGens, {1});
+    s.xf(xf::kTexGen, {5u << 7});
+    s.xff(60 * 4, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});
+    s.cp(cp::kMatIndexA, 60u << 6);
+    s.bp(bp::kGenMode, 1u | 1u << 4);
+    s.bp(bp::kTref, 1u << 6);
+    s.bp(bp::kTevColorEnv, color_env(kZeroC, kZeroC, kZeroC, kTexC));
+    s.bp(bp::tex_reg(bp::kTexImage0, 0), 63u | 63u << 10 | 6u << 20);
+    s.bp(bp::tex_reg(bp::kTexImage3, 0), 0x60000 >> 5);
+    for (int k = 0; k < 2; ++k) {
+      s.bp(static_cast<u8>(bp::kSuSSize + 2 * k), 63);
+      s.bp(static_cast<u8>(bp::kSuTSize + 2 * k), 63);
+    }
+    quad(s, 300, 200, 428, 328, 0xFFFFFFFF);
+    copy_xfb(s, 0x000000FF);  // the end of the frame: a new scale starts after it
+    s.run(sc.p);
+  };
+  struct Step {
+    u32 scale, rgba;
+    int r, g, b;
+  };
+  // Scale changes in both directions, and a frame at the same scale between them.
+  const Step steps[] = {{1, 0xFFFF00FF, 255, 255, 0}, {2, 0x00FFFFFF, 0, 255, 255}, {2, 0xFF00FFFF, 255, 0, 255},
+                        {3, 0x00FF00FF, 0, 255, 0},   {1, 0xFF0000FF, 255, 0, 0},   {2, 0x0000FFFF, 0, 0, 255}};
+  u32 drawn_at = 1;
+  for (const Step& st : steps) {
+    CAPTURE(st.scale);
+    CAPTURE(st.rgba);
+    sc.r.set_scale(st.scale);
+    frame(st.rgba);  // drawn at the scale that was current when it started
+    const Renderer::Frame* f = sc.r.xfb(0x80000);
+    REQUIRE(f != nullptr);
+    REQUIRE(f->width == 640 * drawn_at);
+    auto img = sc.r.read_frame(*f);
+    CHECK(near(px(img, f->width, 360 * drawn_at, 260 * drawn_at), st.r, st.g, st.b));
+    drawn_at = sc.r.scale();  // the next frame's
+  }
+  CHECK(sc.r.stats().copy_textures_used == 6);
+  CHECK(gpu().errors() == 0);
+}
+
 TEST_CASE("generated TEV shaders compile for many configurations") {
   std::mt19937 rng(1234);
   int made = 0;

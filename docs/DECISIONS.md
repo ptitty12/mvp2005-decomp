@@ -478,6 +478,19 @@ Agents may propose entries under "Open questions"; only the owner moves them to 
 
   | 81 two-page games, 0 desyncs; each line equals native at its delay; WEB.md checkpoints unchanged; web shell 90/90. | merge of engine/q5b-pace
 
+- 2026-10-17 | **Q7: the frozen top-left block** (lead, under the owner's delegation; docs/engine/Q7_LOG.md). Owner report: "a sizable block [in the top left] is not updating or is in the wrong spot".
+  - **What the game does:** every frame of play it saves the EFB's top-left 128×128 to a texture, draws the ball-shadow map there, then restores it.
+  - **The bug:** the texture bind-group cache was keyed by WebGPU handle addresses.
+    - In the browser (emdawnwebgpu) a released view's address is reused at once.
+    - After any internal-scale change (Picture setting, Auto on fullscreen or resize, Auto stepping down on a busy GPU), the cache returned groups that sampled the dead textures.
+    - Result: the corner froze, along with shadows, player shading and the video board.
+  - **Q7-G1:** any renderer cache keyed by WebGPU handle addresses holds references to those handles.
+    - A replaced EFB-copy texture's entries are dropped.
+    - The pass rebinds after the cache frees groups.
+  - **Q7-T1:** the scale-change check runs whenever the renderer's copies, caches or scale handling change. It is `browser_check --actions ... --compare`: a mid-game Picture change compared with a fixed-scale run, top-left 128×128, mean ≤ 3. The worker presents the batch that stops a run.
+
+  | Before: region mean 32.8 → after 0.00 (pixel-identical); guest lines unchanged; netplay_check passes; msvc 48/49, emscripten 41/42 (+1 skip each), web shell 91/91. | merge of engine/q7-topleft
+
 ## Open questions for owner
 
 - 2026-10-14 | **K1c (OSInit, DVDInit): the name commit is held on one verify.py false positive (owner).** *Status (2026-10-14, claude-w2):* blockers 1 and 2 are resolved on `work/k1c-finish`; blocker 3 is new. Naming fn_8043188C OSInit and fn_80422FD8 DVDInit (`tools/goals/renames/k1c.tsv`, evidence there) makes dtk's SDK signatures rename 150 more symbols. work/k1c landed everything that is correct on its own: six contract commits, the BB2 overlay without its macro, fn_8042515C's parameter renamed, the .bss data splits of the two linked units (fstload.c: bb2Buf and __fstLoad's static block; EXIBios.c: Ecb), and stateBusy's switch table in dvd's split (without it dtk exports the static as `stateBusy_8042427C` and verify counts fn_8042427C as 100% -> 0%). Blockers:
