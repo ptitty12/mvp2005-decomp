@@ -117,6 +117,15 @@ struct WasmWgpLayout {
   static constexpr std::uint32_t kBuf = 0, kN = 32, kFast = 36, kLastRead = 40, kFastStores = 48;
 };
 
+// Q6: env.mem1, the address of the runtime's view of MEM1 (runtime/wasm_host.h,
+// set_wasm_mem1): {u32 base, u32 limit}. A guest access of up to 8 bytes at
+// 0x80000000 + t with t < limit is at host address base + t (MEM1 is mapped
+// there linearly, runtime/machine.h); limit 0 turns the path off. Offsets (the
+// runtime checks them):
+struct WasmMem1Layout {
+  static constexpr std::uint32_t kBase = 0, kLimit = 4;
+};
+
 // P2: env.gp_pages (ppc::g_gp_pages): one 32-bit entry per 2^kShift bytes of
 // the 32 MiB physical space, nonzero while the render thread has still to read
 // them (the runtime checks that it agrees: ppc/mem_access.h).

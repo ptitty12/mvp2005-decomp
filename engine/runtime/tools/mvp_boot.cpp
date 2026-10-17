@@ -334,6 +334,7 @@ int run_boot(const xlat::Inputs& in, int argc, char** argv) {
   Hardware hw(&m.cpu(), m.mem1(), Machine::kMem1Size, hw_cfg);
 #ifdef MVP_BOOT_WASM
   hw.set_wgp_state(wasm_wgp_state());  // P2: the translated code appends to the write-gather pipe itself
+  set_wasm_mem1(m.mem1(), Machine::kMem1Size);  // Q6: and reads and writes MEM1 directly
 #endif
   hw.set_disc(in.disc.image.get());
   SystemHooks hooks(&m, &hw);

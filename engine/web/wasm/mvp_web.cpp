@@ -696,6 +696,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   setup_boot_environment(*g.m, *g.disc);
   g.hw = std::make_unique<Hardware>(&g.m->cpu(), g.m->mem1(), Machine::kMem1Size);
   g.hw->set_wgp_state(wasm_wgp_state());  // P2: the translated code appends to the write-gather pipe itself
+  set_wasm_mem1(g.m->mem1(), Machine::kMem1Size);  // Q6: and reads and writes MEM1 directly
   g.timed = std::make_unique<TimedSource>(g.disc->image.get());
   if (g_io_logging) g.timed->log = &g_io_log;
   g.hw->set_disc(g.timed.get());

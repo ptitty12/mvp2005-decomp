@@ -32,6 +32,14 @@ static_assert(offsetof(WgpState, buf) == L::kBuf && offsetof(WgpState, n) == L::
                   offsetof(WgpState, fast) == L::kFast && offsetof(WgpState, last_read) == L::kLastRead &&
                   offsetof(WgpState, fast_stores) == L::kFastStores,
               "the translator's view of WgpState");
+// Q6: env.mem1 (set_wasm_mem1).
+struct Mem1View {
+  u32 base = 0, limit = 0;
+};
+Mem1View g_mem1;
+static_assert(offsetof(Mem1View, base) == xlat::WasmMem1Layout::kBase &&
+                  offsetof(Mem1View, limit) == xlat::WasmMem1Layout::kLimit,
+              "the translator's view of Mem1View");
 static_assert(ppc::kGpShift == xlat::WasmGpLayout::kShift && ppc::kGpEntries - 1 == xlat::WasmGpLayout::kMask,
               "the translator's view of ppc::g_gp_pages");
 
@@ -161,7 +169,7 @@ EMSCRIPTEN_KEEPALIVE void mvp_rt_tw(Cpu* c, u32 w, u32 pc) {
 // the table base, or -1 with the message in the console.
 EM_JS(int, mvp_js_instantiate,
       (const void* bytes, unsigned len, unsigned slots, unsigned unwinding, unsigned resume, unsigned hook,
-       unsigned wgp, unsigned gp_pages, double* times),
+       unsigned wgp, unsigned gp_pages, unsigned mem1, double* times),
       {
         var names = ["on_entry", "safepoint", "read8", "read16", "read32", "write8", "write16", "write32", "exec",
                      "call_indirect", "absolute_call", "resume", "hle_call", "hle_before", "trap", "rfi",
@@ -193,7 +201,8 @@ EM_JS(int, mvp_js_instantiate,
               resume: resume,
               entry_hook: hook,
               wgp: wgp,
-              gp_pages: gp_pages
+              gp_pages: gp_pages,
+              mem1: mem1
             }
           });
           var t2 = performance.now();
@@ -211,6 +220,11 @@ namespace mvp::rt {
 
 WgpState* wasm_wgp_state() { return &g_wgp; }
 
+void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size) {
+  g_mem1.base = static_cast<u32>(reinterpret_cast<std::uintptr_t>(base));
+  g_mem1.limit = base && size >= 8 ? size - 7 : 0;  // whole accesses of up to 8 bytes
+}
+
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error) {
   static_assert(sizeof(GuestFn) == 4, "wasm32: a function pointer is a table index");
   alignas(8) double times[2] = {0, 0};
@@ -219,7 +233,8 @@ bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::stri
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_resume)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_entry_hook)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_wgp)),
-                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)), times);
+                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)),
+                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), times);
   if (base < 0) {
     if (error) *error = "the translated module did not compile or instantiate (see the console)";
     return false;
