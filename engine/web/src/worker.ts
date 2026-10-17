@@ -530,7 +530,9 @@ function afterRun(ran: number, ms: number): boolean {
   }
   // Q5: a batch that made no new field (an online game waiting at a frame poll for the other
   // player's input) shows nothing new: it ends without presenting the same picture again.
-  const shown = ran > 0 || !firstFrame ? M!._mvp_present() : (M!._mvp_batch_end(), 0);
+  // Q7: the batch that stops the run (ran < 0: `fields`/`frames` reached) is shown too, so the
+  // last picture is the stop field's (browser_check's final screenshot and --compare).
+  const shown = ran !== 0 || !firstFrame ? M!._mvp_present() : (M!._mvp_batch_end(), 0);
   if (shown && !firstFrame) {
     firstFrame = true;
     post({ type: 'first-frame', fields: status().fields });

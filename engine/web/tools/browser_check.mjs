@@ -83,6 +83,15 @@
 //   --affinity HEXMASK  (Q2, Windows) the browser's processes run only on these logical processors (e.g.
 //              four efficiency cores, a weaker CPU), set once the page has loaded and again at the first frame
 //   --load N   (Q2) N busy processes (one thread each) at normal priority for the whole run
+//   --actions F:KIND[:ARG],...  (Q7) host-side changes in the middle of a run, once it reaches field F:
+//              resize:WxH (the page's viewport), picture:auto|1|2|3 (the Picture setting, as a player
+//              chooses it), fullscreen (the Fullscreen button: on, or off again), stats (the overlay)
+//   --compare PNG  (Q7) compare the final picture with PNG (another run's -final.png, same viewport and
+//              --dpr) over --compare-region x0,y0,x1,y1 in the console's 640 x 448 pixels (default
+//              0,0,128,128: the block the game saves and restores in every frame of play); the run fails
+//              when the region's mean difference per channel exceeds --compare-max (default 3). The
+//              scale-change check: the same script at a fixed scale (--params scale=3) to field F, then
+//              with --actions F0:picture:3 to F and --compare that run's -final.png (WEB.md)
 //
 // Exit status: 0 when every run reached its first frame (and its stop, if any),
 // 1 otherwise, 77 without a disc.
@@ -174,6 +183,13 @@ const keys = opt('--keys', '').split(',').filter(Boolean).map((k) => {
 const pads = opt('--pad', '').split(',').filter(Boolean).map((p) => {
   const [f, kind, index, value] = p.split(':');
   return { field: Number(f), kind, index: Number(index), value: value === undefined ? 1 : Number(value) };
+}).sort((a, b) => a.field - b.field);
+const compareRef = opt('--compare', '');  // Q7: a reference picture for the final one
+const compareRegion = opt('--compare-region', '0,0,128,128').split(',').map(Number);
+const compareMax = Number(opt('--compare-max', '3'));
+const actions = opt('--actions', '').split(',').filter(Boolean).map((a) => {  // Q7
+  const [f, kind, arg = ''] = a.split(':');
+  return { field: Number(f), kind, arg };
 }).sort((a, b) => a.field - b.field);
 const hide = opt('--hide', '') ? opt('--hide', '').split(':').map(Number) : null;
 const holdMs = Number(opt('--hold', '150'));  // how long --keys and --pad buttons stay down
@@ -427,6 +443,8 @@ async function runOnce(context, run) {
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
   let lastWindow = '', state = await mvp(), shotIndex = 0, keyIndex = 0, padIndex = 0, hidden = null;
+  let actionIndex = 0;
+  summary.actions = [];
   summary.keysPressed = [];
   summary.padEvents = [];
   // --screencast F:N: every frame Chrome composites (it sends one only when the page changed), with the
@@ -549,6 +567,32 @@ async function runOnce(context, run) {
       summary.padEvents.push({ ...ev, at: field, pageSaw: during });
       console.log(`gamepad ${ev.kind} ${ev.index} at field ${field}: page pad ${JSON.stringify(during)}`);
     }
+    while (actionIndex < actions.length && field >= actions[actionIndex].field) {  // Q7
+      const a = actions[actionIndex++];
+      if (a.kind === 'resize') {
+        const [w, h] = a.arg.split('x').map(Number);
+        await page.setViewportSize({ width: w, height: h });
+      } else if (a.kind === 'picture') {
+        await page.selectOption('#picture', a.arg);
+      } else if (a.kind === 'fullscreen') {
+        // On: the toolbar's button (a user gesture). Off: the page's own way out (the button is
+        // under the fullscreen stage then).
+        if (await page.evaluate(() => !!document.fullscreenElement)) await page.evaluate(() => document.exitFullscreen());
+        else await page.click('#fullscreen');
+        await page.waitForTimeout(300);
+      } else if (a.kind === 'stats') {
+        await page.click('#stats-toggle');
+      } else {
+        throw new Error(`--actions: unknown action ${a.kind}`);
+      }
+      const canvasBox = await page.evaluate(() => {
+        const c = document.getElementById('screen');
+        return { css: [c.clientWidth, c.clientHeight], attr: [c.width, c.height], dpr: window.devicePixelRatio,
+                 fullscreen: !!document.fullscreenElement };
+      });
+      summary.actions.push({ ...a, at: field, canvas: canvasBox });
+      console.log(`action ${a.kind}${a.arg ? ` ${a.arg}` : ''} at field ${field}: canvas ${JSON.stringify(canvasBox)}`);
+    }
     if (hide && !hidden && field >= hide[0]) {
       const before = (await mvp()).stats?.status.fields ?? 0;
       await page.evaluate(setHidden, true);
@@ -569,7 +613,7 @@ async function runOnce(context, run) {
     const wantStop = fields || frames;
     if (wantStop ? state.stopped
                  : (state.firstFrameMs !== undefined && shotIndex >= shots.length && keyIndex >= keys.length &&
-                    padIndex >= pads.length && (!hide || hidden) && (!audio || audioSamples.nonsilent > 0) &&
+                    padIndex >= pads.length && actionIndex >= actions.length && (!hide || hidden) && (!audio || audioSamples.nonsilent > 0) &&
                     (!screencast || summary.screencast) && (!traceAt || summary.trace))) break;
     await page.waitForTimeout(200);
   }
@@ -586,7 +630,15 @@ async function runOnce(context, run) {
   delete state.ioLog;
   if (state.stopped || state.firstFrameMs !== undefined) {
     const path = join(out, `${label}-r${run}-final.png`);
-    await page.locator('#screen').screenshot({ path }).catch(() => undefined);
+    if (compareRef) await page.waitForTimeout(500);  // Q7: the stop field's picture reaches the canvas
+    const shot = await page.locator('#screen').screenshot({ path }).catch(() => null);
+    if (compareRef && shot) {  // Q7
+      summary.compare = await comparePictures(page, shot, readFileSync(compareRef), compareRegion);
+      summary.compare.reference = compareRef;
+      console.log(`compare with ${compareRef}: region mean ${summary.compare.region.toFixed(2)}, worst cell ` +
+                  `${summary.compare.worst.diff.toFixed(1)} at ${summary.compare.worst.x},${summary.compare.worst.y}, ` +
+                  `whole picture ${summary.compare.whole.toFixed(2)} (limit ${compareMax})`);
+    }
   }
   Object.assign(summary, {
     source: state.source, phases: state.phases, translate: state.translate, disc: state.disc, gfx: state.gfx,
@@ -603,8 +655,54 @@ async function runOnce(context, run) {
   if (serverDisc && !realServer) summary.mockServer = await (await fetch(`${base}_stats`)).json();
   await page.close();
   const ok = state.firstFrameMs !== undefined || (!render && state.stopped);
-  summary.ok = ok && !state.error && (!(fields || frames) || !!state.stopped);
+  summary.ok = ok && !state.error && (!(fields || frames) || !!state.stopped) &&
+               (!compareRef || (!!summary.compare && summary.compare.region <= compareMax));
   return summary;
+}
+
+// Q7 (--compare): this run's final picture against a reference PNG of the same size (another run's
+// final screenshot, e.g. the same script at a fixed scale), decoded and compared in the page. The
+// region is in the console's pixels (the 640 x 448 frame fills the 4:3 canvas). Returns the mean
+// absolute difference per channel (0-255) over the region and over the whole picture, and the
+// region's worst 16 x 16 cell.
+async function comparePictures(page, shot, reference, region) {
+  return page.evaluate(async ([a64, b64, r]) => {
+    const decode = async (b64s) => {
+      const bytes = Uint8Array.from(atob(b64s), (ch) => ch.charCodeAt(0));
+      return createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    };
+    const [a, b] = await Promise.all([decode(a64), decode(b64)]);
+    const w = a.width, h = a.height;
+    const pixels = (bm) => {
+      const c = new OffscreenCanvas(w, h);
+      const g = c.getContext('2d');
+      g.drawImage(bm, 0, 0, w, h);  // the reference at this picture's size
+      return g.getImageData(0, 0, w, h).data;
+    };
+    const pa = pixels(a), pb = pixels(b);
+    const diff = (x0, y0, x1, y1) => {
+      let sum = 0, n = 0;
+      for (let y = y0; y < y1; ++y)
+        for (let x = x0; x < x1; ++x) {
+          const i = (y * w + x) * 4;
+          sum += Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]);
+          n += 3;
+        }
+      return n ? sum / n : 0;
+    };
+    const sx = w / 640, sy = h / 448;
+    const px = (cx, cy) => [Math.round(cx * sx), Math.round(cy * sy)];
+    const [x0, y0] = px(r[0], r[1]), [x1, y1] = px(r[2], r[3]);
+    let worst = { diff: 0, x: r[0], y: r[1] };
+    for (let cy = r[1]; cy < r[3]; cy += 16)
+      for (let cx = r[0]; cx < r[2]; cx += 16) {
+        const [ax, ay] = px(cx, cy), [bx, by] = px(Math.min(cx + 16, r[2]), Math.min(cy + 16, r[3]));
+        const d = diff(ax, ay, bx, by);
+        if (d > worst.diff) worst = { diff: d, x: cx, y: cy };
+      }
+    return { size: [w, h], referenceSize: [b.width, b.height], region: diff(x0, y0, x1, y1), whole: diff(0, 0, w, h),
+             worst, regionConsole: r };
+  }, [Buffer.from(shot).toString('base64'), Buffer.from(reference).toString('base64'), region]);
 }
 
 // --load N: busy processes for the whole run (killed at the end).
