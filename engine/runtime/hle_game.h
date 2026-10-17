@@ -25,4 +25,16 @@ namespace mvp::rt {
 // byte r10 * 12, then twelve singles. Leaves r11 = r10 * 9 for its caller.
 void hle_fn_803EB000(Cpu& c, GuestFn original);
 
+// fn_803EA3EC (Q6; 22 + n (28 + fn_803EB000's) + 19 instructions): the skinning
+// loop around it, r4 = n matrices: for each, fn_803EB000 (natively, as above),
+// then two more XF loads down the pipe: the normal matrix (the header at
+// 8(r14), the byte r10 * 9, three rows of three singles) and a second one (the
+// header at 4(r14), the byte r10 * 12 + 0x78, three rows of the same three
+// singles and a zero); r3 += 16 and r10 += 1 per matrix. r14 is 0x8062C750 in
+// the loop (the pipe's address and the two headers). The safe points before the
+// bdnz and at fn_803EB000's entry run where translated code runs them; if one runs
+// guest code that does not come back to it, the function leaves and the rest
+// runs from the dispatcher.
+void hle_fn_803EA3EC(Cpu& c, GuestFn original);
+
 }  // namespace mvp::rt
