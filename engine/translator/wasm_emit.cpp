@@ -3523,49 +3523,11 @@ Fn helper_write(int bytes, u32 slow) {
   h.uleb(1);
   h.uleb(3);
   h.byte(kI32);  // local 5: the page pointer; 6, 7: the write-gather state and its count
-  page_ptr(h, 5);
-  h.if_();
-  if (bytes != 1) {
-    h.get(1);
-    h.i32c(0xFFFF);
-    h.op(op::i32_and);
-    h.i32c(0x10000 - bytes);
-    h.op(op::i32_le_u);
-    h.if_();
-  }
-  gp_check(h, [&] { h.get(1); }, [&] {
-    h.get(1);
-    if (bytes > 1) {
-      h.i32c(static_cast<u32>(bytes - 1));
-      h.op(op::i32_add);
-    }
-  });
-  host_addr(h, 5);
-  if (bytes == 1) {
-    h.get(2);
-    h.mem(op::i32_store8, 0, 0);
-  } else if (bytes == 2) {
-    h.get(2);
-    h.i32c(8);
-    h.op(op::i32_shl);
-    h.get(2);
-    h.i32c(8);
-    h.op(op::i32_shr_u);
-    h.i32c(0xFF);
-    h.op(op::i32_and);
-    h.op(op::i32_or);
-    h.mem(op::i32_store16, 0, 0);
-  } else {
-    h.get(2);
-    swap32_from_local(h, 2);
-    h.mem(op::i32_store, 0, 0);
-  }
-  h.op(op::return_);
-  if (bytes != 1) h.end();
-  h.end();
   // The write-gather pipe (an unmapped page, so the runtime's path otherwise):
   // any address in its 4 KiB block, as Hardware::write takes them (Q4: a psq_st
-  // writes its second element to 0xCC008004).
+  // writes its second element to 0xCC008004). Q6: first, before the page table
+  // (the pipe's stores are this helper's common case: MEM1's go through the
+  // front); `fast` is only ever set by a Hardware, whose pipe page is unmapped.
   using L = WasmWgpLayout;
   h.get(1);
   h.i32c(0xCC008000u);
@@ -3629,6 +3591,46 @@ Fn helper_write(int bytes, u32 slow) {
   h.call(iWgpStore);
   h.op(op::return_);
   h.end();
+  h.end();
+  page_ptr(h, 5);
+  h.if_();
+  if (bytes != 1) {
+    h.get(1);
+    h.i32c(0xFFFF);
+    h.op(op::i32_and);
+    h.i32c(0x10000 - bytes);
+    h.op(op::i32_le_u);
+    h.if_();
+  }
+  gp_check(h, [&] { h.get(1); }, [&] {
+    h.get(1);
+    if (bytes > 1) {
+      h.i32c(static_cast<u32>(bytes - 1));
+      h.op(op::i32_add);
+    }
+  });
+  host_addr(h, 5);
+  if (bytes == 1) {
+    h.get(2);
+    h.mem(op::i32_store8, 0, 0);
+  } else if (bytes == 2) {
+    h.get(2);
+    h.i32c(8);
+    h.op(op::i32_shl);
+    h.get(2);
+    h.i32c(8);
+    h.op(op::i32_shr_u);
+    h.i32c(0xFF);
+    h.op(op::i32_and);
+    h.op(op::i32_or);
+    h.mem(op::i32_store16, 0, 0);
+  } else {
+    h.get(2);
+    swap32_from_local(h, 2);
+    h.mem(op::i32_store, 0, 0);
+  }
+  h.op(op::return_);
+  if (bytes != 1) h.end();
   h.end();
   h.get(0);
   h.get(1);
