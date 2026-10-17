@@ -103,6 +103,7 @@ class Renderer : public Backend {
     std::uint64_t copies_dropped = 0;    // EFB-copy textures dropped: their memory changed since the copy
     std::uint64_t copy_size_misses = 0;  // a texture at an EFB copy's address with another size
     std::uint64_t copy_tall = 0;         // P2: a taller texture over a copy (the copy's rows, then memory)
+    std::uint64_t copy_inside = 0;       // Q7: a texture whose memory starts inside an EFB copy's, not at it
     std::uint64_t unknown_formats = 0, indirect_draws = 0, fog_draws = 0;
     std::uint64_t merged = 0, encoded = 0;  // draws appended to the previous one; WebGPU draws encoded
     std::uint64_t same_state = 0;           // draws that reused the previous draw's resolved state
@@ -199,7 +200,22 @@ class Renderer : public Backend {
   std::map<std::uint64_t, std::unique_ptr<TexEntry>> tmem_textures_;  // preloaded textures, by content
   std::vector<std::uint8_t> tmem_buf_;
   std::map<std::uint32_t, wgpu::Sampler> samplers_;
-  std::map<std::array<const void*, 16>, wgpu::BindGroup> bind_groups_;
+  // Texture bind groups, keyed by the addresses of the 8 views and 8 samplers
+  // they bind. Q7: each entry holds references to those views and samplers.
+  // A bind group does not keep the handles alive everywhere: emdawnwebgpu (the
+  // browser) frees a view's handle when the last reference to it goes, and the
+  // next view created can get the same address. A key of a released view could
+  // then find the old group for a new view, and the draw would sample the old
+  // texture (EFB copies replaced at a new scale stayed frozen: the game's
+  // top-left 128 x 128 save and restore showed a stale block). forget_view()
+  // drops the entries of a view that is being replaced, so its texture can go.
+  struct BindEntry {
+    wgpu::BindGroup group;
+    std::array<wgpu::TextureView, 8> views;
+    std::array<wgpu::Sampler, 8> samplers;
+  };
+  std::map<std::array<const void*, 16>, BindEntry> bind_groups_;
+  void forget_view(const wgpu::TextureView& v);
   std::uint64_t epoch_ = 1;
 
   // Clears and EFB-to-texture conversion.

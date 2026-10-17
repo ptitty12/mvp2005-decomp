@@ -171,11 +171,13 @@ std::string RenderSide::status_json() const {
     char b[512];
     std::snprintf(b, sizeof b,
                   ",\"draws\":%llu,\"xfb_copies\":%llu,\"pipelines\":%llu,\"textures\":%llu,\"gpu_errors\":%llu,"
-                  "\"copies_dropped\":%llu,\"copy_size_misses\":%llu,\"copy_tall\":%llu,\"scan_mixed\":%llu,\"scale\":%u",
+                  "\"copies_dropped\":%llu,\"copy_size_misses\":%llu,\"copy_tall\":%llu,\"copy_inside\":%llu,"
+                  "\"scan_mixed\":%llu,\"scale\":%u",
                   static_cast<unsigned long long>(rs.draws), static_cast<unsigned long long>(ps.xfb_copies),
                   static_cast<unsigned long long>(rs.pipelines), static_cast<unsigned long long>(rs.textures_decoded),
                   static_cast<unsigned long long>(gpu->errors()), static_cast<unsigned long long>(rs.copies_dropped),
                   static_cast<unsigned long long>(rs.copy_size_misses), static_cast<unsigned long long>(rs.copy_tall),
+                  static_cast<unsigned long long>(rs.copy_inside),
                   static_cast<unsigned long long>(renderer_->scan_stats().mixed), renderer_->scale());
     s += b;
     // Q5: frames shown; the GPU's time (frames timed, their GPU ms, passes timed, untimed and dropped, the

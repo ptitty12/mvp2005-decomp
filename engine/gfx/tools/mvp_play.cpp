@@ -223,10 +223,10 @@ struct DrawLog : gfx::Backend {
   }
   void efb_copy(const gfx::EfbCopy& c) override {
     if (on())
-      std::fprintf(f, "field %llu copy %s %u,%u %ux%u -> %08X fmt %u%s half %u clear %u rgba %02X%02X%02X%02X z %06X\n",
+      std::fprintf(f, "field %llu copy %s %u,%u %ux%u -> %08X fmt %u%s half %u clear %u rgba %02X%02X%02X%02X z %06X stride %u\n",
                    static_cast<unsigned long long>(*field), c.to_xfb ? "xfb" : "tex", c.src_x, c.src_y, c.width,
                    c.height, c.dest, c.tex_format, c.intensity ? "i" : "", c.half_scale, c.clear, c.clear_rgba[0],
-                   c.clear_rgba[1], c.clear_rgba[2], c.clear_rgba[3], c.clear_z);
+                   c.clear_rgba[1], c.clear_rgba[2], c.clear_rgba[3], c.clear_z, c.dest_stride);
     next->efb_copy(c);
   }
   void invalidate_textures() override { next->invalidate_textures(); }
@@ -1195,12 +1195,12 @@ int main(int argc, char** argv) {
               "%llu pipelines, %llu textures decoded, %llu hits, "
               "%llu EFB-copy textures used, %llu texture copies, %llu clears; %llu unknown formats, "
               "%llu indirect draws, %llu fog draws; %llu with the previous draw's state; %llu preloaded textures; uploaded %.1f MB of vertices, "
-              "%.1f MB of indices; EFB-copy textures dropped %llu, size misses %llu\n",
+              "%.1f MB of indices; EFB-copy textures dropped %llu, size misses %llu, tall %llu, inside %llu\n",
               ull(rs.draws), ull(rs.skipped), ull(rs.merged), ull(rs.encoded), ull(rs.passes), ull(rs.pipelines),
               ull(rs.textures_decoded), ull(rs.texture_hits), ull(rs.copy_textures_used), ull(rs.tex_copies),
               ull(rs.clears), ull(rs.unknown_formats), ull(rs.indirect_draws), ull(rs.fog_draws), ull(rs.same_state), ull(rs.tmem_textures),
               static_cast<double>(rs.vertex_bytes) / 1e6, static_cast<double>(rs.index_bytes) / 1e6,
-              ull(rs.copies_dropped), ull(rs.copy_size_misses));
+              ull(rs.copies_dropped), ull(rs.copy_size_misses), ull(rs.copy_tall), ull(rs.copy_inside));
   if (play.gp_memory) {
     const auto& gs = play.gp_memory->stats();
     std::printf("gp memory: %llu cache write-backs (%.1f MB), %llu reads with lines from them (%llu lines), %llu ended by DMA\n",

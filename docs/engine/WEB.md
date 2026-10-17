@@ -91,7 +91,12 @@ Everything below is run by agents; the owner never runs commands.
    `hostSlowFrom=F`), `--affinity HEXMASK` (the browser on chosen logical processors)
    and `--load N` (busy processes), and the worklet's gap, stretch and target
    statistics in every window (Q5: also the GPU's time, the scale and the frames
-   shown, and the summary's `hint`, `autoScale` and picture log);
+   shown, and the summary's `hint`, `autoScale` and picture log); Q7 adds
+   `--actions F:KIND[:ARG],...` (host-side changes once the run reaches field F:
+   `resize:WxH`, `picture:auto|1|2|3`, `fullscreen` on and off, `stats`) and
+   `--compare PNG` with `--compare-region x0,y0,x1,y1` (console pixels, default
+   the top-left 128 x 128 block) and `--compare-max N` (the final picture against
+   another run's, failing above N; the scale-change check below);
    `netplay_check.mjs` (Q5) takes `--params1/2`, `--host-slow1/2 N[@F]` (one
    player's machine slower), `--audio`, `--trace-present`, `--fast-until F`,
    `--measure-from/to`, `--separate` (two browser instances, each with its own GPU
@@ -117,6 +122,14 @@ Everything below is run by agents; the owner never runs commands.
    and menus on fake pads, has the engine report the inputs the guest consumed (`inputLog=1`),
    replays that log with no gamepad and requires the same guest line, and with `--net` runs two
    pages through E5's server with player 2 on a pad (`docs/engine/Q3_LOG.md` section 4).
+   **The scale-change check** (Q7; run it when the renderer's EFB copies, caches or scale
+   handling change): CLK2's `game_125` script (the exhibition, then CPU vs CPU) unpaced to
+   field 8,250, first at a fixed scale (`--fast --fields 8250 --params scale=3 --tag ref`),
+   then from Auto with the Picture changed in the at-bat view and the ball in play by the
+   stop (`--fast --fields 8250 --actions 7000:picture:3 --compare OUT/chrome-ref-r1-final.png`).
+   The game saves and restores the EFB's top-left 128 x 128 in every frame of play, so a
+   copy texture left over from the old scale shows there as a frozen block: the check
+   fails above a mean difference of 3 (Q7_LOG.md section 5 has the numbers).
 6. **Unit tests** (data-free, in `ctest --preset emscripten`): `test_web_shell`
    runs `node --test` on `engine/web/tests/*.test.mjs` against the compiled
    shell (the gamepad mapping and the Controls layers, the audio resampler, the
@@ -434,7 +447,13 @@ Everything below is run by agents; the owner never runs commands.
   changed. URL parameters: `scale=1|2|3` (instead of the setting), `gpview=0` (no
   data-cache model, for comparisons), `gpuLoad=N` (development: N extra render
   passes per present over a texture of the picture's internal size, 25 samples
-  a pixel, as a GPU that cannot keep up).
+  a pixel, as a GPU that cannot keep up). (Q7) A change of scale replaces every
+  EFB-copy texture; the renderer's texture bind-group cache, keyed by handle
+  addresses, now holds references to its views and drops a replaced copy's
+  entries: in the browser a released view's address is reused at once, and before
+  Q7 the game's top-left 128 x 128 block (saved and restored by the game in every
+  frame of play), its shadows and the video board stayed frozen after any mid-game
+  change of scale (`docs/engine/Q7_LOG.md`).
 - **The statistics overlay** (Q5; `src/netstats.ts`). The **Stats** button in the
   toolbar or the backquote key (left of 1; refused as a game binding) shows,
   over the picture, live numbers for this computer and, online, for the other
