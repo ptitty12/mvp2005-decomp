@@ -660,12 +660,20 @@ owner's feedback the same day):
     Intervals between frames: p5 31.8, median 33.4, p95 34.4, max 39.3 ms; only the two
     around the switch (26.6 and 39.3 ms) were off. Live play afterwards was back at
     60 presents a second.
-- **During the re-run (Rerunning): the verdict card.**
-  - "CALL OVERTURNED" or "CALL STANDS", and nothing under it (owner, 2026-10-17).
-  - Where the pitch crossed, drawn in the zone. The zone is 1.5 times its first size (owner:
-    it was hard to see): about 275 px wide, capped at 40 % of the window's height.
-  - The challenges the team has left, with its nickname: "Cardinals: 2 challenges left". No
-    "Back to the game" line (owner).
+- **During the re-run (Rerunning): the verdict panel,** in the look of the game's own pause
+  screen (owner, 2026-10-17: the first card looked too modern).
+  - **The panel:** translucent black with square corners.
+  - **The title:** "CALL OVERTURNED" or "CALL STANDS" in white outlined in black, like
+    "GAME PAUSED", with nothing under it (owner).
+  - **The scoreboard row,** as in the pause screen and the in-game score box: the team's
+    nickname in black on a silver bar, then the challenges it has left in a blue tab with a
+    slanted edge ("CARDINALS | 2 CHALLENGES LEFT"). No "Back to the game" line (owner).
+  - **The zone,** as the game draws it at the plate: nine translucent lavender cells in a
+    white frame, and where the pitch crossed as the game's white ring.
+  - The zone is 1.5 times its first size (owner: it was hard to see): about 275 px wide,
+    capped at 40 % of the window's height.
+  - **Fonts** are the machine's own: Bahnschrift, else Franklin Gothic or Arial Narrow.
+    The page loads no fonts (same-origin CSP). No logo or other branding is used.
 
   It fades out 2.2 s after play resumes.
 
