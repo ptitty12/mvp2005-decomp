@@ -60,8 +60,7 @@ Other settings, only if you need them:
 |---|---|
 | `TURN_HOST=<VPS IP address>` | Your domain goes through a proxy, such as Cloudflare's orange cloud. |
 | `TURN_MODE=stun` or `off` | You want no relay (`stun`), or no STUN and no relay (`off`). The default is `relay`. |
-| `SETUP_HOURS=<hours>` | How long the create-password page stays open after the first start. The default is 48. |
-| `RESET_PASSWORD=<any new word>` | You forgot the password, or someone else created it. Set a word you haven't used before, then deploy. The password is removed once and the create-password page comes back. |
+| `ACCESS_KEY=<16 or more letters and digits>` | You want a new private link (section 6), for example because the old one leaked. Deploy after setting it: every browser then needs the new link. Leave it set; removing it brings the old link back. |
 
 Click **Save**.
 
@@ -82,18 +81,25 @@ On the **General** tab, click **Deploy**. Watch the **Deployments** tab: the fir
 deploy is done when the log ends without errors and both services (`mvp` and
 `coturn`) are running. Later deploys, from the same button, are much faster.
 
-## 6. Create the password (right away)
+## 6. Get your private link
 
-Open `https://<your domain>/` as soon as the deploy finishes. The first visit
-shows **create the password**:
+There is no password. The site has a private link instead, and the server makes
+it on the first start.
 
-1. Type a password of at least 12 characters twice. A few unrelated words work well.
-2. Click **Create the password**. You are now logged in.
+1. Open the app's **Logs** tab and choose the service **mvp**. Find the line that
+   starts with `mvp-server: private link:`. It looks like
+   `https://<this site's address>/?key=Xy3...`.
+2. Put your domain in place of `<this site's address>`, for example
+   `https://mvp.yourdomain.com/?key=Xy3...`, and open that in your browser.
 
-If the first visit shows a **login** form instead, someone else created the
-password first. Set `RESET_PASSWORD` (section 3), deploy again, and repeat this
-step. Until a password exists, nothing else on the site works, and no disc can
-be uploaded.
+The browser now stays in for 400 days, and every visit starts that count again.
+The address bar shows just your domain; nobody types anything. Open the link once
+in each browser you play in.
+
+Keep the link private: anyone with it can play and download the disc. Without it
+the site shows only "This is a private server". The link stays the same through
+every deploy. Once you are in, the Server disc page (section 7) shows the full
+link with a **Copy** button. To replace it, see `ACCESS_KEY` in section 3.
 
 ## 7. Upload the disc
 
@@ -128,11 +134,13 @@ list on the game page instead of bringing the file.
    refuses to connect otherwise and says why.
 
 Uploading a new version of a pack replaces the old one; **Remove** takes a pack off
-the list. Packs are kept in the same volume as the disc, behind the same password.
+the list. Packs are kept in the same volume as the disc, behind the same private link.
 
 ## 9. Play with your brother
 
-Send your brother the site address and, separately, the password.
+Send your brother the private link (copy it on the Server disc page). He opens it
+once in his browser and is in from then on. An invite link (below) works too: it
+carries the same key, so it also lets a new browser in.
 
 The first time a browser opens the game page, it downloads the game data from
 your server once, about 1.4 GB, with a progress bar ("Downloading the game data
@@ -154,20 +162,22 @@ loads.
 
 ## Later
 
-- **Update:** click **Deploy** again. It rebuilds from `main`. The password and
-  the disc stay. Both players reload the page afterwards. Right after the first
+- **Update:** click **Deploy** again. It rebuilds from `main`. The private link
+  and the disc stay. Both players reload the page afterwards. Right after the first
   deploy of this version the page may say "The server is preparing the game data"
   for a few seconds while the server checks the disc once. Players' browsers keep
   their copy and download again only if you upload a different disc.
 - **Online game doesn't connect:** check the firewall ports (section 4), set
   `TURN_EXTERNAL_IP`, and if the domain is proxied, set `TURN_HOST`. Then deploy
   again.
+- **The link leaked:** set `ACCESS_KEY` (section 3) and deploy. The old link
+  stops working in every browser; send the new one to whoever should play.
 - **Removing everything:** deleting the app in Dokploy with its volumes also
-  deletes the stored password, the uploaded disc and the roster packs.
+  deletes the private link's key, the uploaded disc and the roster packs.
 
 ## Where the disc is kept
 
-The disc you uploaded, the password and the relay's secret are stored in the
+The disc you uploaded, the key of the private link and the relay's secret are stored in the
 app's volume, `mvp-data` (Docker names it after the app: the app's name, then
 `_mvp-data`). It is not part of the code Dokploy downloads from GitHub, and
 Dokploy deploys the app under the same name every time, so every deploy uses the

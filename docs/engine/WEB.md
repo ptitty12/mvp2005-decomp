@@ -2,7 +2,7 @@
 
 How the engine runs in a browser: the page gets the disc image (the player picks
 their own, or, on the owner's private deployment, the browser downloads the
-owner's image from behind the server's login once and keeps it: P1), translates
+owner's image from behind the server's private link once and keeps it: P1), translates
 the game to WebAssembly inside the browser
 (or loads the translation it cached on an earlier visit), draws the frames on a
 canvas through WebGPU, plays the sound through an AudioWorklet, and reads the
@@ -55,7 +55,7 @@ Everything below is run by agents; the owner never runs commands.
    `engine/server/`): `GET /config.json` answers `{"disc": "/api/disc/image"}`,
    and `/api/disc/image` serves PATH to HEAD and to ranged GETs (206,
    `Cache-Control: private, no-store`); `--login` makes `/api/*` answer 401
-   without the cookie `mvp_session=ok`; `--latency MS` and `--rate MB/S` slow it
+   without the cookie `mvp_access=ok`; `--latency MS` and `--rate MB/S` slow it
    down.
 5. **Check in real browsers** (local only: it needs the disc):
    `node engine/web/tools/browser_check.mjs --browser chrome|msedge|chromium|firefox|webkit`
@@ -72,8 +72,8 @@ Everything below is run by agents; the owner never runs commands.
    MS ms), `--trace-disc` (the picked image's read offsets and sizes),
    `--disc-cache PARAMS`, `--packs P1,P2` (E6: roster pack folders or zips through the
    page's panel, before the disc), and `--real-server MAIN_JS` (E5's server, built,
-   instead of the mock: a throwaway password, the check logs in through its
-   form, the disc configured; with the lobby there the check presses Play;
+   instead of the mock: a throwaway access key, the check opens the private
+   link, the disc configured; with the lobby there the check presses Play;
    `--disc-dir DIR` gives it the Docker deployment's disc directory instead of a
    file). P1 adds `--throttle RTT_MS,MBIT` (Chrome's network conditions through
    CDP, which also slow the page's Workers), `--io-log` (every guest DVD read with
@@ -174,6 +174,21 @@ Everything below is run by agents; the owner never runs commands.
   `fast=1`, `render=0`, `audio=0`, `cache=0`, `audioLatency=MS`, `traceDisc=1`,
   `discBlock`/`discBlocks`/`discRun`/`discAhead`, and (P1) `ioLog=1`, `store=0`,
   `storeSpare=MB`.
+- **The look** (owner, 2026-10-17: "the same theme as MVP2005 baseball ... the gray pallet"). The page
+  copies the game's own front end, with colors sampled from the native engine's capture of the main
+  menu (the values are listed at the top of `static/style.css`):
+  - the game on the left in a silver frame, with a gunmetal bar under it. The bar's buttons look like
+    the game's button prompts: a round key (F, M, P, `) then small capitals;
+  - a menu column on the right: the Game panel (status, progress, Play), Play online, Roster packs,
+    then Gameplay mods, Controls and Engine details folded into one frame like the Main Menu. A
+    closed item is a gray bar; an open one is the chosen item's maroon with gold lettering and a
+    baseball bullet;
+  - panel headings are silver bars with a slanted blue tab, and the title is a red script outlined in
+    white on a silver swoosh.
+  The screen keeps to the window's height, and below 1020 px the column moves under the game. Fonts
+  are the machine's own: Bahnschrift, and Brush Script MT or Segoe Script for the title. The page
+  loads no fonts or images. The server's own pages (the Server disc page and the "private server"
+  page) use the same theme from `engine/server/src/theme.ts`.
 - **The Worker** (`src/worker.ts`) loads `mvp-web.js` (an Emscripten ES module,
   `-sENVIRONMENT=worker -sMODULARIZE -sEXPORT_ES6`) and calls its exports in
   order:
@@ -363,18 +378,19 @@ Everything below is run by agents; the owner never runs commands.
   uploaded another image) downloads again and removes the old copy first. The
   identity check (GV4E69 rev 0, the DOL's SHA-1) still runs on every start. The
   lobby (E5) opens only once the copy is complete. On a download error the page
-  says what to do (free space and a normal window, log in again, reload to
-  resume) and offers to play with the image read from the server as before.
+  says what to do (free space and a normal window, open the private link again,
+  reload to resume) and offers to play with the image read from the server as before.
 - **The disc from the server, read over the network** (the fallback, and servers
   without `discHash`; `src/disc.ts`, engine `wasm/web_disc.*`,
   `wasm/block_cache.*`). The deployment's contract (E5): `GET /config.json`
   `{"disc": "<url>"}`; the URL is on the same origin (anything else is refused)
   and answers HEAD with the size and a ranged GET with 206, both with
-  `Cache-Control: private, no-store`; API calls without a login answer 401 (the
-  page then says to log in). The Worker checks the image with a HEAD and a
+  `Cache-Control: private, no-store`; API calls from a browser without access
+  answer 401 (the page then says to open the private link again). The Worker checks
+  the image with a HEAD and a
   one-byte ranged GET (a server ignoring Range would send 1.4 GB per read), then
   the engine reads it by synchronous Range XHRs (a guest DVD read completes
-  inside the call; the browser sends the login cookie with them) through a block
+  inside the call; the browser sends the access cookie with them) through a block
   cache: 256 KiB blocks, 64 MiB, least recently used out; a miss fetches all the
   blocks its read needs (up to 32) or, on sequential misses, a run growing to 4;
   a sequential stream also asks for the next 8 blocks ahead, which the Worker
@@ -403,7 +419,7 @@ Everything below is run by agents; the owner never runs commands.
   **Server packs** (the deployment): when `/config.json` names `"packs"` (the server's
   `MVP_PACKS_DIR`, `engine/server/src/pack_store.ts`), the panel adds a **Packs on this
   server** list from `GET /api/packs`. Choosing one downloads its zip from
-  `/api/packs/<file>` behind the login (an ETag lets the browser revalidate instead of
+  `/api/packs/<file>` behind the private link (an ETag lets the browser revalidate instead of
   downloading again) and adds it exactly as a picked zip, so the checks, the order and the
   netplay set hash are the same. The page remembers the server packs a player chose (in
   this browser's `localStorage`) and adds them again on the next visit if the server
@@ -471,7 +487,7 @@ Everything below is run by agents; the owner never runs commands.
   below it: "This computer is running the game at 0.85x speed. On a laptop,
   plugging in and choosing the Best performance power mode helps."
 - **Errors** say what to do: no WebGPU (which browsers have it), a GPU that
-  cannot be used, the wrong disc (above), not logged in, a server that does not
+  cannot be used, the wrong disc (above), no access to the server, a server that does not
   answer Range requests, a failed engine Worker.
 - **What the server sends:** the files of §1 (the page, the shell, the engine,
   `build-id.json`, `symbols.txt`; `symbols.txt` not on a warm start), and on the

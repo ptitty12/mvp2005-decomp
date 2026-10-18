@@ -78,20 +78,20 @@ ENV NODE_ENV=production \
     MVP_HOST=0.0.0.0 \
     MVP_PORT=8080 \
     MVP_SITE=/app/site \
-    MVP_STATE_FILE=/data/state.json \
+    MVP_ACCESS_KEY_FILE=/data/access-key \
+    MVP_ACCESS_KEY_CREATE=1 \
     MVP_DISC_DIR=/data/disc \
     MVP_PACKS_DIR=/data/packs \
     MVP_TURN_MODE=off \
     MVP_TURN_SECRET_FILE=/data/turn/secret \
     MVP_TURN_SECRET_CREATE=1 \
-    MVP_SECURE_COOKIES=true \
-    MVP_TRUST_PROXY=true
+    MVP_SECURE_COOKIES=true
 COPY --from=web /src/build/engine/emscripten/web/site /app/site
 COPY --from=server /src/engine/server/package.json /app/server/package.json
 COPY --from=server /src/engine/server/dist/src /app/server/dist/src
 COPY --from=server /src/engine/server/node_modules /app/server/node_modules
 # The site is the engine's own file types only (as engine/server/tools/package.mjs); the manifest; the volume's
-# layout: /data (the state file, 0600), /data/disc (the uploaded disc, owner only), /data/packs (the uploaded
+# layout: /data (the access key, 0600), /data/disc (the uploaded disc, owner only), /data/packs (the uploaded
 # roster packs, owner only), /data/turn (coturn's secret, readable by coturn's own user in its container).
 RUN set -eu; \
     cd /app; \

@@ -220,8 +220,8 @@ if (net) {
   check('netplay', async () => {
     // Two pages through E5's server: player 1 on the keyboard script of the page, player 2 on a pad. Both
     // guests consume the same inputs (the log has player 2's presses on port 2 and nothing of it on port 1).
-    const password = randomBytes(18).toString('base64url');
-    const srv = startServer(process.execPath, [serverMain], { MVP_PASSWORD: password, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1' });
+    const accessKey = randomBytes(18).toString('base64url');
+    const srv = startServer(process.execPath, [serverMain], { MVP_ACCESS_KEY: accessKey, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1' });
     const base = await srv.url;
     const browsers = [await launchers[browserName]()];
     try {
@@ -232,9 +232,9 @@ if (net) {
         const errors = [];
         page.on('pageerror', (e) => errors.push(String(e)));
         await page.addInitScript(installFakePads);
-        await page.goto(`${base}/login?next=%2Fhealthz`);
-        await page.fill('input[name=password]', password);
-        await Promise.all([page.waitForURL(`${base}/healthz`), page.click('button[type=submit]')]);
+        // The private link, on a page that starts nothing (the server goes on to /healthz with the cookie).
+        await page.goto(`${base}/healthz?key=${accessKey}`);
+        if (page.url() !== `${base}/healthz`) throw new Error(`the private link went to ${page.url()}`);
         pages.push({ who, page, errors });
       }
       const nf = Math.min(frames, 2400);

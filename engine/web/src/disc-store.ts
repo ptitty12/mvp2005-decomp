@@ -135,7 +135,7 @@ export async function clearStoredDiscs(): Promise<void> {
 export type DownloadMsg =
   | { type: 'progress'; phase: 'waiting' | 'checking' | 'downloading'; done: number; total: number; bytesPerS: number }
   | { type: 'done'; ms: number; fetched: number; resumedFrom: number }
-  | { type: 'error'; kind: 'quota' | 'login' | 'changed' | 'network' | 'corrupt' | 'storage'; message: string };
+  | { type: 'error'; kind: 'quota' | 'access' | 'changed' | 'network' | 'corrupt' | 'storage'; message: string };
 
 export interface DownloadResult {
   file: File;

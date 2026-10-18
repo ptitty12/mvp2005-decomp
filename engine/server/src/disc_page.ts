@@ -1,4 +1,5 @@
-// The "Server disc" page (deploy): GET /disc, behind the login. The owner picks
+// The "Server disc" page (deploy): GET /disc, behind the private link. It shows
+// the private link (src/access.ts) with a Copy button. The owner picks
 // the disc image on their computer and the page uploads it to the server in
 // chunks (src/disc_store.ts), resuming where it stopped after a dropped
 // connection or a reload (choose the same file again). The server keeps the
@@ -11,23 +12,19 @@
 //
 // The page is self-contained: its one style and its scripts are pinned by hash
 // in its Content-Security-Policy. Requests carry the page's CSRF token in the
-// X-MVP-CSRF header (bound to the session cookie: src/server.ts).
+// X-MVP-CSRF header (bound to the access cookie: src/server.ts). It has the game
+// page's look (src/theme.ts).
 import { createHash } from 'node:crypto';
 
-import { escapeHtml } from './auth.js';
+import { escapeHtml } from './access.js';
+import { THEME_CSS, TOPBAR_HTML } from './theme.js';
 
-export const DISC_PAGE_CSS = `:root{color-scheme:dark}
-body{font:16px/1.5 system-ui,sans-serif;background:#10141a;color:#e8ecf1;margin:0;padding:16px}
-main{max-width:640px;margin:24px auto;display:grid;gap:16px}
-.card{background:#1b222c;padding:20px 24px;border-radius:10px;display:grid;gap:10px}
-h1{font-size:20px;margin:0}h2{font-size:16px;margin:0}p{margin:0}
-.note,small{color:#9aa7b8;font-size:14px}.err{color:#ff8a80}.ok{color:#8fd694}
-input,button{font:inherit;padding:8px 10px;border-radius:6px;border:1px solid #3a4553;background:#0f1319;color:inherit;max-width:100%}
-button{background:#2f6fde;border-color:#2f6fde;cursor:pointer}button.plain{background:#0f1319;border-color:#3a4553}
-button:disabled{opacity:.5;cursor:default}progress{width:100%;height:10px}a{color:#9cc0ff}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}code{word-break:break-all}
-.packs{list-style:none;padding:0;margin:0;display:grid;gap:8px}
-.packs li{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}`;
+export const DISC_PAGE_CSS = `${THEME_CSS}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row input[type=text]{flex:1 1 16rem;min-width:0;font:13px ui-monospace,Consolas,monospace}
+.packs{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.packs li{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #3a3c40}
+.back{margin:2px;font-size:14px}`;
 
 export const DISC_PAGE_SCRIPT = `(function () {
   'use strict';
@@ -72,7 +69,7 @@ export const DISC_PAGE_SCRIPT = `(function () {
 
   async function refresh() {
     var j = await api('GET', '/api/disc');
-    if (j.httpStatus === 401) { say('Your login has expired. Reload the page and log in again.', 'err'); return; }
+    if (j.httpStatus === 401) { say('This browser has no access to the server any more. Open the private link again, then reload.', 'err'); return; }
     if (j.httpStatus !== 200) { say('The server answered HTTP ' + j.httpStatus + '.', 'err'); return; }
     status = j;
     show();
@@ -109,7 +106,7 @@ export const DISC_PAGE_SCRIPT = `(function () {
         continue;
       }
       if (r.httpStatus === 409 && typeof r.received === 'number') { offset = r.received; await sleep(500); continue; }
-      if (r.httpStatus === 401) throw new Error('Your login has expired. Log in again in another tab, then choose the same file to continue.');
+      if (r.httpStatus === 401) throw new Error('This browser has no access to the server any more. Open the private link again in another tab, then choose the same file to continue.');
       if (r.httpStatus === 404 || r.httpStatus === 413 || r.httpStatus === 422) throw new Error(r.error || ('HTTP ' + r.httpStatus));
       if (++failures > 10) throw new Error('The connection keeps failing. Choose the same file again later to continue where it stopped.');
       progressText.textContent = 'The connection failed; trying again (' + failures + ' of 10)...';
@@ -216,7 +213,7 @@ export const PACKS_PAGE_SCRIPT = `(function () {
 
   async function refresh() {
     var r = await fetch('/api/packs', { credentials: 'same-origin', cache: 'no-store' });
-    if (r.status === 401) { say('Your login has expired. Reload the page and log in again.', 'err'); return; }
+    if (r.status === 401) { say('This browser has no access to the server any more. Open the private link again, then reload.', 'err'); return; }
     if (!r.ok) { say('The server answered HTTP ' + r.status + '.', 'err'); return; }
     render((await r.json()).packs || []);
   }
@@ -244,10 +241,30 @@ export const PACKS_PAGE_SCRIPT = `(function () {
   refresh().catch(function (e) { say(String(e), 'err'); });
 })();`;
 
+/** The private link card: Copy (the clipboard API needs HTTPS; elsewhere the old copy command, or the keyboard). */
+export const LINK_PAGE_SCRIPT = `(function () {
+  'use strict';
+  var link = document.getElementById('link'), copy = document.getElementById('copy'), msg = document.getElementById('link-msg');
+  function say(text, kind) { msg.textContent = text; msg.className = kind || 'note'; }
+  link.addEventListener('focus', function () { link.select(); });
+  copy.addEventListener('click', async function () {
+    try {
+      await navigator.clipboard.writeText(link.value);
+      say('Copied.', 'ok');
+    } catch (e) {
+      link.focus();
+      link.select();
+      var done = false;
+      try { done = document.execCommand('copy'); } catch (e2) { done = false; }
+      say(done ? 'Copied.' : 'Press Ctrl+C (Cmd+C on a Mac) to copy the selected link.', done ? 'ok' : 'note');
+    }
+  });
+})();`;
+
 const sha = (s: string) => `'sha256-${createHash('sha256').update(s).digest('base64')}'`;
 /** CSP of the Server disc page: its one style and its scripts by hash; requests to this site only. */
 export const DISC_PAGE_CSP =
-  `default-src 'none'; style-src ${sha(DISC_PAGE_CSS)}; script-src ${sha(DISC_PAGE_SCRIPT)} ${sha(PACKS_PAGE_SCRIPT)}; ` +
+  `default-src 'none'; style-src ${sha(DISC_PAGE_CSS)}; script-src ${sha(LINK_PAGE_SCRIPT)} ${sha(DISC_PAGE_SCRIPT)} ${sha(PACKS_PAGE_SCRIPT)}; ` +
   `connect-src 'self'; img-src data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`;
 
 /** What the page manages: the disc upload (MVP_DISC_DIR), the roster packs (MVP_PACKS_DIR), or both. */
@@ -256,7 +273,17 @@ export interface DiscPageParts {
   packs: boolean;
 }
 
-export function discPage(csrf: string, parts: DiscPageParts = { disc: true, packs: false }): string {
+/** `link`: the private link (https://site/?key=...), shown with a Copy button. */
+export function discPage(csrf: string, link: string, parts: DiscPageParts = { disc: true, packs: false }): string {
+  const access = `
+<div class="card"><h2>Private link</h2>
+<p class="note">Open this link once in each browser that plays here; that browser then stays in. Anyone with the link
+can play and download the disc, so send it only to people you trust. Invite links from the lobby carry it too.</p>
+<div class="row"><input id="link" type="text" readonly size="48" spellcheck="false" aria-label="Private link" value="${escapeHtml(link)}">
+<button id="copy" type="button">Copy</button></div>
+<p id="link-msg" class="note" role="status"></p>
+<p class="note">To replace the link (if it leaked), give the server a new access key (ACCESS_KEY in Dokploy) and
+redeploy: every browser then needs the new link.</p></div>`;
   const packs = parts.packs
     ? `
 <div class="card"><h2>Roster packs</h2>
@@ -267,23 +294,28 @@ new version of a pack replaces the old one. Both players of an online game need 
 <div class="row"><input id="pack-file" type="file" accept=".zip,application/zip"><button id="pack-upload" type="button" disabled>Upload</button></div>
 <p id="pack-msg" class="note" role="status"></p></div>`
     : '';
+  // The page's heading card first: the disc's state, or just the title when the server takes no disc uploads.
+  const head = parts.disc
+    ? `
+<div class="card"><h1>Server disc</h1><p id="current" class="note">Asking the server...</p></div>`
+    : `
+<div class="card"><h1>Server packs</h1></div>`;
   const disc = parts.disc
     ? `
-<div class="card"><h1>Server disc</h1><p id="current" class="note">Asking the server...</p></div>
 <div class="card"><h2>Upload the disc image</h2>
 <p class="note">Your own copy of MVP Baseball 2005 for GameCube, USA (GV4E69), as an ISO or CISO file (about 1.4 GB).
 The server checks that it is that game, revision 0, and keeps nothing else. The current disc is replaced only once the
 new one is complete and checked. If the upload stops, choose the same file again: it continues where it stopped.</p>
 <p id="pending" class="note" hidden></p>
-<div class="row"><input id="file" type="file" accept=".iso,.ciso,.gcm"><button id="start" type="button" disabled>Upload</button>
+<div class="row"><input id="file" type="file" accept=".iso,.ciso,.gcm"><button id="start" class="primary" type="button" disabled>Upload</button>
 <button id="cancel" class="plain" type="button" hidden>Cancel</button></div>
 <progress id="bar" max="1" value="0" hidden></progress><small id="progress" aria-live="polite"></small>
 <p id="msg" class="note" role="status"></p></div>`
     : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><meta name="mvp-csrf" content="${escapeHtml(csrf)}">
-<title>Server disc - MVP Baseball 2005</title><link rel="icon" href="data:,"><style>${DISC_PAGE_CSS}</style></head><body><main>
-${parts.disc ? '' : '<div class="card"><h1>Server packs</h1></div>'}${disc}${packs}
-<p><a href="/">Back to the game</a></p>
-</main>${parts.disc ? `<script>${DISC_PAGE_SCRIPT}</script>` : ''}${parts.packs ? `<script>${PACKS_PAGE_SCRIPT}</script>` : ''}</body></html>`;
+<title>Server disc - MVP Baseball 2005</title><link rel="icon" href="data:,"><style>${DISC_PAGE_CSS}</style></head><body>${TOPBAR_HTML}<main>
+${head}${access}${disc}${packs}
+<p class="back"><a href="/">Back to the game</a></p>
+</main><script>${LINK_PAGE_SCRIPT}</script>${parts.disc ? `<script>${DISC_PAGE_SCRIPT}</script>` : ''}${parts.packs ? `<script>${PACKS_PAGE_SCRIPT}</script>` : ''}</body></html>`;
 }

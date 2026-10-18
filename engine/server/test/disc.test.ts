@@ -29,7 +29,7 @@ import type { ServerMsg } from '../src/lobby_protocol.js';
 import { startServer, type App } from '../src/server.js';
 import { iceServers } from '../src/turn.js';
 
-const PASSWORD = 'disc upload tests 123';
+const KEY = 'disc-upload-tests-0123456789';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-disc-test-'));
 const site = join(dir, 'site');
 let counter = 0;
@@ -203,20 +203,21 @@ describe('disc identity check', () => {
 // ---- the upload ----
 
 function config(over: Partial<ServerConfig> = {}): ServerConfig {
-  return { ...defaults, site, password: PASSWORD, port: 0, discDir: join(dir, `disc-${++counter}`), expectDisc: EXPECT, ...over };
+  return { ...defaults, site, accessKey: KEY, port: 0, discDir: join(dir, `disc-${++counter}`), expectDisc: EXPECT, ...over };
 }
 
-async function login(app: App): Promise<string> {
-  const r = await fetch(`${app.url}/login`, { method: 'POST', body: new URLSearchParams({ password: PASSWORD, next: '/' }), redirect: 'manual' });
+/** Opens the private link as a browser would; returns the access cookie. */
+async function enter(app: App): Promise<string> {
+  const r = await fetch(app.link, { redirect: 'manual' });
   assert.equal(r.status, 303);
   return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
 }
 
-/** A logged-in client of the Server disc page: its cookie and CSRF token. */
+/** A client of the Server disc page with access: its cookie and CSRF token. */
 class Owner {
   constructor(readonly app: App, readonly cookie: string, readonly token: string) {}
   static async open(app: App): Promise<Owner> {
-    const cookie = await login(app);
+    const cookie = await enter(app);
     const r = await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-security-policy'), DISC_PAGE_CSP);
@@ -264,14 +265,14 @@ describe('Server disc upload', () => {
     for (const a of running) await a.close();
   });
 
-  it('needs a login, and is off without a disc directory', async () => {
+  it('needs access, and is off without a disc directory', async () => {
     const app = await start();
     for (const p of ['/api/disc', '/api/disc/uploads']) {
       const r = await fetch(`${app.url}${p}`, { method: p.endsWith('uploads') ? 'POST' : 'GET' });
       assert.equal(r.status, 401, p);
     }
     const off = await start({ discDir: '' });
-    const cookie = await login(off);
+    const cookie = await enter(off);
     assert.equal((await fetch(`${off.url}/disc`, { headers: { Cookie: cookie } })).status, 404);
     assert.deepEqual(await (await fetch(`${off.url}/config.json`, { headers: { Cookie: cookie } })).json(), {});
     const r = await fetch(`${off.url}/api/disc/uploads`, { method: 'POST', headers: { Cookie: cookie } });
@@ -290,9 +291,12 @@ describe('Server disc upload', () => {
     assert.equal(r.status, 403);
     r = await o.api('POST', '/api/disc/uploads', body, 'text/plain');
     assert.equal(r.status, 415);
-    // Another session's token does not work either.
-    const other = await Owner.open(app);
-    r = await o.api('POST', '/api/disc/uploads', body, 'application/json', { 'X-MVP-CSRF': other.token });
+    // The token is bound to the access cookie (the same for every browser with access): a server with another key
+    // has another cookie and another token.
+    const other = await start({ accessKey: 'another-key-0123456789' });
+    const elsewhere = await Owner.open(other);
+    assert.notEqual(elsewhere.token, o.token);
+    r = await o.api('POST', '/api/disc/uploads', body, 'application/json', { 'X-MVP-CSRF': elsewhere.token });
     assert.equal(r.status, 403);
     assert.equal((await o.status()).upload, null);
   });
@@ -324,10 +328,11 @@ describe('Server disc upload', () => {
     r = await o.put(id, half, Buffer.alloc(file.length - half + 1));
     assert.equal(r.status, 413);
 
-    // The server restarts: the upload continues where it stopped (with a new login and token).
+    // The server restarts: the upload continues where it stopped. The page's cookie and token still work (an open
+    // page goes on uploading).
     await app.close();
     app = await start({ discDir });
-    o = await Owner.open(app);
+    o = new Owner(app, o.cookie, o.token);
     st = await o.status();
     assert.equal(st.upload.received, half);
     assert.equal(st.upload.fingerprint, 'name|size|mtime');
@@ -456,7 +461,7 @@ describe('Server disc upload', () => {
     const m = (await r.json()) as Record<string, any>;
     assert.deepEqual({ ...m, version: undefined }, { version: undefined, size: file.length, pieceBytes: PIECE_BYTES, pieces, hash: cfg.discHash });
     assert.equal((await o.api('GET', '/api/disc/manifest?v=old')).status, 404);
-    assert.equal((await fetch(`${app.url}${cfg.discManifest}`)).status, 401);  // behind the login
+    assert.equal((await fetch(`${app.url}${cfg.discManifest}`)).status, 401);  // behind the private link
 
     // Kept next to the image: a restart reads it instead of hashing the image again.
     await app.close();
@@ -505,7 +510,7 @@ describe('disc image hash (P1)', () => {
 // ---- TURN for the Docker deployment ----
 
 describe('TURN settings from the environment (Docker)', () => {
-  const env = (over: Record<string, string>) => ({ MVP_SITE: site, MVP_PASSWORD: PASSWORD, ...over });
+  const env = (over: Record<string, string>) => ({ MVP_SITE: site, MVP_ACCESS_KEY: KEY, ...over });
 
   it('creates the shared secret once and builds STUN and TURN for the page host', () => {
     const file = join(dir, 'turn', 'secret');
@@ -544,7 +549,7 @@ describe('TURN settings from the environment (Docker)', () => {
   it('hands each page the ICE servers of the host it used, and invite links on that origin', async () => {
     const app = await startServer(config({ discDir: '', stun: ['stun:{host}:3478'], turn: { urls: ['turn:{host}:3478?transport=udp'], secret: 's', ttlSeconds: 60 } }), { log: () => {} });
     try {
-      const cookie = await login(app);
+      const cookie = await enter(app);
       // The page's origin (as the browser sent it) names the host; the server checks it against Host.
       const host = new URL(app.url).host;
       const ws = new WebSocket(`${app.url.replace('http:', 'ws:')}/ws`, { headers: { Cookie: cookie, Origin: app.url, Host: host } });
@@ -561,60 +566,10 @@ describe('TURN settings from the environment (Docker)', () => {
       assert.deepEqual(welcome.iceServers[0], { urls: ['stun:127.0.0.1:3478'] });
       assert.deepEqual(welcome.iceServers[1]!.urls, ['turn:127.0.0.1:3478?transport=udp']);
       const room = msgs[1] as Extract<ServerMsg, { t: 'room' }>;
-      assert.equal(room.invite, `${app.url}/?room=${room.room}`);
+      assert.equal(room.invite, `${app.url}/?room=${room.room}&key=${KEY}`);
       ws.close();
     } finally {
       await app.close();
     }
   });
-});
-
-// ---- resetting the password without a shell (Docker: RESET_PASSWORD in Dokploy) ----
-
-describe('password reset from the environment', () => {
-  const NEW = 'a long enough new password';
-  async function claim(app: App, password: string): Promise<number> {
-    const form = await fetch(`${app.url}/setup`);
-    const html = await form.text();
-    const csrf = /name="csrf" value="([^"]*)"/.exec(html)?.[1] ?? '';
-    const cookie = form.headers.getSetCookie().find((x) => x.startsWith('mvp_setup='))?.split(';')[0] ?? '';
-    const r = await fetch(`${app.url}/setup`, {
-      method: 'POST',
-      headers: { Cookie: cookie, Origin: app.url },
-      body: new URLSearchParams({ password, confirm: password, csrf }),
-      redirect: 'manual',
-    });
-    return r.status;
-  }
-  const startWith = (stateFile: string, resetPassword: string) =>
-    startServer(config({ password: '', discDir: '', stateFile, resetPassword }), { log: () => {} });
-
-  it('reopens setup once per new value, and keeps the new password across restarts', async () => {
-    const stateFile = join(dir, 'reset', 'state.json');
-    let app = await startWith(stateFile, '');
-    assert.equal(await claim(app, NEW), 303);
-    assert.equal(app.passwordMode(), 'stored');
-    await app.close();
-    // A new value: the stored password is gone and setup is open again.
-    app = await startWith(stateFile, 'forgot it, october');
-    assert.equal(app.passwordMode(), 'setup');
-    assert.equal(await claim(app, `${NEW} 2`), 303);
-    await app.close();
-    // The same value again (left in the environment): nothing changes.
-    app = await startWith(stateFile, 'forgot it, october');
-    assert.equal(app.passwordMode(), 'stored');
-    const st = JSON.parse(readFileSync(stateFile, 'utf8')) as { resetToken: string; password: unknown };
-    assert.equal(st.resetToken, createHash('sha256').update('forgot it, october').digest('hex'));
-    assert.ok(st.password);
-    await app.close();
-    // Removing the value changes nothing either; another new value resets again.
-    app = await startWith(stateFile, '');
-    assert.equal(app.passwordMode(), 'stored');
-    await app.close();
-    app = await startWith(stateFile, 'again');
-    assert.equal(app.passwordMode(), 'setup');
-    await app.close();
-    assert.equal(loadConfig(env2({ MVP_RESET_PASSWORD: 'x' })).resetPassword, 'x');
-  });
-  const env2 = (over: Record<string, string>) => ({ MVP_SITE: site, MVP_STATE_FILE: join(dir, 'reset2', 'state.json'), ...over });
 });

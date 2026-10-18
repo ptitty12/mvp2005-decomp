@@ -1,113 +1,457 @@
+/* The page in the look of the game's own front end. The colors are sampled from MVP Baseball 2005's
+   main menu (the native engine's capture at 640x480, 2026-10-17):
+     the top band #070a14 over black; the panel's silver frame #cfd2d2 / #b3b3b3;
+     a menu item, gray #6a6b6b, with #b4b4b4 lines between items and white lettering outlined in black;
+     the chosen item, maroon #602a2b (top edge #481212), gold lettering #dec654 and a baseball for a bullet;
+     the screen title, a red script (#8c0000) outlined in white on a silver swoosh;
+     the bottom bar, gunmetal: #1c1b23, a #6e6d75 highlight line, then #31323a to #454747.
+   Square corners and bevels throughout. Fonts are the machine's own (the page loads none):
+   Bahnschrift (condensed) for the lettering, a brush script for titles. No logo or other branding. */
 :root {
-  --bg: #f6f7f9;
-  --fg: #1d2330;
-  --muted: #5b6475;
-  --panel: #ffffff;
-  --border: #d5d9e0;
-  --accent: #2456c7;
-  --error-bg: #fdecec;
-  --error-fg: #9b1c1c;
+  color-scheme: dark;
+  --bg: #0c0d11;
+  --fg: #ecece6;
+  --muted: #a7a9ab;
+  --panel: #1c1d22;
+  --border: #5c5e62;
+  --accent: #dec654;
+  --error-bg: #4f1515;
+  --error-fg: #ffe1dc;
   --screen: #000000;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14171c;
-    --fg: #e4e7ec;
-    --muted: #9aa3b2;
-    --panel: #1c2027;
-    --border: #2e3440;
-    --accent: #7ea6ff;
-    --error-bg: #3a1b1b;
-    --error-fg: #f3b4b4;
-  }
+  --band: #070a14;
+  --bar: #6a6b6b;
+  --bar-line: #b4b4b4;
+  --pick: #602a2b;
+  --pick-edge: #481212;
+  --gold: #dec654;
+  --title-red: #8c0000;
+  --silver-hi: #f4f5f5;
+  --silver: #cfd2d2;
+  --silver-mid: #b3b3b3;
+  --silver-lo: #7d8080;
+  --gun-hi: #6e6d75;
+  --gun: #32343b;
+  --gun-lo: #1c1b23;
+  --blue-hi: #4b75d8;
+  --blue: #24489f;
+  --blue-lo: #11307c;
+  --face: Bahnschrift, "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+  --script: "Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive;
+  --mono: ui-monospace, Consolas, monospace;
+  --outline: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 2px rgba(0, 0, 0, 0.5);
+  --silver-bar: linear-gradient(180deg, #fbfbfb 0%, #dedede 45%, #b2b2b2 56%, #cacaca 100%);
+  --gray-bar: linear-gradient(180deg, #7a7b7b 0%, #6a6b6b 45%, #5e5f5f 100%);
+  --pick-bar: linear-gradient(180deg, #74393a 0%, #602a2b 45%, #521f20 100%);
+  --ball: radial-gradient(circle at 35% 32%, #ffffff 0%, #e2e2e2 38%, #8e8e8e 78%, #3e3e3e 100%);
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html { background: var(--bg); }
 body {
   margin: 0;
-  background: var(--bg);
+  min-height: 100vh;
   color: var(--fg);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.45 var(--face);
+  background:
+    radial-gradient(110% 60% at 50% -12%, rgba(132, 136, 148, 0.24), transparent 62%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #17181d 0%, #0b0c0f 100%);
 }
-main { max-width: 1000px; margin: 0 auto; padding: 16px; }
-h1 { font-size: 1.4rem; margin: 0.5rem 0; }
-h1 span { color: var(--muted); font-weight: normal; font-size: 0.95rem; margin-left: 0.5rem; }
+a { color: var(--gold); }
 .note { color: var(--muted); }
-.picker { display: inline-flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; padding: 0.6rem 0.8rem;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; max-width: 100%; }
-.error { background: var(--error-bg); color: var(--error-fg); padding: 0.6rem 0.8rem; border-radius: 6px; }
-progress { display: block; width: 100%; max-width: 960px; height: 6px; margin: 0 0 0.5rem; accent-color: var(--accent); }
-#stage { max-width: 960px; background: var(--screen); border-radius: 4px; position: relative; }
-.mod-banner { position: absolute; left: 50%; top: 12%; transform: translateX(-50%); max-width: 90%;
-  padding: 0.4rem 0.9rem; border-radius: 6px; background: rgba(0, 0, 0, 0.72); color: #fff;
-  font-weight: 600; text-align: center; pointer-events: none; }
-.mod-row { display: block; margin: 0.35rem 0; }
-.mod-title { font-weight: 600; }
-canvas { display: block; width: 100%; aspect-ratio: 4 / 3; background: var(--screen); border-radius: 4px; outline: none; }
-#stage:fullscreen { max-width: none; width: 100vw; height: 100vh; border-radius: 0;
+
+/* ---- the top band, and the title on its silver swoosh ---- */
+.topbar {
+  height: 58px;
+  background: linear-gradient(180deg, #0d1222 0%, var(--band) 58%, #000 100%);
+  border-bottom: 1px solid var(--gun-hi);
+  box-shadow: 0 1px 0 #000, 0 4px 0 var(--gun), 0 5px 0 #000;
+}
+.title {
+  margin: 0 auto;
+  padding: 14px 16px 0;
+  font-weight: normal;
+  line-height: 1;
+}
+.title-script {
+  position: relative;
+  z-index: 0;
+  display: inline-block;
+  padding: 0 46px 0 18px;
+  font: italic 700 40px/1 var(--script);
+  color: var(--title-red);
+  white-space: nowrap;
+  text-shadow: -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff, 0 -2px 0 #fff, 0 2px 0 #fff,
+               -2px 0 0 #fff, 2px 0 0 #fff, 3px 4px 3px rgba(0, 0, 0, 0.7);
+}
+.title-script::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  height: 52%;
+  background: linear-gradient(180deg, #ffffff 0%, #e3e5e5 42%, #a9acac 70%, #c9cbcb 100%);
+  border-bottom: 2px solid #000;
+  clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 100%, 0 100%);
+}
+
+/* ---- the layout: the game on the left, the menu column on the right, centered together ---- */
+/* The game's width: the whole picture fits the window's height (the screen, its frame and the bar under it). */
+:root { --game-w: max(480px, min(976px, calc((100vh - 176px) * 4 / 3 + 14px))); }
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, var(--game-w)) 340px;
+  justify-content: center;
+  gap: 24px;
+  align-items: start;
+  padding: 30px 16px 40px;
+}
+.title { max-width: calc(var(--game-w) + 364px + 32px); }
+.col-game { min-width: 0; position: sticky; top: 14px; }
+.col-menu { min-width: 0; }
+@media (max-width: 1020px) {
+  :root { --game-w: 976px; }
+  .layout { grid-template-columns: minmax(0, var(--game-w)); gap: 20px; padding-top: 22px; }
+  .title { max-width: calc(var(--game-w) + 32px); }
+  .col-game { position: static; }
+}
+@media (max-width: 560px) {
+  .title-script { font-size: 30px; padding-right: 34px; }
+  .layout { padding: 18px 10px 30px; }
+}
+
+/* ---- the screen, in the panel's silver frame, with the gunmetal bar under it ---- */
+.screen-frame {
+  padding: 6px;
+  background: linear-gradient(180deg, #e9ebeb 0%, var(--silver) 30%, var(--silver-mid) 70%, #969999 100%);
+  border: 1px solid #000;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+#stage { position: relative; background: var(--screen); border: 1px solid #000; }
+canvas { display: block; width: 100%; aspect-ratio: 4 / 3; background: var(--screen); outline: none; }
+#stage:fullscreen { max-width: none; width: 100vw; height: 100vh; border: 0;
   display: flex; align-items: center; justify-content: center; }
-#stage:fullscreen canvas { width: min(100vw, calc(100vh * 4 / 3)); height: auto; border-radius: 0; }
-.toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
-button { font: inherit; padding: 0.3rem 0.8rem; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--fg); cursor: pointer; }
-button:disabled { opacity: 0.5; cursor: default; }
-.hint { color: var(--accent); }
-.picture select { font: inherit; padding: 0.25rem 0.4rem; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--fg); }
-.operator { margin: 1.5rem 0 0; font-size: 0.8rem; color: var(--muted); }
+#stage:fullscreen canvas { width: min(100vw, calc(100vh * 4 / 3)); height: auto; }
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+  min-height: 44px;
+  padding: 7px 8px 5px;
+  background: linear-gradient(180deg, #2b2a30 0, var(--gun-lo) 7px, var(--gun-hi) 7px, var(--gun-hi) 8px,
+                                      #31323a 8px, #3a3c3e 60%, #454747 100%);
+  border: 1px solid #000;
+  border-top: 0;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+.toolbar-gap { flex: 1 1 0; }
+/* The bar's buttons look like the game's button prompts: a round key, then small capitals. */
+.toolbar button, .toolbar .picture {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 0;
+  background: none;
+  color: #e6e6e6;
+  font: 700 14px/1.2 var(--face);
+  font-stretch: condensed;
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  text-shadow: var(--outline);
+  box-shadow: none;
+}
+.toolbar button:hover:not(:disabled), .toolbar button:focus-visible { color: var(--gold); background: rgba(0, 0, 0, 0.28); }
+.toolbar button[data-key]::before {
+  content: attr(data-key);
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 1px solid #000;
+  background: radial-gradient(circle at 38% 30%, #d6d6d6 0%, #8d8d8d 55%, #4a4a4a 100%);
+  color: #111;
+  font: 700 11px/1 var(--face);
+  font-variant: normal;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+#stats-toggle[aria-pressed="true"] { color: var(--gold); }
+.toolbar .picture select { font: 13px var(--face); padding: 1px 4px; }
+/* The controller chip: a lamp, gray without a controller, green (the A button's) when one is ready. */
+.chip::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid #000;
+  background: #555;
+}
+.chip[data-state="ready"]::before { background: radial-gradient(circle at 35% 30%, #c9ffbf, #39b84a 60%, #1b6a26); }
+.chip[data-state="idle"]::before { background: radial-gradient(circle at 35% 30%, #fff3c2, #c9a52d 60%, #6c5410); }
+.hint { margin: 8px 2px 0; color: var(--gold); font-size: 14px; }
+
+/* ---- panels: the silver frame and dark body of the game's menus ---- */
+.panel {
+  position: relative;
+  margin: 0 0 16px;
+  padding: 0 0 12px;
+  background: linear-gradient(180deg, rgba(38, 40, 46, 0.97) 0%, rgba(22, 23, 27, 0.97) 100%);
+  border: 3px solid;
+  border-color: var(--silver) var(--silver-lo) var(--silver-lo) var(--silver);
+  outline: 1px solid #000;
+  box-shadow: inset 0 0 0 1px #000, 0 8px 20px rgba(0, 0, 0, 0.5);
+}
+.panel > :not(h2):not(.fold):not(.panel-body), .panel-body { margin-left: 12px; margin-right: 12px; }
+.panel-body > :first-child { margin-top: 10px; }
+.panel p { margin: 8px 0; }
+/* A panel's heading: a silver bar with black lettering, a slanted blue tab at its left. */
+.panel > h2, .panel-title {
+  position: relative;
+  margin: 0 0 6px;
+  padding: 4px 12px 3px 34px;
+  background: var(--silver-bar);
+  border-bottom: 1px solid #000;
+  color: #0b0b0b;
+  font: 700 17px/1.25 var(--face);
+  font-stretch: condensed;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.panel > h2::before, .panel-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  background: linear-gradient(180deg, var(--blue-hi) 0%, var(--blue) 50%, var(--blue-lo) 100%);
+  clip-path: polygon(0 0, 100% 0, 60% 100%, 0 100%);
+}
+/* The menu: folded sections in one frame, like the game's Main Menu. Closed, a gray item; open (or
+   pointed at), the chosen item's maroon and gold. */
+.menu { padding: 4px; }
+.fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px 4px 34px;
+  position: relative;
+  list-style: none;
+  cursor: pointer;
+  background: var(--gray-bar);
+  border-top: 1px solid var(--bar-line);
+  border-bottom: 1px solid #2a2a2a;
+  color: #f0f0ea;
+  font: 700 17px/1.25 var(--face);
+  font-stretch: condensed;
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  text-shadow: var(--outline);
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  margin-top: -7.5px;
+  border-radius: 50%;
+  background: var(--ball);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+}
+.fold > summary:hover, .fold > summary:focus-visible, .fold[open] > summary {
+  background: var(--pick-bar);
+  border-top-color: var(--pick-edge);
+  color: var(--gold);
+  outline: none;
+}
+.fold > summary:hover::before, .fold > summary:focus-visible::before, .fold[open] > summary::before { opacity: 1; }
+.fold > summary .note { color: #d8d8cf; font-size: 14px; font-variant: normal; letter-spacing: 0; }
+.fold > .panel-body { margin: 0 8px; }
+.fold[open] > .panel-body { padding-bottom: 12px; }
+.panel-body { overflow-wrap: anywhere; }
+.status:empty { min-height: 0; margin: 0; }
+
+/* ---- controls ---- */
+button {
+  font: 700 15px/1.2 var(--face);
+  font-stretch: condensed;
+  letter-spacing: 0.02em;
+  padding: 5px 12px 4px;
+  border: 1px solid;
+  border-color: #ffffff #6f6f6f #4a4a4a #e6e6e6;
+  border-radius: 0;
+  background: var(--silver-bar);
+  color: #101010;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #000;
+}
+button:hover:not(:disabled) { background: linear-gradient(180deg, #ffffff 0%, #ececec 45%, #c4c4c4 56%, #dadada 100%); }
+button:active:not(:disabled) { background: linear-gradient(180deg, #b6b6b6 0%, #cfcfcf 50%, #e8e8e8 100%); }
+button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+button:disabled { opacity: 0.45; cursor: default; }
+/* Play: the chosen menu item, as large as the game's own. */
+button.primary {
+  position: relative;
+  width: 100%;
+  padding: 9px 14px 8px 44px;
+  text-align: left;
+  background: var(--pick-bar);
+  border-color: var(--pick-edge) #2b0d0d #2b0d0d var(--pick-edge);
+  color: var(--gold);
+  font-size: 24px;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  text-shadow: var(--outline);
+}
+button.primary::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: var(--ball);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+button.primary:hover:not(:disabled) { background: linear-gradient(180deg, #8a4546 0%, #70302f 45%, #5d2324 100%); color: #f3dc6c; }
+select, input[type="text"], input[type="url"], input[type="number"], input:not([type]), textarea {
+  font: 14px var(--face);
+  padding: 3px 6px;
+  border: 1px solid;
+  border-color: #000 #8f9292 #8f9292 #000;
+  border-radius: 0;
+  background: #0d0e11;
+  color: var(--fg);
+  max-width: 100%;
+}
+select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--gold); outline-offset: 0; }
+input[type="file"] { font: 13px var(--face); color: var(--muted); max-width: 100%; }
+input[type="file"]::file-selector-button {
+  margin-right: 8px;
+  font: 700 14px/1.2 var(--face);
+  font-stretch: condensed;
+  padding: 3px 10px 2px;
+  border: 1px solid #000;
+  border-radius: 0;
+  background: var(--silver-bar);
+  color: #101010;
+  cursor: pointer;
+}
+input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--pick); }
+.picker { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; max-width: 100%; }
+
+/* The progress bar: a gold bar in a dark well; striped while the length is unknown. */
+progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  margin: 4px 0 10px;
+  appearance: none;
+  border: 1px solid;
+  border-color: #000 #8f9292 #8f9292 #000;
+  background: #0d0e11;
+  color: var(--gold);
+}
+progress::-webkit-progress-bar { background: #0d0e11; }
+progress::-webkit-progress-value { background: linear-gradient(180deg, #f6e48a 0%, var(--gold) 45%, #a88b25 100%); }
+progress::-moz-progress-bar { background: linear-gradient(180deg, #f6e48a 0%, var(--gold) 45%, #a88b25 100%); }
+progress:indeterminate {
+  background: repeating-linear-gradient(-45deg, #3b3214 0 8px, #6d5c20 8px 16px) 0 0 / 22.6px 100%;
+  animation: busy 0.9s linear infinite;
+}
+progress:indeterminate::-webkit-progress-bar { background: transparent; }
+@keyframes busy { to { background-position: 22.6px 0; } }
+@media (prefers-reduced-motion: reduce) { progress:indeterminate { animation: none; } }
+
+/* ---- the Game panel ---- */
+.status { min-height: 1.45em; }
+.error {
+  padding: 8px 10px;
+  background: var(--error-bg);
+  border-left: 4px solid #d32f2f;
+  color: var(--error-fg);
+}
+#start-box { margin: 12px 0 4px; }
+#stream-box { display: grid; gap: 6px; }
+.slow-hint {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-left: 4px solid var(--gold);
+  background: rgba(222, 198, 84, 0.08);
+}
+.slow-hint button { padding: 0 8px; line-height: 1.4; }
+.operator { margin: 4px 2px 0; font-size: 13px; color: var(--muted); }
 .operator a { color: var(--muted); }
-pre { white-space: pre-wrap; font-size: 0.85rem; color: var(--muted); margin: 0.5rem 0; }
-#log { font: 0.8rem/1.4 ui-monospace, Consolas, monospace; max-height: 16rem; overflow: auto;
-  background: var(--panel); border: 1px solid var(--border); padding: 0.5rem; }
-#log .err { color: var(--error-fg); }
-details { margin: 0.5rem 0; }
+
+/* ---- Engine details ---- */
+pre { white-space: pre-wrap; font: 12px/1.45 var(--mono); color: var(--muted); margin: 8px 0; }
+pre:empty { display: none; }
+#log { font: 12px/1.4 var(--mono); max-height: 16rem; overflow: auto; background: #0d0e11;
+  border: 1px solid; border-color: #000 #5c5e62 #5c5e62 #000; padding: 6px 8px; }
+#log .err { color: #ff9c8f; }
+
+/* ---- Gameplay mods (mods-panel.ts) ---- */
+.mod-banner { position: absolute; left: 50%; top: 12%; transform: translateX(-50%); max-width: 90%;
+  padding: 0.35rem 0.9rem; background: rgba(0, 0, 0, 0.72); border-top: 2px solid rgba(255, 255, 255, 0.22);
+  color: #fff; font: 700 17px/1.3 var(--face); font-stretch: condensed; text-transform: uppercase;
+  letter-spacing: 0.03em; text-shadow: var(--outline); text-align: center; pointer-events: none; }
+.mod-row { display: block; margin: 0.45rem 0; }
+.mod-title { font-weight: 700; color: var(--silver); }
+
+/* ---- the controller tables (controls.ts) ---- */
 .pad-map { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.9rem; }
 .pad-map th, .pad-map td { text-align: left; padding: 0.15rem 0.75rem 0.15rem 0; }
 .pad-map th { color: var(--muted); font-weight: normal; }
 .pad-status { margin: 0.5rem 0 0; }
-/* Online play (E5, src/netplay.ts) */
-.online { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem;
-  margin: 0.75rem 0; }
-.online h2 { font-size: 1rem; margin: 0 0 0.4rem; }
-.online-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.online-row .invite { flex: 1 1 18rem; min-width: 0; font: 0.85rem ui-monospace, Consolas, monospace; }
-.online-row input, .online-row select, .online-row button { font: inherit; padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
-.online-status { margin: 0.4rem 0 0; color: var(--muted); }
-.online-status.err { color: var(--error-fg); }
-/* Roster packs (E6, src/packs.ts) */
-.packs { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem;
-  margin: 0.75rem 0; }
-.packs h2 { font-size: 1rem; margin: 0 0 0.4rem; }
-.packs .note { margin: 0 0 0.5rem; font-size: 0.9rem; }
-.packs-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.packs-row .picker { padding: 0.3rem 0.6rem; font-size: 0.9rem; }
-.packs-list { margin: 0.5rem 0; padding-left: 1.5rem; }
-.packs-list li { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; margin: 0.2rem 0; }
-.packs-list button { padding: 0.05rem 0.5rem; font-size: 0.85rem; }
-.packs-meta { color: var(--muted); font: 0.85rem ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
-.packs-summary { margin: 0.3rem 0; color: var(--muted); overflow-wrap: anywhere; }
-.packs-summary.err, .packs-issues .err { color: var(--error-fg); }
-.packs-issues { margin: 0.2rem 0 0; padding-left: 1.2rem; font-size: 0.85rem; max-height: 12rem; overflow: auto;
+
+/* ---- Play online (netplay.ts) ---- */
+.online-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.online-row .invite { flex: 1 1 10rem; min-width: 0; font: 13px var(--mono); }
+.online-status { color: var(--muted); }
+.online-status.err { color: #ff9c8f; }
+.online-pad { color: var(--muted); }
+.online-pad[data-state="ready"] { color: var(--gold); }
+
+/* ---- Roster packs (packs.ts) ---- */
+.packs .note { font-size: 14px; }
+.packs-row { display: grid; gap: 8px; }
+.packs-row .picker { font-size: 14px; }
+.packs-list { margin: 8px 0; padding-left: 1.4rem; }
+.packs-list li { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; margin: 0.25rem 0; }
+.packs-list button { padding: 1px 8px; font-size: 13px; }
+.packs-meta { color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
+.packs-summary { color: var(--muted); overflow-wrap: anywhere; }
+.packs-summary.err, .packs-issues .err { color: #ff9c8f; }
+.packs-issues { margin: 0.2rem 0 0; padding-left: 1.2rem; font-size: 13px; max-height: 12rem; overflow: auto;
   overflow-wrap: anywhere; }
+.packs-issues:empty { display: none; }
 .packs-issues .warn { color: var(--muted); }
-/* Q5: the statistics overlay (src/netstats.ts) and the note for a machine that cannot keep up */
+
+/* ---- Q5: the statistics over the game (netstats.ts) ---- */
 .overlay { position: absolute; top: 8px; left: 8px; max-width: calc(100% - 16px); padding: 6px 8px;
-  background: rgba(0, 0, 0, 0.72); color: #f2f4f8; border-radius: 6px;
-  font: 12px/1.35 ui-monospace, Consolas, monospace; pointer-events: auto; }
+  background: rgba(0, 0, 0, 0.78); border-top: 2px solid rgba(255, 255, 255, 0.2); color: #f2f4f8;
+  font: 12px/1.35 var(--mono); pointer-events: auto; }
 .overlay table { border-collapse: collapse; }
 .overlay th, .overlay td { padding: 0 10px 0 0; text-align: left; font-weight: normal; white-space: nowrap; }
-.overlay th { color: #aeb6c4; }
-.overlay thead th { color: #f2f4f8; font-weight: 600; }
+.overlay th { color: #b3b6bb; }
+.overlay thead th { color: var(--gold); font-weight: 600; }
 #overlay-notes { margin: 4px 0; max-width: 34rem; white-space: normal; color: #d8dde6; }
-.overlay button { font: 12px system-ui, sans-serif; padding: 2px 8px; background: #2b3240; color: #f2f4f8;
-  border-color: #4a5466; }
+.overlay button { font: 700 12px var(--face); padding: 2px 8px; }
 .overlay-copied { margin-left: 6px; color: #9fe0a8; }
-#stats-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.slow-hint { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; max-width: 960px;
-  margin: 0 0 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--panel); color: var(--fg); }
-.slow-hint button { padding: 0 0.5rem; line-height: 1.4; }
 
 /* The ABS challenge scene over the game (abs-scene.ts): the callout when a challenge is made, the
    Replay tag, then the verdict panel. The panel takes the look of the game's own pause screen (owner,

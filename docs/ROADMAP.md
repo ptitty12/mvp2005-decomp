@@ -20,7 +20,7 @@ gameplay mods, 60 fps, widescreen and higher resolution.
 
 **Done looks like this:** a friend opens the owner's site and picks their own disc
 image. They join a lobby, choose a roster pack, and play a full exhibition game
-against another player in another browser. On the owner's private deployment the disc image comes from the password-protected server
+against another player in another browser. On the owner's private deployment the disc image comes from the private server (reached through its private link)
 (owner, 2026-10-14); otherwise nothing derived from the disc ever
 leaves their machine.
 

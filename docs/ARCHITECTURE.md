@@ -63,7 +63,7 @@ what binds.
 - **The VPS serves only:**
   - the engine (our code);
   - on the owner's private deployment only (owner, 2026-10-14), the owner's disc image,
-    behind a password, to the owner and invited players who own the game. The page then
+    behind a private link, to the owner and invited players who own the game. The page then
     loads the disc from there instead of the file picker. The picker remains for any other
     setup;
   - the lobby, signaling and TURN relay;

@@ -1,8 +1,9 @@
 # MVP Baseball 2005: the private netplay site, for a Dokploy "Docker Compose" app
 # (compose path ./deploy/docker-compose.yml; the owner's guide: docs/engine/DEPLOY_DOKPLOY.md).
 #
-#   mvp     the site behind its password, the Server disc page, the disc route, the lobby and
-#           signaling: plain HTTP on port 8080, which Dokploy's Traefik serves over HTTPS on the domain
+#   mvp     the site behind its private link, the Server disc page, the disc route, the lobby and
+#           signaling: plain HTTP on port 8080, which Dokploy's Traefik serves over HTTPS on the domain.
+#           Its log (Dokploy: the mvp service's Logs tab) prints the private link at every start
 #   coturn  STUN, and the TURN relay for players whose networks block a direct connection:
 #           UDP 3478, TCP 3478 and UDP 49160-49200 published on the host (Traefik handles HTTP only)
 #
@@ -11,12 +12,14 @@
 #   TURN_EXTERNAL_IP  the server's public IPv4 address, for coturn; detected when empty
 #   TURN_HOST         where players reach coturn; default: the site's own host name. Set it to the
 #                     server's IP address when the domain goes through a proxy (e.g. Cloudflare's orange cloud)
-#   SETUP_HOURS       how long the first-run password page stays open after the first start (default 48)
-#   RESET_PASSWORD    any new word: on the next deploy the stored password is removed once and the
-#                     first-run page opens again (the same word again changes nothing)
+#   ACCESS_KEY        empty (default): the key of the private link is generated on the first start and
+#                     kept in the volume. Set it to any new value of 16 or more letters, digits, ".", "_",
+#                     "~" or "-" to replace the link (e.g. to lock out a leaked one): every browser then
+#                     needs the new link. Keep it set; removing it brings back the generated link
 #
 # Everything that must survive a redeploy is in the named volume mvp-data (/data):
-#   state.json   the site password's scrypt hash (created on the first-run page)
+#   access-key   the key of the private link https://<site>/?key=<key>, generated on the first start
+#                (owner-only file)
 #   disc/        the disc image uploaded on the Server disc page (owner-only directory), and its
 #                piece hashes for the players' one-time download (GV4E69.manifest.json)
 #   packs/       roster packs uploaded on the same page (owner-only directory), offered to the
@@ -41,8 +44,7 @@ services:
     environment:
       MVP_TURN_MODE: ${TURN_MODE:-relay}
       MVP_TURN_HOST: ${TURN_HOST:-}
-      MVP_SETUP_HOURS: ${SETUP_HOURS:-48}
-      MVP_RESET_PASSWORD: ${RESET_PASSWORD:-}
+      MVP_ACCESS_KEY: ${ACCESS_KEY:-}
     volumes:
       - mvp-data:/data
     expose:

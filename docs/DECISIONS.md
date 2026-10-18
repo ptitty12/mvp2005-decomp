@@ -509,6 +509,14 @@ Agents may propose entries under "Open questions"; only the owner moves them to 
 
   | Native lines unchanged except human pitching (F2); renderer digests equal main; netplay_check passes; save-state round trips IDENTICAL with the native loop active; Q7's scale-change check passes; msvc 48/49, emscripten 41/42 (+1 skip each). | merge of engine/q6-speed
 
+- 2026-10-17 | **No password on the private deployment: a private link instead** (owner, in chat: "please get rid of the password to sign in", then "just no password no auth i'll monitor logs"). Replaces the password gate of the 2026-10-14 entry above.
+  - The site serves the owner's whole disc image, so the lead kept one gate and made it invisible: `https://site/?key=<key>` opened once gives that browser a 400-day cookie (renewed on every visit, stateless, so restarts keep it). Nobody types anything; there is no login page.
+  - Without the cookie the site shows only "This is a private server" (403) and the APIs answer 401; `robots.txt` and `X-Robots-Tag` keep it out of search engines. Logs alone would not stop a download in progress.
+  - The key is created on the first start (`/data/access-key`), printed in the server log at every start, and shown with a Copy button on the Server disc page. Lobby invite links carry it. `ACCESS_KEY` in Dokploy replaces it and locks out every browser.
+  - The lead's 2026-10-14 worry about secret URLs (history, logs, link previews) is reduced, not removed: the server strips the key from the address bar with a redirect, but anyone the link is pasted to gets in.
+  - Same day, same request: the site takes the look of the game's own menus (docs/engine/WEB.md, "The look").
+  | Owner request; the disc must not become public. | engine/server/src/access.ts; 43/43 server tests; Chrome end to end: 403/401 without the link, 303 + cookie with it, game running, Server disc page
+
 ## Open questions for owner
 
 - 2026-10-14 | **K1c (OSInit, DVDInit): the name commit is held on one verify.py false positive (owner).** *Status (2026-10-14, claude-w2):* blockers 1 and 2 are resolved on `work/k1c-finish`; blocker 3 is new. Naming fn_8043188C OSInit and fn_80422FD8 DVDInit (`tools/goals/renames/k1c.tsv`, evidence there) makes dtk's SDK signatures rename 150 more symbols. work/k1c landed everything that is correct on its own: six contract commits, the BB2 overlay without its macro, fn_8042515C's parameter renamed, the .bss data splits of the two linked units (fstload.c: bb2Buf and __fstLoad's static block; EXIBios.c: Ecb), and stateBusy's switch table in dvd's split (without it dtk exports the static as `stateBusy_8042427C` and verify counts fn_8042427C as 100% -> 0%). Blockers:

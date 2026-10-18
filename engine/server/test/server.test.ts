@@ -1,16 +1,16 @@
-// Tests for the VPS server (E5): the password gate, the static site, the disc
+// Tests for the VPS server (E5): the private link, the static site, the disc
 // route, the lobby and signaling. No game data: the "disc" is random bytes in
 // a temporary directory.
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { get as httpGet } from 'node:http';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
-import { LoginLimiter, Sessions, parseCookies, safeNext } from '../src/auth.js';
+import { ACCESS_COOKIE, NO_ACCESS_CSP, accessToken, parseCookies } from '../src/access.js';
 import { defaults, loadConfig, type ServerConfig } from '../src/config.js';
 import { parseRange } from '../src/files.js';
 import { parseClientMsg } from '../src/lobby.js';
@@ -18,7 +18,7 @@ import type { ServerMsg } from '../src/lobby_protocol.js';
 import { SITE_CSP, startServer, type App } from '../src/server.js';
 import { turnCredentials } from '../src/turn.js';
 
-const PASSWORD = 'correct horse battery';
+const KEY = 'test-access-key.0123456789~';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-server-test-'));
 const site = join(dir, 'site');
 const discPath = join(dir, 'disc.bin');
@@ -36,177 +36,210 @@ before(() => {
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 function config(over: Partial<ServerConfig> = {}): ServerConfig {
-  return { ...defaults, site, password: PASSWORD, port: 0, disc: discPath, ...over };
+  return { ...defaults, site, accessKey: KEY, port: 0, disc: discPath, ...over };
 }
 
-function rawGet(url: string, headers: Record<string, string>): Promise<{ status: number; location?: string }> {
+interface RawAnswer {
+  status: number;
+  location?: string;
+  cookie?: string;
+  headers: Record<string, string | string[] | undefined>;
+  body: string;
+}
+
+/** A GET with exact headers and an exact path (Node's fetch always says Sec-Fetch-Mode: cors, and normalizes paths). */
+function rawGet(app: App, path: string, headers: Record<string, string>): Promise<RawAnswer> {
+  const u = new URL(app.url);
   return new Promise((resolve, reject) => {
-    httpGet(url, { headers }, (res) => {
-      res.resume();
-      resolve({ status: res.statusCode ?? 0, location: res.headers.location });
-    }).on('error', reject);
+    httpRequest({ host: u.hostname, port: u.port, path, headers }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => (body += c));
+      res.on('end', () =>
+        resolve({ status: res.statusCode ?? 0, location: res.headers.location, cookie: res.headers['set-cookie']?.[0], headers: res.headers, body }),
+      );
+    })
+      .on('error', reject)
+      .end();
   });
 }
 
-async function login(app: App): Promise<string> {
-  const r = await fetch(`${app.url}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ password: PASSWORD, next: '/' }),
-    redirect: 'manual',
-  });
+const NAVIGATE = { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' };
+
+/** Opens the private link as a browser would; returns the cookie it gets ("mvp_access=..."). */
+async function enter(app: App): Promise<string> {
+  const r = await fetch(app.link, { redirect: 'manual' });
   assert.equal(r.status, 303);
-  const cookie = r.headers.get('set-cookie') ?? '';
-  return cookie.split(';')[0]!;
+  return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
 }
 
-describe('password gate', () => {
+describe('private link', () => {
   let app: App;
   before(async () => (app = await startServer(config())));
   after(() => app.close());
 
-  it('sends page loads to the login form and API calls a 401', async () => {
-    // A browser's page load says Sec-Fetch-Mode: navigate (Node's fetch always says cors,
-    // so these go through node:http with exact headers).
-    let raw = await rawGet(`${app.url}/?room=abc`, { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' });
-    assert.equal(raw.status, 303);
-    assert.equal(raw.location, '/login?next=%2F%3Froom%3Dabc');
-    raw = await rawGet(`${app.url}/main.js`, { 'Sec-Fetch-Mode': 'navigate' });
-    assert.equal(raw.status, 303);
-    raw = await rawGet(`${app.url}/`, { Accept: 'text/html,application/xhtml+xml' });  // curl-like, no Sec-Fetch-*
-    assert.equal(raw.status, 303);
-    raw = await rawGet(`${app.url}/config.json`, { Accept: '*/*', 'Sec-Fetch-Mode': 'cors' });
+  it('shows page loads without access the private-server page, and gives API calls a 401', async () => {
+    let raw = await rawGet(app, '/?room=abc', NAVIGATE);
+    assert.equal(raw.status, 403);
+    assert.equal(raw.cookie, undefined);
+    assert.equal(raw.headers['content-security-policy'], NO_ACCESS_CSP);
+    assert.match(NO_ACCESS_CSP, /^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; img-src data:; frame-ancestors 'none'; base-uri 'none'$/);
+    assert.equal(raw.headers['x-robots-tag'], 'noindex, nofollow');
+    assert.match(raw.body, /This is a private server\. Open the private link you were sent\./);
+    assert.match(raw.body, /<meta name="robots" content="noindex">/);
+    assert.doesNotMatch(raw.body, /<script|<form|<a /);
+    raw = await rawGet(app, '/main.js', { 'Sec-Fetch-Mode': 'navigate' });
+    assert.equal(raw.status, 403);
+    raw = await rawGet(app, '/', { Accept: 'text/html,application/xhtml+xml' });  // curl-like, no Sec-Fetch-*
+    assert.equal(raw.status, 403);
+    raw = await rawGet(app, '/config.json', { Accept: '*/*', 'Sec-Fetch-Mode': 'cors' });
     assert.equal(raw.status, 401);
     let r: Response;
-    for (const p of ['/config.json', '/api/disc/image', '/api/rooms', '/main.js', '/nothing']) {
+    for (const p of ['/config.json', '/api/disc/image', '/api/rooms', '/main.js', '/nothing', '/login', '/setup']) {
       r = await fetch(`${app.url}${p}`, { redirect: 'manual' });
       assert.equal(r.status, 401, p);
-      assert.deepEqual(await r.json(), { error: 'login required' });
+      assert.deepEqual(await r.json(), { error: 'no access' });
     }
     r = await fetch(`${app.url}/api/disc/image`, { method: 'HEAD', redirect: 'manual' });
     assert.equal(r.status, 401);
-  });
-
-  it('shows the login form with a strict CSP', async () => {
-    const r = await fetch(`${app.url}/login?next=/x`);
-    assert.equal(r.status, 200);
-    const html = await r.text();
-    assert.match(html, /type="password"/);
-    assert.match(html, /name="next" value="\/x"/);
-    assert.match(r.headers.get('content-security-policy') ?? '', /default-src 'none'; style-src 'sha256-/);
-    assert.equal(r.headers.get('x-frame-options'), 'DENY');
-  });
-
-  it('refuses a wrong password and accepts the right one with an HttpOnly cookie', async () => {
-    let r = await fetch(`${app.url}/login`, {
-      method: 'POST',
-      body: new URLSearchParams({ password: 'nope', next: '/' }),
-      redirect: 'manual',
-    });
+    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `${ACCESS_COOKIE}=${'x'.repeat(43)}` } });
     assert.equal(r.status, 401);
-    assert.equal(r.headers.get('set-cookie'), null);
-    assert.match(await r.text(), /Wrong password/);
-    r = await fetch(`${app.url}/login`, {
-      method: 'POST',
-      body: new URLSearchParams({ password: PASSWORD, next: '/?room=abcd' }),
-      redirect: 'manual',
-    });
+  });
+
+  it('lets a browser in with the right key: 303 to the same address without it, and a lasting cookie', async () => {
+    assert.equal(app.link, `${app.url}/?key=${KEY}`);
+    let r = await fetch(`${app.url}/?room=ab&key=${KEY}`, { redirect: 'manual' });
     assert.equal(r.status, 303);
-    assert.equal(r.headers.get('location'), '/?room=abcd');
+    assert.equal(r.headers.get('location'), '/?room=ab');
+    assert.equal(r.headers.get('cache-control'), 'no-store');
     const sc = r.headers.get('set-cookie') ?? '';
-    assert.match(sc, /^mvp_session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+$/);
+    assert.equal(sc, `${ACCESS_COOKIE}=${accessToken(KEY)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}`);
+    assert.match(sc, /^mvp_access=[A-Za-z0-9_-]{43};/);
+    assert.equal(accessToken(KEY), createHmac('sha256', KEY).update('mvp-access-v1').digest('base64url'));
     const cookie = sc.split(';')[0]!;
+    for (const [from, to] of [
+      [`/?key=${KEY}`, '/'],
+      [`/?key=${KEY}&room=ab&mod=x&mod=y`, '/?room=ab&mod=x&mod=y'],
+      [`/disc?key=${KEY}`, '/disc'],
+      [`/sub/a.txt?a=1&key=${KEY}`, '/sub/a.txt?a=1'],
+    ]) {
+      const raw = await rawGet(app, from!, NAVIGATE);
+      assert.equal(raw.status, 303, from);
+      assert.equal(raw.location, to, from);
+      assert.match(raw.cookie ?? '', /^mvp_access=/);
+    }
+    // Never a redirect to another host.
+    for (const from of [`//evil.example/?key=${KEY}`, `/.//evil.example/?key=${KEY}`, `/\\evil.example/?key=${KEY}`]) {
+      const raw = await rawGet(app, from, NAVIGATE);
+      assert.equal(raw.status, 303, from);
+      assert.match(raw.location ?? '', /^\/(?!\/)/, from);
+    }
+    // In: the site, and every page load renews the cookie (API calls do not).
     r = await fetch(`${app.url}/`, { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(await r.text(), '<!doctype html><title>engine</title>');
     assert.equal(r.headers.get('content-security-policy'), SITE_CSP);
     assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(r.headers.get('x-robots-tag'), 'noindex, nofollow');
+    assert.equal(r.headers.get('set-cookie'), null);
+    const raw = await rawGet(app, '/?room=ab', { ...NAVIGATE, Cookie: cookie });
+    assert.equal(raw.status, 200);
+    assert.equal(raw.cookie, sc);
+    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `other=1; ${cookie}` } });
+    assert.equal(r.status, 200);
   });
 
-  it('never redirects outside the site after the login', async () => {
-    for (const next of ['//evil.example', 'https://evil.example/', '/\\evil.example', 'relative']) {
-      const r = await fetch(`${app.url}/login`, {
-        method: 'POST',
-        body: new URLSearchParams({ password: PASSWORD, next }),
-        redirect: 'manual',
-      });
-      assert.equal(r.headers.get('location'), '/', next);
+  it('treats a wrong key as no access', async () => {
+    const cookie = await enter(app);
+    for (const k of ['wrong-key-0123456789', '', KEY.slice(0, -1), `${KEY}x`]) {
+      const raw = await rawGet(app, `/?key=${encodeURIComponent(k)}`, NAVIGATE);
+      assert.equal(raw.status, 403, k);
+      assert.equal(raw.cookie, undefined);
+      // Even with the cookie: the link was wrong.
+      assert.equal((await rawGet(app, `/?key=${encodeURIComponent(k)}`, { ...NAVIGATE, Cookie: cookie })).status, 403, k);
+      const r = await fetch(`${app.url}/config.json?key=${encodeURIComponent(k)}`, { redirect: 'manual' });
+      assert.equal(r.status, 401, k);
     }
-    assert.equal(safeNext('/?room=x'), '/?room=x');
-    assert.equal(safeNext('/a\r\nSet-Cookie: x'), '/');
   });
 
-  it('logs out only from the site itself', async () => {
-    const cookie = await login(app);
-    let r = await fetch(`${app.url}/logout`, { method: 'POST', headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(r.status, 403);  // no Origin
-    r = await fetch(`${app.url}/logout`, {
-      method: 'POST',
-      headers: { Cookie: cookie, Origin: 'https://evil.example' },
-      redirect: 'manual',
-    });
-    assert.equal(r.status, 403);
-    r = await fetch(`${app.url}/logout`, { method: 'POST', headers: { Cookie: cookie, Origin: app.url }, redirect: 'manual' });
-    assert.equal(r.status, 303);
-    assert.match(r.headers.get('set-cookie') ?? '', /Max-Age=0/);
-    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: cookie } });
-    assert.equal(r.status, 401);
+  it('keeps a browser in across a restart; a new key locks it out', async () => {
+    const cookie = await enter(app);
+    const again = await startServer(config());
+    try {
+      assert.equal((await fetch(`${again.url}/config.json`, { headers: { Cookie: cookie } })).status, 200);
+    } finally {
+      await again.close();
+    }
+    const changed = await startServer(config({ accessKey: 'a-new-key-for-the-site-42' }));
+    try {
+      assert.equal((await fetch(`${changed.url}/config.json`, { headers: { Cookie: cookie } })).status, 401);
+      assert.equal((await rawGet(changed, `/?key=${KEY}`, NAVIGATE)).status, 403);  // the old link too
+      const fresh = await enter(changed);
+      assert.notEqual(fresh, cookie);
+      assert.equal((await fetch(`${changed.url}/config.json`, { headers: { Cookie: fresh } })).status, 200);
+    } finally {
+      await changed.close();
+    }
   });
 
-  it('answers /healthz without a login', async () => {
-    const r = await fetch(`${app.url}/healthz`);
+  it('answers /healthz and /robots.txt without access', async () => {
+    let r = await fetch(`${app.url}/healthz`);
+    assert.equal(r.status, 200);
     assert.equal(await r.text(), 'ok');
+    r = await fetch(`${app.url}/robots.txt`);
+    assert.equal(r.status, 200);
+    assert.equal(await r.text(), 'User-agent: *\nDisallow: /\n');
+    assert.equal(r.headers.get('x-robots-tag'), 'noindex, nofollow');
+    // The private link works on them too (the check tools use /healthz?key=...: a page that starts nothing).
+    const raw = await rawGet(app, `/healthz?key=${KEY}`, NAVIGATE);
+    assert.equal(raw.status, 303);
+    assert.equal(raw.location, '/healthz');
   });
 });
 
-describe('login limits and sessions', () => {
-  it('blocks an address after too many failures, even with the right password', async () => {
-    const app = await startServer(config({ loginAttempts: 3 }));
-    try {
-      for (let k = 0; k < 3; ++k) {
-        const r = await fetch(`${app.url}/login`, { method: 'POST', body: 'password=x', redirect: 'manual' });
-        assert.equal(r.status, 401);
-      }
-      const r = await fetch(`${app.url}/login`, {
-        method: 'POST',
-        body: new URLSearchParams({ password: PASSWORD }),
-        redirect: 'manual',
-      });
-      assert.equal(r.status, 429);
-      assert.equal(r.headers.get('set-cookie'), null);
-    } finally {
-      await app.close();
-    }
-  });
+describe('access configuration', () => {
+  const env = (over: Record<string, string>) => ({ MVP_SITE: site, ...over });
 
-  it('expires sessions and windows', () => {
-    let now = 1_000_000;
-    const s = new Sessions(1, () => now);
-    const t = s.create();
-    assert.ok(s.valid(t));
-    assert.ok(!s.valid('other'));
-    now += 3600_000;
-    assert.ok(!s.valid(t));
-    const l = new LoginLimiter(2, () => now);
-    l.fail('a');
-    l.fail('a');
-    assert.ok(l.blocked('a'));
-    assert.ok(!l.blocked('b'));
-    now += 15 * 60_000 + 1;
-    assert.ok(!l.blocked('a'));
-    assert.deepEqual([...parseCookies('a=1; mvp_session=xyz; b=2').entries()], [['a', '1'], ['mvp_session', 'xyz'], ['b', '2']]);
-  });
-
-  it('reads secrets from the environment only, and refuses a short password', () => {
-    assert.throws(() => loadConfig({ MVP_SITE: site }), /MVP_STATE_FILE/);  // no password source (E5b)
-    assert.throws(() => loadConfig({ MVP_SITE: site, MVP_PASSWORD: 'short' }), /at least 8/);
-    const pw = join(dir, 'pw.txt');
-    writeFileSync(pw, 'from a file 123\n');
-    const c = loadConfig({ MVP_SITE: site, MVP_PASSWORD_FILE: pw, MVP_PORT: '9000', MVP_SECURE_COOKIES: '1' });
-    assert.equal(c.password, 'from a file 123');
+  it('needs a key of at least 16 URL-safe characters', () => {
+    assert.throws(() => loadConfig(env({})), /no access key: set MVP_ACCESS_KEY, or MVP_ACCESS_KEY_FILE/);
+    assert.throws(() => loadConfig(env({ MVP_ACCESS_KEY: 'short-key-123' })), /at least 16 characters/);
+    for (const bad of ['sixteen chars ok', 'with/a/slash/0123', 'percent%20encoded0', 'ünïcode-0123456789', 'a+b=c&d0123456789'])
+      assert.throws(() => loadConfig(env({ MVP_ACCESS_KEY: bad })), /only letters, digits and \. _ ~ -/, bad);
+    const c = loadConfig(env({ MVP_ACCESS_KEY: KEY, MVP_PORT: '9000', MVP_SECURE_COOKIES: '1' }));
+    assert.equal(c.accessKey, KEY);
     assert.equal(c.port, 9000);
     assert.equal(c.secureCookies, true);
     assert.equal(c.turn, null);
+    assert.ok(!('password' in c) && !('stateFile' in c) && !('trustProxy' in c));
+  });
+
+  it('reads the key from a file, where MVP_ACCESS_KEY wins and an empty file is an error', () => {
+    const file = join(dir, 'access-key');
+    writeFileSync(file, 'from-a-file-0123456789\n');
+    assert.equal(loadConfig(env({ MVP_ACCESS_KEY_FILE: file })).accessKey, 'from-a-file-0123456789');
+    assert.equal(loadConfig(env({ MVP_ACCESS_KEY_FILE: file, MVP_ACCESS_KEY: KEY })).accessKey, KEY);
+    const empty = join(dir, 'empty-key');
+    writeFileSync(empty, '\n');
+    assert.throws(() => loadConfig(env({ MVP_ACCESS_KEY_FILE: empty })), /MVP_ACCESS_KEY_FILE .* is empty/);
+    assert.throws(() => loadConfig(env({ MVP_ACCESS_KEY_FILE: join(dir, 'missing-key') })), /ENOENT/);
+  });
+
+  it('creates a missing key file once, owner-only, and keeps it', () => {
+    const file = join(dir, 'data', 'access-key');
+    const a = loadConfig(env({ MVP_ACCESS_KEY_FILE: file, MVP_ACCESS_KEY_CREATE: '1' }));
+    assert.match(a.accessKey, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(readFileSync(file, 'utf8').trim(), a.accessKey);
+    if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
+    const b = loadConfig(env({ MVP_ACCESS_KEY_FILE: file, MVP_ACCESS_KEY_CREATE: 'true' }));
+    assert.equal(b.accessKey, a.accessKey, 'kept across restarts');
+    // MVP_ACCESS_KEY set: it wins, and no file is created.
+    const unused = join(dir, 'data', 'unused-key');
+    assert.equal(loadConfig(env({ MVP_ACCESS_KEY_FILE: unused, MVP_ACCESS_KEY_CREATE: '1', MVP_ACCESS_KEY: KEY })).accessKey, KEY);
+    assert.throws(() => statSync(unused), /ENOENT/);
+  });
+
+  it('parses cookies', () => {
+    assert.deepEqual([...parseCookies('a=1; mvp_access=xyz; b=2').entries()], [['a', '1'], ['mvp_access', 'xyz'], ['b', '2']]);
   });
 });
 
@@ -215,7 +248,7 @@ describe('static site', () => {
   let cookie: string;
   before(async () => {
     app = await startServer(config());
-    cookie = await login(app);
+    cookie = await enter(app);
   });
   after(() => app.close());
 
@@ -232,7 +265,7 @@ describe('static site', () => {
     }
   });
 
-  it('makes the pages cross-origin isolated (P2: the threaded engine), the login page too', async () => {
+  it('makes the pages cross-origin isolated (P2: the threaded engine), the answers without access too', async () => {
     for (const r of [await fetch(`${app.url}/sub/a.txt`, { headers: { Cookie: cookie } }), await fetch(`${app.url}/`)]) {
       assert.equal(r.headers.get('cross-origin-opener-policy'), 'same-origin');
       assert.equal(r.headers.get('cross-origin-embedder-policy'), 'require-corp');
@@ -258,7 +291,7 @@ describe('disc route', () => {
       const app = await startServer(config({ disc: d }), { log: () => {} });
       try {
         await app.discReady();
-        const cookie = await login(app);
+        const cookie = await enter(app);
         const r = await fetch(`${app.url}/config.json`, { headers: { Cookie: cookie } });
         assert.equal(r.status, 200);
         assert.deepEqual(await r.json(), body);
@@ -273,7 +306,7 @@ describe('disc route', () => {
   it('serves HEAD, whole and ranged GETs, never cacheable', async () => {
     const app = await startServer(config());
     try {
-      const cookie = await login(app);
+      const cookie = await enter(app);
       const req = (init: RequestInit & { headers?: Record<string, string> } = {}) =>
         fetch(`${app.url}/api/disc/image`, { ...init, headers: { Cookie: cookie, ...(init.headers ?? {}) } });
       let r = await req({ method: 'HEAD' });
@@ -370,14 +403,15 @@ describe('lobby and signaling', () => {
         publicUrl: '',
       }),
     );
-    cookie = await login(app);
+    cookie = await enter(app);
   });
   after(() => app.close());
   const wsUrl = () => app.url.replace('http:', 'ws:') + '/ws';
   const open = () => Peer.open(wsUrl(), { Cookie: cookie, Origin: app.url });
 
-  it('refuses sockets without a session or from another origin', async () => {
+  it('refuses sockets without access or from another origin', async () => {
     await assert.rejects(Peer.open(wsUrl(), { Origin: app.url }), /401/);
+    await assert.rejects(Peer.open(wsUrl(), { Cookie: `${ACCESS_COOKIE}=${accessToken('another-key-0123456789')}`, Origin: app.url }), /401/);
     await assert.rejects(Peer.open(wsUrl(), { Cookie: cookie, Origin: 'https://evil.example' }), /401/);
     await assert.rejects(Peer.open(wsUrl(), { Cookie: cookie }), /401/);
   });
@@ -407,7 +441,12 @@ describe('lobby and signaling', () => {
     assert.equal(ra.delay, 4);
     assert.equal(ra.peer, false);
     assert.match(ra.room, /^[a-z2-9]{12}$/);
-    assert.equal(ra.invite, `${app.url}/?room=${ra.room}`);
+    // The invite carries the key: it also lets the other player's browser in, and lands on the game.
+    assert.equal(ra.invite, `${app.url}/?room=${ra.room}&key=${KEY}`);
+    const viaInvite = await fetch(ra.invite, { redirect: 'manual' });
+    assert.equal(viaInvite.status, 303);
+    assert.equal(viaInvite.headers.get('location'), `/?room=${ra.room}`);
+    assert.equal((viaInvite.headers.get('set-cookie') ?? '').split(';')[0], cookie);
 
     const r = await fetch(`${app.url}/api/rooms`, { headers: { Cookie: cookie } });
     const rooms = ((await r.json()) as { rooms: { room: string; name: string; players: number }[] }).rooms;

@@ -1,6 +1,7 @@
 // Tests for the roster packs on the server (deploy): src/pack_store.ts and the
 // /api/packs routes. No game data: the packs are tiny synthetic zips built here.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ import { DISC_PAGE_CSP } from '../src/disc_page.js';
 import { checkPack, readZipManifest } from '../src/pack_store.js';
 import { startServer, type App } from '../src/server.js';
 
-const PASSWORD = 'pack tests 12345';
+const KEY = 'pack-tests-0123456789';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-pack-test-'));
 const site = join(dir, 'site');
 let counter = 0;
@@ -103,7 +104,7 @@ describe('pack zips', () => {
 describe('roster packs on the server', () => {
   const running: App[] = [];
   const start = async (over: Partial<ServerConfig> = {}) => {
-    const app = await startServer({ ...defaults, site, password: PASSWORD, port: 0, packsDir: join(dir, `packs-${++counter}`), ...over },
+    const app = await startServer({ ...defaults, site, accessKey: KEY, port: 0, packsDir: join(dir, `packs-${++counter}`), ...over },
       { log: () => {} });
     running.push(app);
     return app;
@@ -111,13 +112,14 @@ describe('roster packs on the server', () => {
   after(async () => {
     for (const a of running) await a.close();
   });
-  const login = async (app: App) => {
-    const r = await fetch(`${app.url}/login`, { method: 'POST', body: new URLSearchParams({ password: PASSWORD, next: '/' }), redirect: 'manual' });
+  /** Opens the private link as a browser would; returns the access cookie. */
+  const enter = async (app: App) => {
+    const r = await fetch(app.link, { redirect: 'manual' });
     assert.equal(r.status, 303);
     return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
   };
   const owner = async (app: App) => {
-    const cookie = await login(app);
+    const cookie = await enter(app);
     const r = await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-security-policy'), DISC_PAGE_CSP);
@@ -131,20 +133,31 @@ describe('roster packs on the server', () => {
 
   it('is off without a packs directory', async () => {
     const app = await start({ packsDir: '' });
-    const cookie = await login(app);
+    const cookie = await enter(app);
     const cfg = await (await fetch(`${app.url}/config.json`, { headers: { Cookie: cookie } })).json() as Record<string, unknown>;
     assert.equal(cfg.packs, undefined);
     assert.equal((await fetch(`${app.url}/api/packs`, { headers: { Cookie: cookie } })).status, 404);
     assert.equal((await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } })).status, 404);
   });
 
-  it('needs the login, and names the packs and the page in /config.json', async () => {
+  it('needs access, and names the packs and the page in /config.json', async () => {
     const app = await start();
     assert.equal((await fetch(`${app.url}/api/packs`)).status, 401);
     assert.equal((await fetch(`${app.url}/api/packs/test-league.zip`)).status, 401);
+    assert.equal((await fetch(`${app.url}/disc`)).status, 401);
     const o = await owner(app);
     assert.match(o.html, /Roster packs/);
     assert.doesNotMatch(o.html, /Upload the disc image/);  // no disc directory: the packs part only
+    // The private link comes first, on the address the page was opened at, with a Copy button.
+    assert.ok(o.html.indexOf('Private link') < o.html.indexOf('Roster packs'));
+    assert.ok(o.html.includes(`id="link" type="text" readonly size="48" spellcheck="false" aria-label="Private link" value="${app.link}"`), app.link);
+    assert.match(o.html, /<button id="copy" type="button">Copy<\/button>/);
+    // Every script on the page is pinned in its CSP.
+    for (const [, script] of o.html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+      const hash = `'sha256-${createHash('sha256').update(script!).digest('base64')}'`;
+      assert.ok(DISC_PAGE_CSP.includes(hash), hash);
+    }
+    assert.equal([...o.html.matchAll(/<script>/g)].length, 2);  // the link card and the packs
     const cfg = await (await fetch(`${app.url}/config.json`, { headers: { Cookie: o.cookie } })).json() as Record<string, unknown>;
     assert.equal(cfg.packs, '/api/packs');
     assert.equal(cfg.discPage, '/disc');

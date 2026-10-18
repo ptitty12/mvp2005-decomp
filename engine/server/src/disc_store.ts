@@ -1,5 +1,5 @@
 // The server's disc image and its upload (deploy): on the owner's private
-// deployment a logged-in player can upload the disc image from the "Server
+// deployment a player with access can upload the disc image from the "Server
 // disc" page (src/disc_page.ts) instead of copying it to the server by hand.
 //
 //   <dir>/GV4E69.img              the image the disc route serves (ISO or CISO, by its first bytes)
@@ -19,7 +19,7 @@
 // - Finishing checks the complete file again and renames it over the current
 //   image: readers see the old image or the new one, never a mix.
 // - The directory is the owner's only (0700); the disc never leaves it except
-//   through the logged-in disc route.
+//   through the disc route, to browsers with access.
 import { randomBytes } from 'node:crypto';
 import { promises as fsp, type Stats } from 'node:fs';
 import { join } from 'node:path';

@@ -20,7 +20,7 @@
 // {"disc": "/api/disc/image"}, and /api/disc/image serves PATH to HEAD and to
 // GET with a Range header (206, Cache-Control: private, no-store), so the page
 // loads the disc without the picker. --login: /api/* answers 401 unless the
-// request carries the cookie mvp_session=ok (the page then shows the login
+// request carries the cookie mvp_access=ok (the page then shows the no-access
 // error). --latency MS / --rate MBPS: each image response waits MS first and
 // is sent at that rate (a remote server, for the read-ahead measurements).
 
@@ -66,8 +66,8 @@ function mock(req, res, path) {
     return true;
   }
   if (!path.startsWith('/api/')) return false;
-  if (login && !/(?:^|;\s*)mvp_session=ok(?:;|$)/.test(req.headers.cookie ?? '')) {
-    res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"login"}');
+  if (login && !/(?:^|;\s*)mvp_access=ok(?:;|$)/.test(req.headers.cookie ?? '')) {
+    res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"no access"}');
     return true;
   }
   if (path !== '/api/disc/image') {

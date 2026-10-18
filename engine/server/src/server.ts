@@ -1,9 +1,9 @@
 // The VPS server (E5): one Node process behind a TLS reverse proxy.
 //
-//   GET  /login, POST /login, POST /logout   the password gate (src/auth.ts)
-//   GET/POST /setup                          first-run password setup (src/setup.ts): open only
-//                                            while the server has no password; 404 once it has one
-//   GET  /healthz                            "ok" (no login; for monitoring)
+//   any  /...?key=<key>                      the private link (src/access.ts): 303 to the same
+//                                            address without the key, with the access cookie
+//   GET  /healthz                            "ok" (open; for monitoring)
+//   GET  /robots.txt                         "Disallow: /" (open)
 //   GET  /config.json                        {"disc":"/api/disc/image"} or {}; "discPage" with uploads; with a
 //                                            disc also "discHash", "discSize" and "discManifest" (P1), or
 //                                            "discPreparing" while the image is being hashed
@@ -19,28 +19,25 @@
 //   WS   /ws                                 lobby and WebRTC signaling
 //   GET  anything else                       the engine site (static files)
 //
-// Everything except /login and /healthz needs the session cookie: a page load
-// without it is sent to the login form, anything else gets 401. While the
-// server has no password (setup mode) every page load is sent to /setup instead.
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+// Everything except /healthz and /robots.txt needs the access cookie: a page
+// load without it gets the "private server" page (403), anything else 401.
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 
 import {
-  COOKIE,
-  LOGIN_CSS_HASH,
-  LoginLimiter,
-  Sessions,
-  clearCookie,
-  clientAddress,
+  ACCESS_COOKIE,
+  NO_ACCESS_CSP,
+  accessCookie,
+  accessToken,
   isNavigation,
-  loginPage,
+  noAccessPage,
   parseCookies,
-  safeNext,
-  sessionCookie,
-} from './auth.js';
+  privateLink,
+  sameSecret,
+} from './access.js';
 import type { ServerConfig } from './config.js';
 import { DISC_PAGE_CSP, discPage } from './disc_page.js';
 import { ManifestCache } from './disc_hash.js';
@@ -48,21 +45,6 @@ import { DiscStore, type Answer } from './disc_store.js';
 import { serveDisc, serveStatic } from './files.js';
 import { PackStore } from './pack_store.js';
 import { Lobby } from './lobby.js';
-import {
-  CsrfTokens,
-  HitLimiter,
-  MESSAGE_CSP,
-  PasswordGate,
-  SETUP_COOKIE,
-  SETUP_CSP,
-  SETUP_LIMITS,
-  checkNewPassword,
-  clearSetupCookie,
-  messagePage,
-  setupCookie,
-  setupPage,
-  type PasswordMode,
-} from './setup.js';
 import { iceServers } from './turn.js';
 
 /** Content-Security-Policy of the engine pages: same-origin only, plus compiling the translated game (wasm). */
@@ -81,21 +63,23 @@ const COMMON_HEADERS: Record<string, string> = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
   'Cross-Origin-Resource-Policy': 'same-origin',
+  // A private server: nothing here belongs in a search engine (robots.txt says the same).
+  'X-Robots-Tag': 'noindex, nofollow',
 };
 
 export interface App {
   server: Server;
   lobby: Lobby;
-  sessions: Sessions;
+  /** http://127.0.0.1:port */
   url: string;
-  /** Where the password comes from now: the environment, the state file, or none yet (setup open or closed). */
-  passwordMode(): PasswordMode;
+  /** The private link on `url` (tests and tools): opening it gives a browser access. */
+  link: string;
   /** Resolves when the served disc's manifest is computed (or cannot be): tests. */
   discReady(): Promise<void>;
   close(): Promise<void>;
 }
 
-/** For tests: the clock (setup window, sessions) and where the log lines go. */
+/** For tests: the clock (stale uploads) and where the log lines go. */
 export interface StartOptions {
   now?: () => number;
   log?: (message: string) => void;
@@ -159,22 +143,12 @@ function sameOriginPost(req: IncomingMessage, cfg: ServerConfig): boolean {
 export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise<App> {
   const now = opts.now ?? Date.now;
   const log = opts.log ?? ((m: string) => console.log(`mvp-server: ${m}`));
-  const gate = new PasswordGate({
-    envPassword: cfg.password,
-    stateFile: cfg.stateFile,
-    windowMs: cfg.setupHours * 3600_000,
-    resetRequest: cfg.resetPassword,
-    now,
-    log,
-  });
-  const csrf = new CsrfTokens(now);
-  const setupPerAddress = new HitLimiter(SETUP_LIMITS.requestsPerAddress, SETUP_LIMITS.windowMs, now);
-  const setupPostsPerAddress = new HitLimiter(SETUP_LIMITS.submissionsPerAddress, SETUP_LIMITS.windowMs, now);
-  const setupPostsGlobal = new HitLimiter(SETUP_LIMITS.submissionsGlobal, SETUP_LIMITS.windowMs, now);
-  const sessions = new Sessions(cfg.sessionHours, now);
-  const limiter = new LoginLimiter(cfg.loginAttempts);
+  // The access cookie's value: the same for every browser with access, and across restarts (src/access.ts).
+  const token = accessToken(cfg.accessKey);
+  const hasAccess = (req: IncomingMessage) => sameSecret(parseCookies(req.headers.cookie).get(ACCESS_COOKIE), token);
   const lobby = new Lobby({
-    invite: (room, origin) => `${origin}/?room=${room}`,
+    // An invite carries the key, so it also lets the other player's browser in.
+    invite: (room, origin) => privateLink(origin, cfg.accessKey, room),
     ice: (host) => iceServers(cfg, Date.now(), host),
     idleMinutes: cfg.roomIdleMinutes,
   });
@@ -198,126 +172,30 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     if (d) void manifests.get(d.path, d.sidecar);
   };
   warmManifest();
-  // CSRF tokens of the Server disc page: bound to the session (a page elsewhere can neither read nor forge one).
-  const discKey = randomBytes(32);
-  const discToken = (session: string) => createHmac('sha256', discKey).update(`disc:${session}`).digest('base64url');
+  // CSRF tokens of the Server disc page: bound to the access cookie, under a key derived from the access key, so
+  // an open page keeps working across a restart (an upload continues) and a page elsewhere can neither read nor
+  // forge one.
+  const discKey = createHmac('sha256', cfg.accessKey).update('mvp-disc-csrf-v1').digest();
+  const discToken = (cookie: string) => createHmac('sha256', discKey).update(`disc:${cookie}`).digest('base64url');
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
-
-  const loggedIn = (req: IncomingMessage) => sessions.valid(parseCookies(req.headers.cookie).get(COOKIE));
-
-  /** GET/POST /setup: the first-run password form (404 once a password exists; src/setup.ts). */
-  const handleSetup = async (req: IncomingMessage, res: ServerResponse, method: string): Promise<void> => {
-    const notFound = () => res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
-    const mode = gate.mode;
-    if (mode === 'env' || mode === 'stored') {
-      notFound();
-      return;
-    }
-    const html = (status: number, csp: string, body: string, extra: Record<string, string | string[]> = {}) =>
-      res
-        .writeHead(status, {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'no-store',
-          'Content-Security-Policy': csp,
-          ...extra,
-        })
-        .end(body);
-    const message = (status: number, title: string, text: string, extra: Record<string, string | string[]> = {}) =>
-      html(status, MESSAGE_CSP, messagePage(title, text), extra);
-    const closedPage = () => {
-      gate.logClosed();
-      message(403, 'Setup is closed', 'The setup window for this server has closed, so no password can be created. The server operator has to reopen setup.');
-    };
-    // The setup pages send a same-origin Referrer-Policy, so the browser's form POST carries our own Origin
-    // (under the site-wide "no-referrer" it would say "null").
-    res.setHeader('Referrer-Policy', 'same-origin');
-    if (mode === 'closed') {
-      closedPage();
-      return;
-    }
-    if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') {
-      res.writeHead(405, { Allow: 'GET, HEAD, POST' }).end();
-      return;
-    }
-    const addr = clientAddress(req, cfg.trustProxy);
-    if (
-      !setupPerAddress.allow(addr) ||
-      (method === 'POST' && !(setupPostsPerAddress.allow(addr) && setupPostsGlobal.allow('*')))
-    ) {
-      message(429, 'Too many requests', 'Too many setup requests. Try again in 15 minutes.', { 'Retry-After': String(SETUP_LIMITS.windowMs / 1000) });
-      return;
-    }
-    const cookieId = parseCookies(req.headers.cookie).get(SETUP_COOKIE);
-    const id = CsrfTokens.validId(cookieId) ? cookieId : csrf.newId();
-    const form = (status: number, error: string) =>
-      html(status, SETUP_CSP, setupPage(csrf.issue(id), error), { 'Set-Cookie': setupCookie(id, cfg.secureCookies) });
-    if (method !== 'POST') {
-      form(200, '');
-      return;
-    }
-    if (!sameOriginPost(req, cfg)) {
-      message(403, 'Refused', 'This form must be sent from the setup page of this site.');
-      return;
-    }
-    const body = await readBody(req, 8192);
-    if (body === null) {
-      message(413, 'Refused', 'The form was too large.');
-      return;
-    }
-    const fields = new URLSearchParams(body);
-    if (!csrf.verify(cookieId, fields.get('csrf'))) {
-      form(403, 'The form had expired or did not come from this page. Fill it in again.');
-      return;
-    }
-    const password = fields.get('password') ?? '';
-    const problem = checkNewPassword(password, fields.get('confirm') ?? '');
-    if (problem) {
-      form(400, problem);
-      return;
-    }
-    let result: Awaited<ReturnType<PasswordGate['claim']>>;
-    try {
-      result = await gate.claim(password);
-    } catch (e) {
-      log(`setup: could not store the password (${(e as Error).message}); setup stays open`);
-      message(500, 'Could not save', 'The password could not be saved. See the server log.');
-      return;
-    }
-    if (result === 'done') {
-      notFound();
-    } else if (result === 'closed') {
-      closedPage();
-    } else if (result === 'busy') {
-      message(503, 'Busy', 'Another submission is being processed. Try again in a moment.', { 'Retry-After': '5' });
-    } else {
-      const token = sessions.create();
-      res
-        .writeHead(303, {
-          Location: '/',
-          'Set-Cookie': [sessionCookie(token, cfg.sessionHours, cfg.secureCookies), clearSetupCookie(cfg.secureCookies)],
-          'Cache-Control': 'no-store',
-        })
-        .end();
-    }
-  };
 
   const sendJson = (res: ServerResponse, a: Answer) =>
     res.writeHead(a.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(a.body));
 
   /**
-   * The Server disc page's upload API (logged in already; src/disc_store.ts):
+   * The Server disc page's upload API (with access already; src/disc_store.ts):
    *   POST   /api/disc/uploads                {size, name, fingerprint}: a new upload (201)
    *   PUT    /api/disc/uploads/<id>?offset=N  one chunk (application/octet-stream, at most CHUNK_MAX bytes)
    *   POST   /api/disc/uploads/<id>/finish    check the complete file and make it the server's disc
    *   DELETE /api/disc/uploads/<id>           abandon it
-   * Each request must come from the page itself: the X-MVP-CSRF header holds the session's token,
+   * Each request must come from the page itself: the X-MVP-CSRF header holds the page's token,
    * Sec-Fetch-Site (when sent) says same-origin and Origin (when sent) is this site.
    */
   /** A request from the Server disc page itself: its CSRF token, same-origin. */
   const fromDiscPage = (req: IncomingMessage): boolean => {
-    const session = parseCookies(req.headers.cookie).get(COOKIE)!;
+    const cookie = parseCookies(req.headers.cookie).get(ACCESS_COOKIE)!;
     const got = String(req.headers['x-mvp-csrf'] ?? '');
-    const want = discToken(session);
+    const want = discToken(cookie);
     const tokenOk = got.length === want.length && timingSafeEqual(Buffer.from(got), Buffer.from(want));
     return tokenOk && sameOriginPost(req, cfg);
   };
@@ -460,90 +338,39 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     const path = decodeURIComponent(url.pathname);
     const method = req.method ?? 'GET';
 
+    // The private link: the right key gives this browser the cookie and goes on to the same address without the key
+    // (so it stays out of the address bar, history and bookmarks).
+    const key = url.searchParams.get('key');
+    if (key !== null && sameSecret(key, cfg.accessKey)) {
+      url.searchParams.delete('key');
+      const location = url.pathname.replace(/^\/+/, '/') + url.search;  // never "//host"
+      res
+        .writeHead(303, { Location: location, 'Set-Cookie': accessCookie(token, cfg.secureCookies), 'Cache-Control': 'no-store' })
+        .end();
+      return;
+    }
     if (path === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }).end('ok');
       return;
     }
-    if (path === '/setup') {
-      await handleSetup(req, res, method);
-      return;
-    }
-    if (gate.needsSetup) {
-      // Setup open or closed: there is no password to log in with, so nothing else is served.
-      const closed = gate.mode === 'closed';
-      if (closed) gate.logClosed();
-      if (isNavigation(req)) {
-        if (closed) {
-          res
-            .writeHead(503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': MESSAGE_CSP })
-            .end(messagePage('Not set up', 'This server has no password and its first-run setup window has closed. The server operator has to reopen setup.'));
-        } else {
-          res.writeHead(303, { Location: '/setup', 'Cache-Control': 'no-store' }).end();
-        }
-      } else {
-        res
-          .writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-          .end(closed ? '{"error":"server not set up"}' : '{"error":"setup required"}');
-      }
-      return;
-    }
-    if (path === '/login') {
-      const loginCsp = `default-src 'none'; style-src ${LOGIN_CSS_HASH}; img-src data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`;
-      const page = (status: number, next: string, error: string) =>
-        res
-          .writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': loginCsp })
-          .end(loginPage(next, error));
-      if (method === 'GET') {
-        page(200, safeNext(url.searchParams.get('next')), '');
-        return;
-      }
-      if (method !== 'POST') {
-        res.writeHead(405, { Allow: 'GET, POST' }).end();
-        return;
-      }
-      const addr = clientAddress(req, cfg.trustProxy);
-      if (limiter.blocked(addr)) {
-        page(429, '/', 'Too many attempts. Try again in 15 minutes.');
-        return;
-      }
-      const body = await readBody(req, 4096);
-      const form = new URLSearchParams(body ?? '');
-      const next = safeNext(form.get('next'));
-      const ok = body === null ? false : await gate.verify(form.get('password') ?? '');
-      if (ok === 'busy') {
-        page(503, next, 'Busy. Try again in a moment.');
-        return;
-      }
-      if (!ok) {
-        limiter.fail(addr);
-        page(401, next, 'Wrong password.');
-        return;
-      }
-      limiter.succeed(addr);
-      const token = sessions.create();
-      res.writeHead(303, { Location: next, 'Set-Cookie': sessionCookie(token, cfg.sessionHours, cfg.secureCookies), 'Cache-Control': 'no-store' }).end();
-      return;
-    }
-    if (path === '/logout') {
-      if (method !== 'POST' || !originAllowed(req, cfg)) {
-        res.writeHead(method === 'POST' ? 403 : 405).end();
-        return;
-      }
-      sessions.remove(parseCookies(req.headers.cookie).get(COOKIE));
-      res.writeHead(303, { Location: '/login', 'Set-Cookie': clearCookie(cfg.secureCookies) }).end();
+    if (path === '/robots.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' }).end('User-agent: *\nDisallow: /\n');
       return;
     }
 
-    // ---- everything below needs a session ----
-    if (!loggedIn(req)) {
+    // ---- everything below needs access (a wrong key counts as none) ----
+    if (key !== null || !hasAccess(req)) {
       if (isNavigation(req)) {
-        const next = encodeURIComponent(url.pathname + url.search);
-        res.writeHead(303, { Location: `/login?next=${next}`, 'Cache-Control': 'no-store' }).end();
+        res
+          .writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': NO_ACCESS_CSP })
+          .end(noAccessPage());
       } else {
-        res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"login required"}');
+        res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"no access"}');
       }
       return;
     }
+    // Every page load renews the cookie: a browser in use keeps access.
+    if (method === 'GET' && isNavigation(req)) res.setHeader('Set-Cookie', accessCookie(token, cfg.secureCookies));
     if (store && path.startsWith('/api/disc/uploads')) {
       await handleUpload(req, res, method, path, url);
       return;
@@ -604,10 +431,14 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       return;
     }
     if ((store || packs) && path === '/disc') {
-      const token = discToken(parseCookies(req.headers.cookie).get(COOKIE)!);
+      const csrf = discToken(parseCookies(req.headers.cookie).get(ACCESS_COOKIE)!);
+      // The private link as the owner would send it: on the public URL, else on the address this page was opened at.
+      const origin = cfg.publicUrl
+        ? new URL(cfg.publicUrl).origin
+        : `${cfg.secureCookies ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}`;
       res
         .writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': DISC_PAGE_CSP })
-        .end(method === 'HEAD' ? undefined : discPage(token, { disc: !!store, packs: !!packs }));
+        .end(method === 'HEAD' ? undefined : discPage(csrf, privateLink(origin, cfg.accessKey), { disc: !!store, packs: !!packs }));
       return;
     }
     if (store && path === '/api/disc') {
@@ -635,7 +466,7 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
 
   server.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0];
-    if (path !== '/ws' || !loggedIn(req) || !originAllowed(req, cfg)) {
+    if (path !== '/ws' || !hasAccess(req) || !originAllowed(req, cfg)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       socket.destroy();
       return;
@@ -671,9 +502,8 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
   return {
     server,
     lobby,
-    sessions,
     url: local,
-    passwordMode: () => gate.mode,
+    link: privateLink(local, cfg.accessKey),
     discReady: async () => {
       const d = servedDisc();
       if (d) await manifests.ready(d.path, d.sidecar);

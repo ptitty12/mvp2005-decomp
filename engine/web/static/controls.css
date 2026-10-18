@@ -1,15 +1,12 @@
-/* The Controls panel and the controller chip (Q3, src/controls.ts) */
-.chip { border-radius: 999px; }
-.chip[data-state="ready"] { border-color: var(--accent); color: var(--accent); }
-.chip[data-state="idle"] { border-style: dashed; }
-.ctl h3 { font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+/* The Controls panel (Q3, src/controls.ts). The controller chip in the bar under the game is styled with
+   the bar (style.css); colors come from style.css's tokens. */
+.ctl h3 { margin: 14px 0 6px; padding-bottom: 2px; border-bottom: 1px solid var(--border); color: var(--silver);
+  font: 700 15px/1.3 var(--face); font-stretch: condensed; text-transform: uppercase; letter-spacing: 0.04em; }
 .ctl-status { margin: 0.5rem 0; }
-.ctl-notice { background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.7rem; margin: 0.5rem 0; }
+.ctl-notice { background: rgba(222, 198, 84, 0.08); border-left: 4px solid var(--accent); padding: 0.5rem 0.7rem; margin: 0.5rem 0; }
 .ctl-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
 .ctl-row label { min-width: 7.5rem; }
-.ctl select, .ctl button, .ctl input[type="range"] { font: inherit; }
-.ctl select { max-width: 100%; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: 4px;
-  background: var(--bg); color: var(--fg); }
+.ctl select { max-width: 100%; }
 .ctl-port-state { color: var(--muted); }
 .ctl-devices { list-style: none; margin: 0.5rem 0; padding: 0; }
 .ctl-devices li { padding: 0.2rem 0; }
@@ -18,21 +15,19 @@
 .ctl-live { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin: 0.5rem 0; }
 .ctl-viz { flex: 0 1 22rem; min-width: 14rem; }
 .ctl-svg { width: 100%; height: auto; display: block; }
-.ctl-readout { white-space: pre; font: 0.85rem/1.5 ui-monospace, Consolas, monospace; color: var(--muted); }
-.ctl-bar, .ctl-well { fill: var(--panel); stroke: var(--border); }
+.ctl-readout { white-space: pre; font: 12px/1.5 var(--mono); color: var(--muted); }
+.ctl-bar, .ctl-well { fill: #0d0e11; stroke: var(--border); }
 .ctl-gate { fill: none; stroke: var(--border); stroke-dasharray: 3 3; }
 .ctl-fill { fill: var(--accent); opacity: 0.6; }
-.ctl-btn { fill: var(--panel); stroke: var(--muted); stroke-width: 1.5; }
+.ctl-btn { fill: #0d0e11; stroke: var(--muted); stroke-width: 1.5; }
 .ctl-btn.on { fill: var(--accent); stroke: var(--accent); }
 .ctl-dot { fill: var(--muted); }
 .ctl-dot.c { fill: #d9a800; }
-.ctl-label { font: 9px system-ui, sans-serif; fill: var(--muted); pointer-events: none; }
-.ctl-prompt { background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.7rem; margin: 0.5rem 0;
-  font-weight: 600; }
-.ctl-prompt button { font-weight: normal; margin-left: 0.3rem; padding: 0.1rem 0.6rem; }
+.ctl-label { font: 9px var(--face); fill: var(--muted); pointer-events: none; }
+.ctl-prompt { background: var(--pick-bar); border: 1px solid #000; padding: 0.5rem 0.7rem; margin: 0.5rem 0;
+  color: var(--gold); font-weight: 700; text-shadow: var(--outline); }
+.ctl-prompt button { margin-left: 0.3rem; padding: 0.1rem 0.6rem; text-shadow: none; }
 .pad-map tr.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .pad-map button { padding: 0.05rem 0.6rem; }
 .ctl-tune { display: grid; gap: 0.3rem; margin: 0.5rem 0; }
 .ctl-tune label { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
-.online-pad { margin: 0.3rem 0 0; color: var(--muted); }
-.online-pad[data-state="ready"] { color: var(--accent); }

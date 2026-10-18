@@ -1,7 +1,8 @@
 # Local tests only (agents; never used by Dokploy): publishes the site on
 # http://127.0.0.1:8080 so a browser on this machine can open it, as Traefik
 # would on the server. localhost is a secure context, so WebGPU, the
-# AudioWorklet, OPFS and the Secure session cookie all work without TLS.
+# AudioWorklet, OPFS and the Secure access cookie all work without TLS. The
+# private link is in the log: http://127.0.0.1:8080/?key=<key>.
 #
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml -p mvp-local up -d --build
 #   docker compose -p mvp-local down -v     (removes the test volume, with any disc uploaded to it)

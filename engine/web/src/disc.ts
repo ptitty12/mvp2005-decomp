@@ -3,15 +3,15 @@
 // On load the page asks the server for /config.json. On the owner's private
 // deployment (owner decision 2026-10-14, docs/DECISIONS.md) it holds
 // {"disc": "<url>"}: the image is served from that same-origin URL behind the
-// deployment's login, and the engine Worker streams it with Range requests
+// deployment's private link, and the engine Worker streams it with Range requests
 // (web_disc.h); the page shows no picker. Anywhere else (no config.json, or no
 // "disc" in it) the player picks their own image, as before. The identity check
 // (GV4E69 rev 0, by the DOL's SHA-1) runs on either.
 //
 // The server's contract (E5 builds it in engine/server/): GET /config.json;
 // HEAD on the image URL gives its size; GET with a Range header answers 206;
-// both carry Cache-Control: private, no-store; API calls without a login
-// answer 401.
+// both carry Cache-Control: private, no-store; API calls from a browser without
+// access (it never opened the private link) answer 401.
 //
 // P1: the server also advertises "discHash", "discSize" and "discManifest" (the
 // image's piece hashes): the page then downloads the image once into this
@@ -35,7 +35,7 @@ export type ServerDisc =
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
-const LOGIN = 'You are not logged in (or your login expired). Log in on this site, then reload the page.';
+const LOGIN = 'This browser has no access to the server any more. Open the private link again, then reload the page.';
 
 export async function findServerDisc(base: string, fetchFn: Fetch = fetch): Promise<ServerDisc> {
   let res: Response;

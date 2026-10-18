@@ -14,7 +14,7 @@ ExecStart=/usr/bin/node dist/src/main.js
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
-# /var/lib/mvp: the state file (the setup window and the password hash), owner-only; the only writable path.
+# /var/lib/mvp: owner-only, the only writable path (for "discDir" or "packsDir" uploads, when configured).
 StateDirectory=mvp
 StateDirectoryMode=0700
 UMask=0077

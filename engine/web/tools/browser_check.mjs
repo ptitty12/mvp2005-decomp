@@ -37,11 +37,11 @@
 //   --tag      added to the output file names (summary-BROWSER-TAG.json, ...)
 //   --server-disc  the mock deployment (serve.mjs --disc): the page finds the
 //              image in /config.json and loads it without the picker. --login:
-//              the mock's API wants a login (expect the login error); --latency,
-//              --rate: a slow server
+//              the mock's API wants the access cookie (expect the no-access error);
+//              --latency, --rate: a slow server
 //   --real-server  E5's server (engine/server, built: dist/src/main.js) instead of
-//              the mock, with a throwaway password (the check logs in through its
-//              form) and the disc configured
+//              the mock, with a throwaway access key (the check opens the private
+//              link) and the disc configured
 //   --packs-dir with --real-server: the server's packs directory (MVP_PACKS_DIR): the
 //              zips in it are the packs the page offers in its dropdown
 //   --disc-dir with --real-server: the server's disc directory (MVP_DISC_DIR, as the
@@ -206,14 +206,14 @@ mkdirSync(out, { recursive: true });
 
 // The server, on a free port: serve.mjs (with --server-disc its mock of the
 // deployment), or with --real-server E5's server (engine/server, built) with a
-// throwaway password and the disc configured.
+// throwaway access key and the disc configured.
 // --site DIR: another build's site (e.g. a profiling build with function names).
 const site = resolve(opt('--site', join(repo, 'build', 'engine', 'emscripten', 'web', 'site')));
-const password = randomBytes(18).toString('base64url');
+const accessKey = randomBytes(18).toString('base64url');
 let server;
 if (realServer) {
   server = spawn(process.execPath, [realServer], {
-    env: { ...process.env, MVP_PASSWORD: password, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
+    env: { ...process.env, MVP_ACCESS_KEY: accessKey, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
            ...(discDir ? { MVP_DISC_DIR: resolve(discDir) } : { MVP_DISC_IMAGE: disc }),
            ...(packsDir ? { MVP_PACKS_DIR: resolve(packsDir) } : {}) },
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -350,12 +350,11 @@ async function runOnce(context, run) {
   for (const [k, v] of new URLSearchParams(discParams)) q.set(k, v);
   for (const [k, v] of new URLSearchParams(pageParams)) q.set(k, v);
   if (storeOff) q.set('store', '0');
-  // Log in through the form, as a player would (to a page that starts nothing), and empty the
-  // browser's caches before the game page loads.
+  // Open the private link, as a player would (on a page that starts nothing: the server answers with the
+  // cookie and goes on to /healthz), and empty the browser's caches before the game page loads.
   if (realServer && run === 1) {
-    await page.goto(`${base}login?next=%2Fhealthz`);
-    await page.fill('input[name=password]', password);
-    await Promise.all([page.waitForURL(`${base}healthz`), page.click('button[type=submit]')]);
+    await page.goto(`${base}healthz?key=${accessKey}`);
+    if (page.url() !== `${base}healthz`) throw new Error(`the private link went to ${page.url()}`);
   }
   if (run === 1 && (clearCache || clearDisc)) {
     if (!realServer) await page.goto(`${base}style.css`);
@@ -377,7 +376,7 @@ async function runOnce(context, run) {
     await page.setInputFiles(statSync(p).isDirectory() ? '#packs-folder' : '#packs-zip', p);
     await page.waitForFunction((n) => window.mvp.packs?.count === n && window.mvp.packs.report, i + 1, { timeout: 30000 });
   }
-  // The server's packs: from the panel's dropdown (downloaded from the server behind the login).
+  // The server's packs: from the panel's dropdown (downloaded from the server behind the private link).
   for (const [i, file] of serverPacks.entries()) {
     await page.waitForSelector('#packs-server', { timeout: 30000 });
     await page.selectOption('#packs-server', file);

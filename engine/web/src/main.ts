@@ -892,14 +892,14 @@ async function keepDisc(offer: DiscOffer, streamed: DiscSource): Promise<DiscSou
     const text: Record<DownloadError['kind'], string> = {
       quota: `This browser cannot keep the game data (${mb}): ${err.message}. Free some disk space, and use a normal ` +
              'window (not a private or incognito one), then reload the page.',
-      login: 'You are not logged in (or your login expired). Log in on this site, then reload the page.',
+      access: 'This browser has no access to the server any more. Open the private link again, then reload the page.',
       changed: 'The game disc on the server was replaced during the download. Reload the page to download the new one.',
       network: `The game data could not be downloaded (${err.message}). Reload the page: the download continues where it stopped.`,
       corrupt: `The downloaded game data did not match the server's checksums (${err.message}). Reload the page to try again.`,
       storage: `This browser could not store the game data (${err.message}). Reload the page to try again, or use another browser.`,
     };
     showError('download', text[err.kind]);
-    if (err.kind !== 'login' && err.kind !== 'changed') {
+    if (err.kind !== 'access' && err.kind !== 'changed') {
       // Still playable: the engine reads the image from the server (it may pause while the game loads).
       streamBox.hidden = false;
       $<HTMLButtonElement>('stream').addEventListener('click', () => {

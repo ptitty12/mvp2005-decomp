@@ -1,5 +1,5 @@
-// Files (E5): the engine site (static, behind the login) and the owner's disc
-// image (behind the login, byte ranges, never cached by anyone).
+// Files (E5): the engine site (static, behind the private link) and the owner's
+// disc image (behind the private link, byte ranges, never cached by anyone).
 import { createReadStream, promises as fsp } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';

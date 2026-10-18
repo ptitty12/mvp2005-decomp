@@ -11,7 +11,7 @@
 //
 // On the owner's deployment the server also offers packs (/config.json "packs",
 // engine/server/src/pack_store.ts): a dropdown lists them, and choosing one
-// downloads its zip (behind the login) and adds it as if the player had picked
+// downloads its zip (behind the private link) and adds it as if the player had picked
 // the file. The page remembers the server packs a player chose (this browser
 // only) and adds them again on the next visit, if the server still has them.
 
@@ -108,7 +108,7 @@ export class PackPanel {
         const r = await fetchFn(new URL(`${base.pathname.replace(/\/$/, '')}/${encodeURIComponent(p.file)}`, base).href,
           { credentials: 'same-origin' });
         if (!r.ok) {
-          this.say(`Could not download ${p.name} (HTTP ${r.status}${r.status === 401 ? ': log in again' : ''}).`, true);
+          this.say(`Could not download ${p.name} (HTTP ${r.status}${r.status === 401 ? ': this browser has no access any more; open the private link again' : ''}).`, true);
           return;
         }
         data = await r.arrayBuffer();

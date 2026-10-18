@@ -3,17 +3,12 @@
   "port": 8080,
   "site": "/opt/mvp/site",
   "disc": "/srv/mvp/disc/GV4E69.ciso",
-  "stateFile": "/var/lib/mvp/state.json",
-  "setupHours": 48,
   "secureCookies": true,
-  "trustProxy": true,
   "publicUrl": "https://mvp.example.com",
-  "sessionHours": 720,
   "stun": ["stun:mvp.example.com:3478"],
   "turn": {
     "urls": ["turn:mvp.example.com:3478?transport=udp", "turn:mvp.example.com:3478?transport=tcp"],
     "ttlSeconds": 86400
   },
-  "roomIdleMinutes": 30,
-  "loginAttempts": 10
+  "roomIdleMinutes": 30
 }

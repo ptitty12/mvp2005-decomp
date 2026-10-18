@@ -3,74 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MVP Baseball 2005 engine</title>
+  <meta name="robots" content="noindex, nofollow">
+  <title>MVP Baseball 2005</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="controls.css">
   <script type="module" src="main.js"></script>
 </head>
 <body>
-  <main>
-    <h1>MVP Baseball 2005 <span>browser engine, development build</span></h1>
-    <section id="online" class="online" hidden></section>
-    <section id="packs" class="packs"></section>
-    <div id="picker" hidden>
-      <p class="note">
-        Pick your own disc image of MVP Baseball 2005 for GameCube (USA, GV4E69). The page reads it on this
-        computer and translates the game here; the image is never uploaded.
-      </p>
-      <label class="picker">Disc image (ISO or CISO)
-        <input type="file" id="disc" accept=".iso,.ciso,.gcm">
-      </label>
-    </div>
-    <p id="start-box" hidden><button type="button" id="play">Play</button></p>
-    <p id="stream-box" hidden><button type="button" id="stream">Play without keeping the game data</button>
-      <span class="note">The game then reads the disc from the server while you play, and pauses while it loads.</span></p>
-    <p id="status" role="status"></p>
-    <progress id="progress" max="1" hidden></progress>
-    <p id="error" class="error" role="alert" hidden></p>
-    <p id="slow-hint" class="slow-hint" role="status" hidden><span id="slow-hint-text"></span>
-      <button type="button" id="slow-hint-close" title="Hide this note" aria-label="Hide this note">&times;</button></p>
-    <div id="stage">
-      <canvas id="screen" width="640" height="480" tabindex="0" aria-label="Game screen"></canvas>
-      <div id="overlay" class="overlay" hidden>
-        <table id="overlay-table"></table>
-        <div id="overlay-notes"></div>
-        <button type="button" id="overlay-copy" title="Copy these numbers as text, to paste into a chat">Copy stats</button>
-        <span id="overlay-copied" class="overlay-copied" hidden>Copied.</span>
+  <!-- The look follows the game's own front end (style.css): gunmetal bands, silver-framed panels,
+       gray menu bars, and the maroon bar with gold lettering for the chosen item. -->
+  <header class="topbar">
+    <h1 class="title"><span class="title-script">MVP Baseball 2005</span></h1>
+  </header>
+  <main class="layout">
+    <div class="col-game">
+      <div class="screen-frame">
+        <div id="stage">
+          <canvas id="screen" width="640" height="480" tabindex="0" aria-label="Game screen"></canvas>
+          <div id="overlay" class="overlay" hidden>
+            <table id="overlay-table"></table>
+            <div id="overlay-notes"></div>
+            <button type="button" id="overlay-copy" title="Copy these numbers as text, to paste into a chat">Copy stats</button>
+            <span id="overlay-copied" class="overlay-copied" hidden>Copied.</span>
+          </div>
+          <div id="mod-banner" class="mod-banner" role="status" hidden></div>
+        </div>
       </div>
-      <div id="mod-banner" class="mod-banner" role="status" hidden></div>
+      <div class="toolbar">
+        <button type="button" id="fullscreen" data-key="F" title="Fullscreen (F, or double-click the game)">Fullscreen</button>
+        <button type="button" id="sound" data-key="M" title="Turn the sound on or off (M)">Sound: off</button>
+        <button type="button" id="pause" data-key="P" title="Pause or resume (P); hiding the tab pauses too">Pause</button>
+        <button type="button" id="stats-toggle" data-key="`" title="Show or hide the statistics over the game (the ` key, left of 1)" aria-pressed="false">Stats</button>
+        <span class="toolbar-gap"></span>
+        <label class="picture" title="Internal resolution: how many times the console's pixels the game is drawn at. Auto picks by the size of the picture on screen.">Picture
+          <select id="picture">
+            <option value="auto">Auto</option>
+            <option value="1">1x (console)</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+          </select></label>
+        <button type="button" id="pad-chip" class="chip" data-state="none" title="Controllers and keys: open the Controls panel">No controller (keyboard)</button>
+      </div>
+      <p id="hint" class="hint" hidden></p>
     </div>
-    <div class="toolbar">
-      <button type="button" id="fullscreen" title="Fullscreen (F, or double-click the game)">Fullscreen</button>
-      <button type="button" id="sound" title="Turn the sound on or off (M)">Sound: off</button>
-      <button type="button" id="pause" title="Pause or resume (P); hiding the tab pauses too">Pause</button>
-      <button type="button" id="stats-toggle" title="Show or hide the statistics over the game (the ` key, left of 1)" aria-pressed="false">Stats</button>
-      <label class="picture" title="Internal resolution: how many times the console's pixels the game is drawn at. Auto picks by the size of the picture on screen.">Picture
-        <select id="picture">
-          <option value="auto">Auto</option>
-          <option value="1">1x (console)</option>
-          <option value="2">2x</option>
-          <option value="3">3x</option>
-        </select></label>
-      <button type="button" id="pad-chip" class="chip" data-state="none" title="Controllers and keys: open the Controls panel">No controller (keyboard)</button>
-      <span id="hint" class="hint" hidden></span>
-    </div>
-    <pre id="phases"></pre>
-    <pre id="stats"></pre>
-    <details id="mods-details">
-      <summary>Gameplay mods <span id="mods-summary" class="note"></span></summary>
-      <div id="mods"></div>
-    </details>
-    <details id="controls-details">
-      <summary>Controls <span id="controls-summary" class="note"></span></summary>
-      <div id="controls"></div>
-    </details>
-    <details>
-      <summary>Engine log</summary>
-      <div id="log"></div>
-    </details>
-    <p id="operator" class="operator" hidden><a id="server-disc-link" href="/disc">Server disc</a> (site operator)</p>
+
+    <aside class="col-menu">
+      <section class="panel game-panel" aria-labelledby="game-heading">
+        <h2 id="game-heading" class="panel-title">Game</h2>
+        <div class="panel-body">
+          <p id="status" class="status" role="status"></p>
+          <progress id="progress" max="1" hidden></progress>
+          <p id="error" class="error" role="alert" hidden></p>
+          <p id="slow-hint" class="slow-hint" role="status" hidden><span id="slow-hint-text"></span>
+            <button type="button" id="slow-hint-close" title="Hide this note" aria-label="Hide this note">&times;</button></p>
+          <div id="picker" hidden>
+            <p class="note">
+              Pick your own disc image of MVP Baseball 2005 for GameCube (USA, GV4E69). The page reads it on this
+              computer and translates the game here; the image is never uploaded.
+            </p>
+            <label class="picker">Disc image (ISO or CISO)
+              <input type="file" id="disc" accept=".iso,.ciso,.gcm">
+            </label>
+          </div>
+          <p id="start-box" hidden><button type="button" id="play" class="primary">Play</button></p>
+          <p id="stream-box" hidden><button type="button" id="stream">Play without keeping the game data</button>
+            <span class="note">The game then reads the disc from the server while you play, and pauses while it loads.</span></p>
+        </div>
+      </section>
+      <section id="online" class="panel online" hidden></section>
+      <section id="packs" class="panel packs"></section>
+      <nav class="panel menu" aria-label="Settings">
+        <details id="mods-details" class="fold">
+          <summary>Gameplay mods <span id="mods-summary" class="note"></span></summary>
+          <div id="mods" class="panel-body"></div>
+        </details>
+        <details id="controls-details" class="fold">
+          <summary>Controls <span id="controls-summary" class="note"></span></summary>
+          <div id="controls" class="panel-body"></div>
+        </details>
+        <details class="fold">
+          <summary>Engine details</summary>
+          <div class="panel-body">
+            <pre id="phases"></pre>
+            <pre id="stats"></pre>
+            <div id="log"></div>
+          </div>
+        </details>
+      </nav>
+      <p id="operator" class="operator" hidden><a id="server-disc-link" href="/disc">Server disc</a> (site operator)</p>
+    </aside>
   </main>
 </body>
 </html>

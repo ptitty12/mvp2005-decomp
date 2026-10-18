@@ -1,7 +1,7 @@
 // Two-browser netplay check for E5 (needs the player's disc; never run in CI).
 // Starts the netplay server (engine/server, built with `npm run build`) with a
-// throwaway password in front of the built site, opens two isolated browser
-// contexts (two players with their own cookies), logs both in, lets player 1
+// throwaway access key in front of the built site, opens two isolated browser
+// contexts (two players with their own cookies), lets both open the private link, lets player 1
 // create a game and player 2 open the invite link, gives both pages the disc
 // through their file inputs, and runs both games in lockstep with the same
 // mvp-input script (each page drives only its own port from it). Both stop at
@@ -113,11 +113,11 @@ if (!existsSync(serverMain)) {
 mkdirSync(out, { recursive: true });
 const script = scriptFile ? readFileSync(scriptFile, 'utf8') : '';
 
-// The server: a throwaway password, port 0, no disc route (the pages use the file input),
+// The server: a throwaway access key, port 0, no disc route (the pages use the file input),
 // or with --server-disc the disc configured.
-const password = randomBytes(18).toString('base64url');
+const accessKey = randomBytes(18).toString('base64url');
 const server = spawn(process.execPath, [serverMain], {
-  env: { ...process.env, MVP_PASSWORD: password, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
+  env: { ...process.env, MVP_ACCESS_KEY: accessKey, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
          MVP_DISC_IMAGE: serverDisc ? disc : '' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
@@ -231,10 +231,10 @@ try {
     page.on('pageerror', (e) => errors.push(String(e)));
     const requests = [];
     page.on('request', (r) => requests.push(r.url()));
-    // Log in through the form, as a player would (to a page that starts nothing).
-    await page.goto(`${base}/login?next=%2Fhealthz`);
-    await page.fill('input[name=password]', password);
-    await Promise.all([page.waitForURL(`${base}/healthz`), page.click('button[type=submit]')]);
+    // Open the private link, as a player would (on a page that starts nothing: the server answers with the
+    // cookie and goes on to /healthz).
+    await page.goto(`${base}/healthz?key=${accessKey}`);
+    if (page.url() !== `${base}/healthz`) throw new Error(`the private link went to ${page.url()}`);
     pages.push({ who, page, errors, requests, windows: [], lastWindow: '', throttled: false });
   }
   const query = (k) => {

@@ -2,20 +2,18 @@
 // (MVP_SERVER_CONFIG) and environment variables; secrets come only from the
 // environment (or files named by it), never from the repository:
 //
-//   MVP_PASSWORD / MVP_PASSWORD_FILE        the site password (optional: tests and CI;
-//                                           it wins over the stored one, E5b)
+//   MVP_ACCESS_KEY / MVP_ACCESS_KEY_FILE    the key of the private link https://site/?key=<key>
+//                                           (required; src/access.ts). MVP_ACCESS_KEY wins. With
+//                                           MVP_ACCESS_KEY_CREATE=1 a missing file is created with
+//                                           a random key, owner-only: the Docker deployment
 //   MVP_TURN_SECRET / MVP_TURN_SECRET_FILE  coturn's static-auth-secret (optional; with
 //                                           MVP_TURN_SECRET_CREATE=1 a missing file is
 //                                           created with a random secret: the Docker deployment)
 //
-// Without MVP_PASSWORD the owner creates the password in the browser on first
-// run (src/setup.ts); the hash is kept in the state file (MVP_STATE_FILE,
-// "stateFile"), which is then required.
-//
 // The Docker deployment (deploy/, docs/engine/DEPLOY_DOKPLOY.md) sets everything
 // through the environment: MVP_DISC_DIR (the uploaded disc), MVP_PACKS_DIR (the roster
 // packs the pages offer in a dropdown), MVP_TURN_MODE (the
-// ICE servers handed to the pages) and the secret file above.
+// ICE servers handed to the pages) and the secret files above.
 //
 // docs/engine/NETPLAY.md ("Deploying on a VPS") has a complete example.
 import { randomBytes } from 'node:crypto';
@@ -41,7 +39,7 @@ export interface ServerConfig {
   port: number;
   /** The built engine site (build/engine/emscripten/web/site). */
   site: string;
-  /** The owner's disc image (ISO or CISO), served only behind the login; empty: none. */
+  /** The owner's disc image (ISO or CISO), served only to browsers with access; empty: none. */
   disc: string;
   /**
    * Where an uploaded disc image is kept (the Server disc page, src/disc_store.ts); empty: no uploads.
@@ -59,31 +57,23 @@ export interface ServerConfig {
   maxPackBytes: number;
   /** The disc uploads must be (GV4E69 rev 0; tests use a synthetic one). Not configurable from outside. */
   expectDisc: ExpectedDisc;
-  /** The password from the environment (MVP_PASSWORD), or '' to use the stored one (first-run setup). */
-  password: string;
-  /** The state file (the setup window and the stored password hash); required when `password` is empty. */
-  stateFile: string;
-  /** How long first-run setup stays open after the server first started without a password. */
-  setupHours: number;
-  /** MVP_RESET_PASSWORD: a new value removes the stored password once and reopens setup (src/setup.ts). */
-  resetPassword: string;
+  /**
+   * The key of the private link (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE), at least 16 URL-safe characters:
+   * a browser that opened https://site/?key=<key> has access (src/access.ts). A new key locks out every browser.
+   */
+  accessKey: string;
   /** Set the cookie's Secure flag (true behind TLS). */
   secureCookies: boolean;
-  /** Take the client address from the last X-Forwarded-For entry (behind a reverse proxy). */
-  trustProxy: boolean;
-  /** "https://mvp.example.com": invite links and the allowed Origin. Empty: the request's Host. */
+  /** "https://mvp.example.com": invite links, the private link and the allowed Origin. Empty: the request's Host. */
   publicUrl: string;
-  sessionHours: number;
   /** stun: URLs ("{host}" as for TURN). */
   stun: string[];
   turn: TurnConfig | null;
   /** Rooms without players are removed after this long. */
   roomIdleMinutes: number;
-  /** Failed logins allowed per client address per 15 minutes. */
-  loginAttempts: number;
 }
 
-export const defaults: Omit<ServerConfig, 'password' | 'site'> = {
+export const defaults: Omit<ServerConfig, 'accessKey' | 'site'> = {
   host: '127.0.0.1',
   port: 8080,
   disc: '',
@@ -92,17 +82,11 @@ export const defaults: Omit<ServerConfig, 'password' | 'site'> = {
   packsDir: '',
   maxPackBytes: 80 << 20,
   expectDisc: RETAIL_DISC,
-  stateFile: '',
-  setupHours: 48,
-  resetPassword: '',
   secureCookies: false,
-  trustProxy: false,
   publicUrl: '',
-  sessionHours: 24 * 30,
   stun: [],
   turn: null,
   roomIdleMinutes: 30,
-  loginAttempts: 10,
 };
 
 function secret(env: NodeJS.ProcessEnv, name: string): string {
@@ -111,25 +95,47 @@ function secret(env: NodeJS.ProcessEnv, name: string): string {
   const file = env[`${name}_FILE`];
   if (file) {
     const text = readFileSync(file, 'utf8').trim();
-    // An empty secret file must not turn into "no password" (which would open first-run setup).
+    // An empty secret file is a mistake, not "no secret".
     if (!text) throw new Error(`${name}_FILE (${file}) is empty`);
     return text;
   }
   return '';
 }
 
-/** Creates the TURN secret file (a random secret, readable by coturn's user), atomically, when it is missing. */
-function createSecretFile(file: string): void {
+/**
+ * Creates a secret file (32 random bytes, base64url) atomically when it is missing. `mode`: 0o644 for the TURN
+ * secret (coturn runs as another user in its own container and only reads it), 0o600 for the access key (only
+ * this server reads it).
+ */
+function createSecretFile(file: string, mode: number): void {
   if (existsSync(file)) return;
   mkdirSync(dirname(file), { recursive: true, mode: 0o755 });
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, `${randomBytes(32).toString('base64url')}\n`, { flag: 'wx', mode: 0o644 });
+  writeFileSync(tmp, `${randomBytes(32).toString('base64url')}\n`, { flag: 'wx', mode });
   try {
-    chmodSync(tmp, 0o644);  // coturn runs as another user in its own container and only reads this file
+    chmodSync(tmp, mode);  // whatever the umask
   } catch {
     // no modes here
   }
   renameSync(tmp, file);
+}
+
+/** The key of the private link: MVP_ACCESS_KEY, else the file MVP_ACCESS_KEY_FILE names (created with _CREATE=1). */
+function accessKey(env: NodeJS.ProcessEnv): string {
+  const create = env.MVP_ACCESS_KEY_CREATE === '1' || env.MVP_ACCESS_KEY_CREATE === 'true';
+  if (!env.MVP_ACCESS_KEY && env.MVP_ACCESS_KEY_FILE && create) createSecretFile(env.MVP_ACCESS_KEY_FILE, 0o600);
+  const key = secret(env, 'MVP_ACCESS_KEY');
+  if (!key) {
+    throw new Error(
+      'no access key: set MVP_ACCESS_KEY, or MVP_ACCESS_KEY_FILE (with MVP_ACCESS_KEY_CREATE=1 a missing file is ' +
+        'created with a random key). The private link is https://<site>/?key=<key>',
+    );
+  }
+  if (key.length < 16) throw new Error('the access key (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE) must be at least 16 characters');
+  if (!/^[A-Za-z0-9._~-]+$/.test(key)) {
+    throw new Error('the access key (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE) may hold only letters, digits and . _ ~ - (it goes into a link)');
+  }
+  return key;
 }
 
 /** "host:port" for an ICE URL; IPv6 literals in brackets. */
@@ -147,21 +153,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     return fallback;
   };
   const bool = (s: string) => s === '1' || s === 'true';
-  const password = secret(env, 'MVP_PASSWORD');
-  if (password && password.length < 8) throw new Error('MVP_PASSWORD (or MVP_PASSWORD_FILE) must be at least 8 characters');
-  const stateFile = pick('stateFile', 'MVP_STATE_FILE', String, defaults.stateFile);
-  if (!password && !stateFile) {
-    throw new Error('no password source: set MVP_STATE_FILE ("stateFile") so the owner can create the password in the browser, or MVP_PASSWORD');
-  }
-  const setupHours = pick('setupHours', 'MVP_SETUP_HOURS', Number, defaults.setupHours);
-  if (!(setupHours > 0 && setupHours <= 24 * 365)) throw new Error('MVP_SETUP_HOURS ("setupHours") must be between 0 and 8760');
+  const key = accessKey(env);
   const site = pick('site', 'MVP_SITE', String, '');
   if (!site) throw new Error('the site directory is not configured (MVP_SITE or "site")');
   // ICE servers: from server.json ("stun", "turn"), or, with MVP_TURN_MODE, built for coturn on this host
   // (the Docker deployment): relay = STUN and TURN, stun = STUN only, off = none (direct connections on one network).
   const turnMode = pick('turnMode', 'MVP_TURN_MODE', String, '');
   if (turnMode && !['relay', 'stun', 'off'].includes(turnMode)) throw new Error('MVP_TURN_MODE must be relay, stun or off');
-  if (turnMode === 'relay' && env.MVP_TURN_SECRET_FILE && bool(env.MVP_TURN_SECRET_CREATE ?? '')) createSecretFile(env.MVP_TURN_SECRET_FILE);
+  if (turnMode === 'relay' && env.MVP_TURN_SECRET_FILE && bool(env.MVP_TURN_SECRET_CREATE ?? '')) createSecretFile(env.MVP_TURN_SECRET_FILE, 0o644);
   const turnFile = file.turn as Partial<TurnConfig> | undefined;
   const turnSecret = turnMode === 'stun' || turnMode === 'off' ? '' : secret(env, 'MVP_TURN_SECRET');
   let stun = (file.stun as string[] | undefined) ?? defaults.stun;
@@ -197,17 +196,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     packsDir: packsDir ? resolve(packsDir) : '',
     maxPackBytes,
     expectDisc: RETAIL_DISC,
-    password,
-    stateFile: stateFile ? resolve(stateFile) : '',
-    setupHours,
-    resetPassword: env.MVP_RESET_PASSWORD ?? '',
+    accessKey: key,
     secureCookies: pick('secureCookies', 'MVP_SECURE_COOKIES', bool, defaults.secureCookies),
-    trustProxy: pick('trustProxy', 'MVP_TRUST_PROXY', bool, defaults.trustProxy),
     publicUrl: pick('publicUrl', 'MVP_PUBLIC_URL', String, defaults.publicUrl),
-    sessionHours: pick('sessionHours', 'MVP_SESSION_HOURS', Number, defaults.sessionHours),
     stun,
     turn,
     roomIdleMinutes: pick('roomIdleMinutes', 'MVP_ROOM_IDLE_MINUTES', Number, defaults.roomIdleMinutes),
-    loginAttempts: pick('loginAttempts', 'MVP_LOGIN_ATTEMPTS', Number, defaults.loginAttempts),
   };
 }

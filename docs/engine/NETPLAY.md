@@ -2,7 +2,7 @@
 
 How two players on different networks play each other: each runs the game in
 their own browser, the two engines exchange controller inputs in lockstep over
-a WebRTC data channel, and the owner's VPS serves the site behind a password,
+a WebRTC data channel, and the owner's VPS serves the site behind a private link,
 runs the lobby and signaling, and relays traffic for players whose networks
 need it. Design: `docs/ARCHITECTURE.md` §8. Working log and evidence:
 `docs/engine/E5_LOG.md`.
@@ -20,8 +20,8 @@ need it. Design: `docs/ARCHITECTURE.md` §8. Working log and evidence:
 
 Only controller inputs, acknowledgements and state hashes cross the network.
 Nothing game-derived does: each browser reads its own disc (or, on the owner's
-private deployment only, the owner's image, downloaded once from the
-password-protected disc route into that player's own browser storage: P1,
+private deployment only, the owner's image, downloaded once from the disc
+route behind the private link into that player's own browser storage: P1,
 `docs/engine/WEB.md`), translates the game itself, and keeps any diagnostic dump
 local. On the deployment a page opens the lobby only once its copy of the disc is
 complete, so a player still downloading never makes the other one wait past the
@@ -252,14 +252,14 @@ build ids must match anyway, peers always run the same version today.
 
 ## 4. Lobby and signaling (JSON over WebSocket, version 1)
 
-The page opens `wss://<site>/ws` (the session cookie and the site's Origin are
+The page opens `wss://<site>/ws` (the access cookie and the site's Origin are
 required). Types: `engine/server/src/lobby_protocol.d.ts` (shared with the page).
 
 | Direction | Message |
 |---|---|
 | server -> page | `{t:"welcome", v:1, iceServers:[{urls:[...]}, {urls:[...], username, credential}]}` |
 | page -> server | `{t:"create", name?, delay?}`: a new room, the creator is player 1 (Q5: `delay` 0 is Auto, measured by both pages) |
-| page -> server | `{t:"join", room}`: join as player 2 (the invite link is `/?room=<id>`) |
+| page -> server | `{t:"join", room}`: join as player 2 (the invite link is `/?room=<id>&key=<key>`: §5, "The private link") |
 | server -> page | `{t:"room", room, player, invite, delay, peer}` |
 | server -> page | `{t:"peer", present}`: the other player joined or left the lobby |
 | both | `{t:"signal", data}`: offer, answer or ICE candidate, relayed to the other player |
@@ -279,9 +279,9 @@ TypeScript on Node 24 (D3), one dependency (`ws`), pinned in `package-lock.json`
 
 | Route | |
 |---|---|
-| `GET /login`, `POST /login`, `POST /logout` | the password gate: one shared password, an HttpOnly `SameSite=Lax` session cookie (`Secure` behind TLS), in-memory sessions (30 days), failed logins limited per address (10 per 15 min), no open redirects |
-| `GET /setup`, `POST /setup` | first-run password setup (below): the form while the server has no password and its window is open (every page request is sent here); 403 once the window has closed; **404 forever once a password exists** |
-| `GET /healthz` | `ok`, without a login (monitoring) |
+| any `/...?key=<key>` | the private link (below): 303 to the same address without the key, with the access cookie |
+| `GET /healthz` | `ok`, open (monitoring) |
+| `GET /robots.txt` | `User-agent: *` / `Disallow: /`, open |
 | `GET /config.json` | `{"disc":"/api/disc/image"}` when a disc image is configured, else `{}`; with a disc also `discHash` (the image hash), `discSize` and `discManifest`, or `discPreparing` while the server hashes the image (P1); `discPage` with uploads |
 | `GET`/`HEAD /api/disc/image` | the owner's image: `Accept-Ranges: bytes`, single ranges (206, or 416), `Cache-Control: private, no-store` |
 | `GET /api/disc/manifest` | the image's 8 MiB pieces' SHA-256 and the image hash (SHA-256 over those digests), for the pages' one-time download (`src/disc_hash.ts`); 503 while hashing, `private, no-store` |
@@ -289,120 +289,87 @@ TypeScript on Node 24 (D3), one dependency (`ws`), pinned in `package-lock.json`
 | `/ws` | lobby and signaling (above) |
 | anything else | the engine site (static, `Cache-Control: private, no-cache` + ETag) |
 
-Without a session, a page load is sent to the login form and anything else gets
-401. Every response has `X-Content-Type-Options`, `Referrer-Policy: no-referrer`
-(invite links never leak through referrers), `X-Frame-Options: DENY` and (P2)
+Without access (below), a page load gets the private-server page (403) and anything
+else gets 401. Every response has `X-Content-Type-Options`, `Referrer-Policy: no-referrer`
+(invite links never leak through referrers), `X-Frame-Options: DENY`,
+`X-Robots-Tag: noindex, nofollow` and (P2)
 `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`
 and `Cross-Origin-Resource-Policy: same-origin`, so the page is cross-origin isolated
 and loads the threaded engine (WEB.md section 2); engine pages have a Content-Security-Policy (same origin only, plus `wasm-unsafe-eval` to
 compile the translated game). Secrets come only from the environment or from files
-outside the repository: `MVP_TURN_SECRET`/`MVP_TURN_SECRET_FILE`, and the site password
-(created in the browser on the first run, below, or `MVP_PASSWORD`/`MVP_PASSWORD_FILE`).
+outside the repository: `MVP_TURN_SECRET`/`MVP_TURN_SECRET_FILE` and the access key
+(`MVP_ACCESS_KEY`/`MVP_ACCESS_KEY_FILE`, below).
 Everything else: `MVP_SERVER_CONFIG` (JSON, `deploy/server.json.example`) or
 `MVP_*` variables (`src/config.ts`).
 
-### First-run password setup (E5b)
+### The private link
 
-The agents never handle the site password, so a server that has none waits for the
-owner to choose it in a browser.
+There is no password and no login page (owner, 2026-10-17; this replaces E5b's
+first-run password setup). The site has one private link,
+`https://<site>/?key=<key>`: a browser that opened it once has access for 400 days,
+and nobody types anything (`src/access.ts`).
 
-**Where the password comes from**, in this order (the first that exists wins):
+**The key.** `MVP_ACCESS_KEY`, else the file `MVP_ACCESS_KEY_FILE` names. With
+`MVP_ACCESS_KEY_CREATE=1` a missing file is created atomically with 32 random bytes
+(base64url, mode 0600: only the server reads it); the Docker deployment does this in
+its volume. At least 16 characters, only `A-Z a-z 0-9 . _ ~ -` (it goes into a link).
+No key, or an empty key file, stops the server with a message naming both variables.
+The server prints the link at every start (`mvp-server: private link: ...`; without a
+`publicUrl` the host is written `<this site's address>`), and the Server disc page
+shows it with a Copy button.
 
-1. `MVP_PASSWORD` / `MVP_PASSWORD_FILE` (at least 8 characters): for tests and CI.
-   When set, first-run setup is off (`/setup` is 404), the state file is neither read
-   nor written, and any stored password is ignored. An empty `MVP_PASSWORD_FILE` is
-   an error, never "no password".
-2. The hash in the state file (`stateFile` in `server.json`, or `MVP_STATE_FILE`).
-3. Neither: **setup mode**. `stateFile` is then required (the server refuses to
-   start without a password source).
+**Access.**
 
-**Setup mode.** Every page request (`/`, `/login`, anything that is not `/healthz`
-or `/setup`) is redirected to `/setup`; API calls and sockets get 503 and 401.
-`/setup` is a small form: password and confirmation (at least 12 and at most 128
-characters, NFKC-normalized, counted in characters) and a live strength hint (a rough
-guide only: the server enforces the length). On a good submission the server hashes
-the password, writes the state file, logs the owner in (the usual session cookie)
-and leaves setup mode. The password is never logged, never echoed back into a page,
-and never written anywhere but as the hash.
+- A request with a `key` parameter that matches (compared in constant time) gets
+  303 to the same path and query without the key (`/?room=ab&key=K` goes to
+  `/?room=ab`), `Cache-Control: no-store`, and the cookie `mvp_access` =
+  base64url(HMAC-SHA256(key, "mvp-access-v1")): `Path=/; HttpOnly; SameSite=Lax`,
+  `Max-Age` 400 days, `Secure` with `secureCookies`. A wrong key counts as no access.
+- The cookie is stateless: it survives restarts and redeploys, and a new key changes
+  it, which locks out every browser at once (the way to retire a leaked link). Every
+  page load (a GET navigation) sends it again, so a browser in use keeps access.
+- Without the cookie, a page load gets 403 and a small self-contained page ("This is
+  a private server. Open the private link you were sent.": no script, its one style
+  pinned by hash in its CSP); anything else gets 401 `{"error":"no access"}`, and a
+  WebSocket upgrade 401. `/healthz` and `/robots.txt` stay open.
+- Lobby invite links carry the key (`/?room=<id>&key=<key>`), so an invite also lets
+  the other player's browser in. The redirect keeps `room`, and the page joins the
+  game as before (`engine/web/src/netplay.ts` reads `?room=` on load).
+- The Server disc page's CSRF token is an HMAC of the access cookie, under a key
+  derived from the access key, so an open page keeps uploading across a restart.
 
-**The state file** (`/var/lib/mvp/state.json` on the VPS): JSON, `version: 1`,
-`setupOpenedAt` (ms since the epoch: when the server first started without a
-password) and, after setup, `password`: `{kdf: "scrypt", N, r, p, keylen, salt, hash,
-setAt}` (salt and hash base64). Created on the first start without a password (mode
-0600, its directory 0700, where the OS has modes; on Windows the profile's ACLs
-apply) and replaced atomically (temporary file, fsync, rename). A file that exists
-but cannot be parsed or validated stops the server: it never falls back to "no
-password", which would reopen setup.
+**Residual risk.** The link is a bearer secret: whoever has it can play and download
+the disc until the key changes. It travels over HTTPS only (Traefik or Caddy); the
+redirect takes it out of the address bar and history, and `no-referrer` keeps it out
+of referrers. The host name is in the public certificate-transparency logs, so
+scanners will find the site, but without the key they see only the private-server
+page (a generated key has 256 bits).
 
-**Hash.** scrypt (RFC 7914, Node's `crypto.scrypt`): N = 2^17, r = 8, p = 1 (OWASP's
-first scrypt recommendation: 128 MiB, about 0.2 s per hash), a 64-byte key, a random
-32-byte salt per password, verified in constant time. Each record carries its own
-parameters, so the cost can rise later without breaking old records; records with
-absurd parameters (a state file edited into a denial of service) are refused. Password
-checks and hashes run one at a time (a queue of eight; beyond that, 503) so a burst
-cannot exhaust a small VPS's memory. With the environment password, login compares
-SHA-256 digests as before.
-
-**Strangers cannot (easily) claim it.**
-
-- *A window.* Setup is open for `setupHours` (default 48; `MVP_SETUP_HOURS`) after the
-  server **first** starts without a password. The start is kept in the state file, so
-  restarts do not extend it. After it, `/setup` answers 403, pages answer 503 "not set
-  up", and the log says so once: `setup window closed ...: the server has no password
-  and needs an operator`.
-- *Rate limits* on the setup endpoints, per sliding 15 minutes (a refused request is
-  not counted): 30 requests and 10 form submissions per client address, and 100
-  submissions in all (429 with `Retry-After`). Behind Caddy the address is the
-  proxy's last `X-Forwarded-For` entry (`trustProxy`).
-- *CSRF.* The form carries a token bound to an HttpOnly `SameSite=Strict` cookie
-  (`mvp_setup`, path `/setup`): `<expiry>.<HMAC-SHA256(per-process key, id.expiry)>`,
-  valid 30 minutes, stateless. A submission also has to be same-origin: a present
-  `Sec-Fetch-Site` must say `same-origin`, a present `Origin` must be the site's own
-  (the setup pages send `Referrer-Policy: same-origin`, because under the site-wide
-  `no-referrer` browsers send `Origin: null` for form posts). The page's CSP pins its
-  one style and one script by hash.
-- *Exactly one winner.* Two simultaneous submissions: one is stored, the other gets
-  503 or 404.
-
-**Residual risk.** Setup is first come, first served: whoever submits a valid form
-first while the window is open owns the password, and with it the site, the lobby and
-(on the private deployment) the owner's disc image. The limits and the window make
-abuse harder; they do not prove the visitor is the owner. The deploy URL is
-unpublished, but the host name appears in the public certificate-transparency logs as
-soon as Caddy obtains its certificate, and scanners watch those logs, so assume a
-stranger can find the form within hours. Therefore: make the first visit right after
-installing; if it shows the **login** form instead of the setup form, someone else
-created the password: reset (below) and treat the VPS as exposed; copy the disc image
-to the VPS only after the password exists (§6); keep `setupHours` short where the
-window can be. The password travels over HTTPS (Caddy); on plain HTTP it would not be
-protected, so use setup only behind TLS (`secureCookies`).
-
-**Changing the password later** is an operator action, there is no admin UI: stop
-`mvp-server`, delete the state file (`/var/lib/mvp/state.json`), start it. The server
-is then in setup mode again with a fresh window (and every session is gone); the owner
-makes a new first visit. The same reopens setup after a window that closed unused.
-The server reads the file at start, so it must be restarted.
+**Replacing the link.** Docker: set `ACCESS_KEY` in Dokploy and deploy
+(`docs/engine/DEPLOY_DOKPLOY.md`). VPS install: a new key in `/etc/mvp/access-key`,
+then restart `mvp-server` (§6). Every browser then needs the new link.
 
 **TURN.** coturn runs in its "TURN REST API" mode (`use-auth-secret`): the server
 hands each page credentials derived from the shared secret (username
 `<expiry>:mvp`, password base64 HMAC-SHA1), valid for 24 hours. No accounts are
 stored, and leaked credentials expire.
 
-Tests: `npm test` in `engine/server` (64 tests, `test/disc.test.ts` for the disc upload, the image hash and the Docker settings: the gate, sessions and limits, the
-static site, the disc route, the lobby, signaling, TURN credentials, and first-run
-setup: setup mode redirects, form validation and CSRF, the stored hash and its file,
-the window, restarts, the environment override, limits), also run by ctest as
+Tests: `npm test` in `engine/server` (43 tests: the private link and its
+configuration, the static site, the disc route, the lobby, signaling and TURN
+credentials; `test/disc.test.ts` for the disc upload, the image hash and the Docker
+settings; `test/packs.test.ts` for the roster packs), also run by ctest as
 `server_node_tests`.
 
 ## 6. Deploying on a VPS
 
 **Docker / Dokploy (current):** `deploy/Dockerfile` and `deploy/docker-compose.yml`
 (services `mvp` and `coturn`, volume `mvp-data`); the owner's UI-only guide is
-`docs/engine/DEPLOY_DOKPLOY.md`. There the disc image is uploaded on the logged-in
+`docs/engine/DEPLOY_DOKPLOY.md`. There the disc image is uploaded on the
 Server disc page (`/disc`: chunked, resumable, GV4E69 rev 0 checked server-side by
-the DOL's SHA-1, atomic replace), the TURN secret is generated on the first start,
-and `RESET_PASSWORD` reopens setup once without a shell. The install script below
-is the older SSH path.
+the DOL's SHA-1, atomic replace), the TURN secret and the access key are generated
+on the first start (`/data/turn/secret`, `/data/access-key`; the private link is in
+the `mvp` service's log), and `ACCESS_KEY` replaces the link without a shell. The
+install script below is the older SSH path.
 
 **Package.** `node engine/server/tools/package.mjs` (after building `mvp-web` and
 `npm ci && npm run build` in `engine/server`) writes
@@ -418,35 +385,28 @@ ports: 80/tcp and 443/tcp (Caddy, HTTPS), 3478/udp and 3478/tcp (TURN), 49160-49
 
 **Install** (an agent with SSH access does this; the owner runs nothing):
 1. Copy `mvp-netplay.tar.gz` to the VPS and unpack it.
-2. `./deploy/install.sh <domain>` as root. There is no password to pass (the script
-   refuses `MVP_PASSWORD`): a fresh install starts in setup mode with **no
-   password**. It installs Caddy and coturn (distribution packages) and Node.js
-   24.18.0 (the official build, checksum verified), creates the `mvp` user and
-   `/opt/mvp/{site,server}`, writes `/etc/mvp/{turn-secret,server.json,server.env}`
-   (mode 0640, root:mvp), `/etc/caddy/Caddyfile`, `/etc/turnserver.conf` and the
-   `mvp-server` systemd unit (whose `StateDirectory` is `/var/lib/mvp`), opens the
-   ports with ufw when present, and starts everything. It ends by saying what the
-   first visit will find. Running it again updates the engine and keeps the secrets
-   and the password. (An install from before first-run setup keeps its
-   `/etc/mvp/password`.)
-3. **First visit: create the site password.** The agent tells the owner the address
-   and asks them to open it right away (see the residual risk above: the window is
-   48 hours, but the host name is findable within hours). `https://<domain>/` goes to
-   `/setup`; the owner types the password twice and is logged in. The agent never
-   sees the password. To confirm without it: `curl -s -o /dev/null -w '%{http_code}'
-   https://<domain>/setup` says 404 (a password exists) and the service log has
-   `setup: the site password was created`; the owner confirms they saw the form (a
-   login form on the first visit means someone else got there first: reset, below).
-4. Only now, for the private deployment, copy the owner's disc image to
-   `/srv/mvp/disc/GV4E69.ciso` and run `./deploy/install.sh <domain>` again (it
-   adds the image to `server.json`), so the image is never behind a password
-   a stranger could have chosen.
-5. Check: `https://<domain>/` shows the login form when logged out; after logging
-   in, "Create a game" gives an invite link; `curl https://<domain>/healthz` says `ok`.
+2. `./deploy/install.sh <domain>` as root. It installs Caddy and coturn
+   (distribution packages) and Node.js 24.18.0 (the official build, checksum
+   verified), creates the `mvp` user and `/opt/mvp/{site,server}`, writes
+   `/etc/mvp/{turn-secret,access-key,server.json,server.env}` (mode 0640, root:mvp;
+   the two secrets are made once), `/etc/caddy/Caddyfile`, `/etc/turnserver.conf`
+   and the `mvp-server` systemd unit (whose `StateDirectory` is `/var/lib/mvp`),
+   opens the ports with ufw when present, and starts everything. It ends by printing
+   the private link. Running it again updates the engine and keeps the secrets, so
+   the link stays the same.
+3. **The private link.** The agent gives the owner the link from the script's last
+   lines (the server also logs it at every start: `journalctl -u mvp-server`). The
+   owner opens it once in each browser that plays.
+4. For the private deployment, copy the owner's disc image to
+   `/srv/mvp/disc/GV4E69.ciso` and run `./deploy/install.sh <domain>` again (it adds
+   the image to `server.json`).
+5. Check: `https://<domain>/` without the link shows the private-server page; after
+   the link, "Create a game" gives an invite link; `curl https://<domain>/healthz`
+   says `ok`.
 
-**Resetting the password** (operator action; the owner runs nothing): `systemctl
-stop mvp-server`, delete `/var/lib/mvp/state.json`, `systemctl start mvp-server`;
-setup is open again for a fresh window (step 3).
+**Replacing the link** (operator action; the owner runs nothing): write a new key
+(16 or more letters and digits) to `/etc/mvp/access-key`, then `systemctl restart
+mvp-server`; every browser then needs the new link (step 3).
 
 **Updating the engine** later: build, package, copy, run `install.sh` again (both
 players must reload the page: the build id changes).

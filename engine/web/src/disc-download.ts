@@ -72,7 +72,7 @@ async function fetchManifest(offer: DiscOffer): Promise<Manifest> {
       await sleep(500 * 2 ** attempt);
       continue;
     }
-    if (r.status === 401 || r.status === 403) throw new Failure('login', 'log in again');
+    if (r.status === 401 || r.status === 403) throw new Failure('access', 'open the private link again');
     if (r.status === 404) throw new Failure('changed', 'the disc image on the server changed');
     if (!r.ok) {
       if (attempt >= ATTEMPTS) throw new Failure('network', `the server answered HTTP ${r.status} for the manifest`);
@@ -98,7 +98,7 @@ async function fetchPiece(offer: DiscOffer, m: Manifest, i: number): Promise<Uin
       last = `network error (${String(e)})`;
       continue;
     }
-    if (r.status === 401 || r.status === 403) throw new Failure('login', 'log in again');
+    if (r.status === 401 || r.status === 403) throw new Failure('access', 'open the private link again');
     if (r.status === 404 || r.status === 416) throw new Failure('changed', 'the disc image on the server changed');
     if (r.status !== 206) {
       await r.body?.cancel().catch(() => undefined);

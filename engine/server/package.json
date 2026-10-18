@@ -1,7 +1,7 @@
 {
   "name": "mvp-server",
   "private": true,
-  "description": "MVP Baseball 2005 browser engine: the VPS services (E5). Serves the engine behind a password, the owner's disc image on the private deployment, the lobby and WebRTC signaling.",
+  "description": "MVP Baseball 2005 browser engine: the VPS services (E5). Serves the engine behind a private link, the owner's disc image on the private deployment, the lobby and WebRTC signaling.",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {

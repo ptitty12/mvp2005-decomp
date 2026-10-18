@@ -509,3 +509,9 @@
     - thin one-pixel lines across the score bug's base-runner diamond at 3×, natively too;
     - real ThinkPad numbers from the owner's Copy stats.
   | Owner: redeploy once for Q6 + Q7; paste Copy stats from desktop + ThinkPad after an online game.
+- 2026-10-17 (night) | claude-side-webui | site: no password, MVP 2005 look (owner request) | On main:
+  - **No password:** the login page, first-run password setup and the scrypt state file are gone. A private link `https://site/?key=<key>` opened once keeps a browser in for 400 days. Without it: "This is a private server" (403), APIs 401. The key is in the mvp service's log at every start and on the Server disc page (Copy); invites carry it; `ACCESS_KEY` replaces it (DECISIONS 2026-10-17).
+  - **The look:** the game page, the Server disc page and the private-server page take the game's own menu look (colors sampled from a capture of the main menu): game left in a silver frame with a gunmetal button-prompt bar, menu column right (Game, Play online, Roster packs, then Mods/Controls/Engine details as menu bars). docs/engine/WEB.md, "The look".
+  - Checked: server tests 43/43; web shell tsc clean; Chrome end to end on the real server with the disc (link, cookie, game running, Server disc page); 1366x768, 1920x1000 and 390 px wide.
+  - Not run: browser_check/netplay_check (their login step now opens `/healthz?key=`; checked with `node --check` only).
+  | Owner: redeploy, then copy the private link from the mvp service's Logs tab (line `mvp-server: private link:`), put your domain in it, open it once per browser, and send it to your brother.
