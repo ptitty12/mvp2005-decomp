@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace mvp::mods {
 
@@ -41,6 +42,14 @@ constexpr u32 kPState = 0x6F8, kGOptions = 0x10, kGCount = 0x14;
 constexpr u32 kOptPort = 0x6C, kCountBatting = 0x1CD0;
 constexpr u32 kFrameTicks = 0x8061B884u;
 constexpr u32 kHudCircleShown = 0x90;
+// Names for the page only, never game state (§3.11; T: MEM1 of a traced game, 2026-10-17).
+// - P+0x65C: the on-field actors in scorebook order (0 pitcher, 1 catcher, ... 8 right
+//   field), then 9 the batter.
+// - An actor's last name: a NUL-terminated string at +0x360, in a 32-byte buffer.
+// - A team record (the count block + team * 0xE64) points at +0xB0 to the team's strings,
+//   whose +0x14 is the nickname ("Red Sox").
+constexpr u32 kPActors = 0x65C, kActorCatcher = 1, kActorBatter = 9, kActorLastName = 0x360;
+constexpr u32 kTeamRecord = 0xE64, kTeamStrings = 0xB0, kTeamNickname = 0x14;
 
 // The challenge on a standard controller, native prototype (§7.6): L, R and Z
 // pressed together. Netplay gets an engine button that never reaches the guest.
@@ -79,6 +88,7 @@ struct State {
   u32 windup_frame;    // this pitch's delivery start (kWindup), 0 before it
   u32 late_due;        // the frame at which to ask for the late snapshot, 0: none pending
   u32 delivery[2];     // windup to release in frames, learned per fielding team; 0: not yet
+  u32 batter_actor, catcher_actor;  // at the last call: who may challenge it (for the page)
   u16 prev_buttons[4];
   u8 challenges[2];    // per team (0 home, 1 away)
   u8 window_open, last_truth, last_call, last_miss;
@@ -203,10 +213,10 @@ class AbsMod final : public Mod {
     h.log(line);
     h.notify(note);
     char ui[160];
-    std::snprintf(ui, sizeof ui, "{\"abs\":\"verdict\",\"team\":\"%s\",\"overturned\":%s,\"call\":\"%s\",\"left\":%u}",
+    std::snprintf(ui, sizeof ui, "{\"abs\":\"verdict\",\"team\":\"%s\",\"overturned\":%s,\"call\":\"%s\",\"left\":%u,",
                   team ? "away" : "home", verdict == original ? "false" : "true", verdict ? "strike" : "ball",
                   s.challenges[team]);
-    h.publish(ui);
+    h.publish(std::string(ui) + "\"club\":\"" + team_name(h, s.umpire, team) + "\"}");
   }
 
  private:
@@ -246,18 +256,53 @@ class AbsMod final : public Mod {
     }
   }
 
-  // The fielding team (0 home, 1 away) from umpire A, or -1 while the chain is
-  // not set up (§3.5): A+0x14 -> P, P+0x6F8 -> G, G+0x14 -> count, +0x1CD0 batting.
-  static int fielding_team(Host& h, u32 a) {
-    auto ram = [](u32 p) { return p >= 0x80000000u && p < 0x81800000u; };
-    if (!ram(a)) return -1;
+  static bool ram(u32 p) { return p >= 0x80000000u && p < 0x81800000u - 0x100u; }
+
+  // The count block (§3.5) from umpire A: A+0x14 -> P, P+0x6F8 -> G, G+0x14; 0 while the
+  // chain is not set up.
+  static u32 count_block(Host& h, u32 a) {
+    if (!ram(a)) return 0;
     const u32 p = h.r32(a + kAGame);
-    if (!ram(p)) return -1;
+    if (!ram(p)) return 0;
     const u32 g = h.r32(p + kPState);
-    if (!ram(g)) return -1;
+    if (!ram(g)) return 0;
     const u32 count = h.r32(g + kGCount);
-    if (!ram(count)) return -1;
+    return ram(count) ? count : 0;
+  }
+
+  // The fielding team (0 home, 1 away) from umpire A, or -1 while the chain is not set up.
+  static int fielding_team(Host& h, u32 a) {
+    const u32 count = count_block(h, a);
+    if (!count) return -1;
     return h.r32(count + kCountBatting) ? 0 : 1;  // away (1) batting: home (0) fields
+  }
+
+  // On-field actor `slot` of game context P (0 when there is none).
+  static u32 actor(Host& h, u32 p, u32 slot) {
+    if (!ram(p)) return 0;
+    const u32 x = h.r32(p + kPActors + 4 * slot);
+    return ram(x) ? x : 0;
+  }
+
+  // A guest string for the page's JSON: up to n - 1 bytes, printable ASCII only, without
+  // quotes or backslashes. Display only.
+  static std::string guest_text(Host& h, u32 ea, u32 n) {
+    std::string s;
+    if (!ram(ea)) return s;
+    for (u32 k = 0; k + 1 < n; ++k) {
+      const u32 ch = h.r8(ea + k);
+      if (!ch) break;
+      if (ch >= 32 && ch < 127 && ch != '"' && ch != '\\') s += static_cast<char>(ch);
+    }
+    return s;
+  }
+
+  // A team's nickname ("Red Sox"), "" when unknown.
+  static std::string team_name(Host& h, u32 a, u32 team) {
+    const u32 count = count_block(h, a);
+    if (!count) return "";
+    const u32 strings = h.r32(count + team * kTeamRecord + kTeamStrings);
+    return ram(strings) ? guest_text(h, strings + kTeamNickname, 16) : "";
   }
 
   void umpire_call(Host& h, ppc::Cpu& c) {
@@ -304,6 +349,9 @@ class AbsMod final : public Mod {
     s.umpire = a;
     s.window_open = 1;
     s.window_ticks = static_cast<u32>(h.setting("window"));
+    const u32 p = h.r32(a + kAGame);  // who may challenge this call, for the page
+    s.batter_actor = actor(h, p, kActorBatter);
+    s.catcher_actor = actor(h, p, kActorCatcher);
     char line[200];
     std::snprintf(line, sizeof line, "%sframe %u called %s (truth %s, game %s) x %.4f y %.4f d %.4f%s", phase_tag(h.phase()),
                   s.last_frame, call ? "strike" : "ball", truth ? "strike" : "ball", game_call ? "strike" : "ball",
@@ -341,17 +389,23 @@ class AbsMod final : public Mod {
       return;
     }
     s.window_open = 0;
-    std::snprintf(line, sizeof line, "challenge by %s (port %d) of a called %s: reviewing", team ? "away" : "home",
-                  port + 1, s.last_call ? "strike" : "ball");
+    // Who challenges: the batter a strike, the catcher a ball (their last names; display only).
+    const std::string by = guest_text(h, (s.last_call ? s.batter_actor : s.catcher_actor) + kActorLastName, 32);
+    std::snprintf(line, sizeof line, "challenge by %s (port %d, %s) of a called %s: reviewing", team ? "away" : "home",
+                  port + 1, by.c_str(), s.last_call ? "strike" : "ball");
     h.log(line);
-    // The page's challenge scene (mods-panel.ts): who, which call, and (shown after the
-    // replay) where the pitch crossed, zone-normalized (|x|, |y| <= 1 is a strike).
+    // The page's challenge scene (abs-scene.ts): who challenged and for which team, which
+    // call, and (shown after the replay) where the pitch crossed, zone-normalized (|x|,
+    // |y| <= 1 is a strike), and the challenges the team will have left (one is spent
+    // when the call stands).
+    const u32 left = s.challenges[team] - (s.last_truth == s.last_call ? 1u : 0u);
     char ui[200];
     std::snprintf(ui, sizeof ui,
-                  "{\"abs\":\"challenge\",\"team\":\"%s\",\"call\":\"%s\",\"truth\":\"%s\",\"x\":%.3f,\"y\":%.3f}",
+                  "{\"abs\":\"challenge\",\"team\":\"%s\",\"call\":\"%s\",\"truth\":\"%s\",\"x\":%.3f,\"y\":%.3f,"
+                  "\"left\":%u,",
                   team ? "away" : "home", s.last_call ? "strike" : "ball", s.last_truth ? "strike" : "ball",
-                  static_cast<double>(bits_to_float(s.last_x)), static_cast<double>(bits_to_float(s.last_y)));
-    h.publish(ui);
+                  static_cast<double>(bits_to_float(s.last_x)), static_cast<double>(bits_to_float(s.last_y)), left);
+    h.publish(std::string(ui) + "\"by\":\"" + by + "\",\"club\":\"" + team_name(h, s.umpire, team) + "\"}");
     h.notify(s.last_call ? "ABS challenge: reviewing the strike call" : "ABS challenge: reviewing the ball call");
   }
 
