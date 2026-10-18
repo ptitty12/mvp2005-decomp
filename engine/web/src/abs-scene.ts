@@ -3,8 +3,9 @@
 // called for it ("Eckstein has called for a challenge"); the engine waits
 // ANNOUNCE_MS before the review starts, and the callout stays while it rewinds. The
 // replay itself plays at half speed (worker.ts) with only a small "Replay" tag.
-// After it, the verdict: "Call Overturned" or "Call Stands", where the pitch crossed,
-// and the challenges the team has left; it fades out shortly after play resumes.
+// After it, the verdict, in the look of the game's own pause screen: "Call Overturned"
+// or "Call Stands", the scoreboard row with the team and the challenges it has left,
+// and where the pitch crossed; it fades out shortly after play resumes.
 // Host-side only: nothing here reaches the game.
 
 interface Challenge {
@@ -35,12 +36,14 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export const ANNOUNCE_MS = 1500;
 
 export class ChallengeScene {
-  private root: HTMLDivElement;  // the verdict card over a dimmed picture
+  private root: HTMLDivElement;  // the verdict panel, in the look of the game's pause screen
   private card: HTMLDivElement;
   private title: HTMLDivElement;
-  private status: HTMLDivElement;
+  private club: HTMLSpanElement;   // the scoreboard row: the team (silver) ...
+  private left: HTMLSpanElement;   // ... and its challenges left (the blue tab)
   private zone: SVGSVGElement;
-  private ball: SVGCircleElement;
+  private ballAt: SVGGElement;      // where the pitch crossed (moved there)
+  private ball: SVGGElement;       // the game's white ring (its drop animation)
   private callout: HTMLDivElement;
   private calloutName: HTMLSpanElement;
   private tag: HTMLDivElement;
@@ -62,19 +65,34 @@ export class ChallengeScene {
     this.title = document.createElement('div');
     this.title.className = 'abs-title';
 
+    // The scoreboard row, as in the game's pause screen: the team on a silver bar, then a
+    // blue tab with a slanted edge.
+    const row = document.createElement('div');
+    row.className = 'abs-row';
+    this.club = document.createElement('span');
+    this.club.className = 'abs-club';
+    this.left = document.createElement('span');
+    this.left.className = 'abs-left';
+    row.append(this.club, this.left);
+
+    // The zone as the game draws it at the plate: nine translucent cells in a light frame;
+    // the pitch as its white ring.
     this.zone = svg('svg', { viewBox: '-110 -120 220 240', class: 'abs-zone', 'aria-hidden': 'true' });
-    this.zone.append(svg('rect', { x: -HW, y: -HH, width: 2 * HW, height: 2 * HH, class: 'abs-zone-box' }));
-    for (const k of [-1, 1]) {
-      this.zone.append(svg('line', { x1: (k * HW) / 3, y1: -HH, x2: (k * HW) / 3, y2: HH, class: 'abs-zone-grid' }));
-      this.zone.append(svg('line', { x1: -HW, y1: (k * HH) / 3, x2: HW, y2: (k * HH) / 3, class: 'abs-zone-grid' }));
+    for (let i = 0; i < 3; ++i) {
+      for (let j = 0; j < 3; ++j) {
+        this.zone.append(svg('rect', { x: -HW + (i * 2 * HW) / 3 + 1.5, y: -HH + (j * 2 * HH) / 3 + 1.5,
+                                       width: (2 * HW) / 3 - 3, height: (2 * HH) / 3 - 3, class: 'abs-zone-cell' }));
+      }
     }
-    this.ball = svg('circle', { cx: 0, cy: 0, r: BALL_R, class: 'abs-ball' });
-    this.zone.append(this.ball);
+    this.zone.append(svg('rect', { x: -HW, y: -HH, width: 2 * HW, height: 2 * HH, class: 'abs-zone-box' }));
+    this.ballAt = svg('g', {});
+    this.ball = svg('g', { class: 'abs-ball' });
+    this.ball.append(svg('circle', { cx: 0, cy: 0, r: BALL_R, class: 'abs-ball-edge' }),
+                     svg('circle', { cx: 0, cy: 0, r: BALL_R, class: 'abs-ball-ring' }));
+    this.ballAt.append(this.ball);
+    this.zone.append(this.ballAt);
 
-    this.status = document.createElement('div');
-    this.status.className = 'abs-status';
-
-    this.card.append(this.title, this.zone, this.status);
+    this.card.append(this.title, row, this.zone);
     this.root.append(this.card);
 
     this.callout = document.createElement('div');
@@ -111,7 +129,7 @@ export class ChallengeScene {
       } else if (r.abs === 'verdict' && this.challenge) {
         this.challenge.left = Number(r.left);
         if (r.club) this.challenge.club = String(r.club);
-        this.status.textContent = this.leftText();
+        this.showRow();
       }
     }
     const prev = this.phase;
@@ -148,10 +166,11 @@ export class ChallengeScene {
     return c ? c.club || cap(c.team) : '';
   }
 
-  private leftText(): string {
+  // The scoreboard row: the team, and the challenges it has left.
+  private showRow(): void {
     const c = this.challenge;
-    if (!c) return '';
-    return `${this.teamName()}: ${c.left} challenge${c.left === 1 ? '' : 's'} left`;
+    this.club.textContent = this.teamName();
+    this.left.textContent = c ? `${c.left} challenge${c.left === 1 ? '' : 's'} left` : '';
   }
 
   private showCallout(): void {
@@ -182,16 +201,18 @@ export class ChallengeScene {
       this.title.textContent = overturned ? 'Call Overturned' : 'Call Stands';
       const cx = Math.max(-100, Math.min(100, c.x * HW));
       const cy = Math.max(-110, Math.min(110, -c.y * HH));
-      this.ball.setAttribute('cx', cx.toFixed(1));
-      this.ball.setAttribute('cy', cy.toFixed(1));
-      this.ball.classList.toggle('abs-ball-strike', c.truth === 'strike');
-      this.ball.style.display = '';
+      this.ballAt.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`);
+      this.ballAt.style.display = '';
     } else {
       this.title.textContent = 'Review complete';
-      this.ball.style.display = 'none';
+      this.ballAt.style.display = 'none';
     }
-    this.status.textContent = this.leftText();
+    this.showRow();
     this.root.hidden = false;
+    // The ring drops in again each time (its animation runs when the element is shown again).
+    this.ball.style.animation = 'none';
+    void this.ball.getBoundingClientRect();
+    this.ball.style.animation = '';
   }
 
   private fadeOut(): void {
