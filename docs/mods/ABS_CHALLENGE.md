@@ -72,6 +72,13 @@ The mod runs natively (`mvp-play --mod abs`), in the browser (the Gameplay mods 
 - **Challenges reset at every new game, Restart Game included** (§4.3). A restarted game
   used to keep the last game's counters.
 
+**Owner feedback, second round, 2026-10-17** (§4.6):
+- **The callout:** instead of the announcement card, a red callout in the middle names who
+  called for the challenge ("ECKSTEIN / HAS CALLED FOR A CHALLENGE"), for 1.5 s.
+- **The replay plays at half speed,** evenly: 30 frames a second, each for two refreshes.
+- **The verdict card:** only "CALL OVERTURNED" or "CALL STANDS", the zone, and the team's
+  challenges left ("Cardinals: 2 challenges left").
+
 **Known limits:**
 - **Threaded browser engine:** mods need the single-threaded engine. The render thread's
   GX state is not saved yet.
@@ -494,6 +501,28 @@ three games; then the same games with the mod logging each release):
 - **Quit, then a new game from the main menu,** was not traced. I: it starts a game the same
   way as the first one, which runs `fn_801BACA0` (field 3863).
 
+### 3.11 Names for the page: the challenger and the team
+
+T, 2026-10-17: MEM1 dumps of the batter game (Cardinals at Red Sox), taken at polls 6000,
+7030 and 7700. A temporary dump option of `mvp-play`, not committed; the dumps stayed local.
+- **`P+0x65C[0..12]`, the on-field actors, are in scorebook order.** Each slot is an actor
+  pointer. At all three polls: 0 Schilling (pitcher), 1 Varitek (catcher), 2-8 the other
+  Red Sox fielders, ending 3 Bellhorn, 4 Mueller, 5 Renteria, 6 Ramirez, 7 Damon,
+  8 Nixon. Slot 9 is the batter (Eckstein), and 10-12 were 0 (I: the runners, §3.2).
+- **An actor's last name** is a NUL-terminated string at `+0x360`, in a 32-byte buffer
+  (copy at `+0x3D4`; the rest of the buffer is uninitialized heap fill). No first name was
+  found near the actor. The batter's actor changes with each plate appearance; Walker's
+  name is at the same offset.
+- **The team's nickname:** each team record of the count block (`*(G+0x14)` + team x 0xE64,
+  §3.5) points at `+0xB0` to the team's strings. The nickname is at `+0x14`: "Red Sox" for
+  record 0 (home) and "Cardinals" for 1 (away). Next to it are the short name ("Bos"), the
+  abbreviation ("BOS") and the location ("Boston").
+- **Checked with the mod** in two games:
+  - the overturn test: "Eckstein", Cardinals, challenging a strike;
+  - the two-player script: "Varitek", Red Sox, challenging a ball.
+- The mod reads these only for the page: the strings never reach game state, and an
+  unreadable chain gives "" (the page then shows the team).
+
 ## 4. Mod behaviour
 
 ### 4.1 Truth and the umpire model
@@ -597,7 +626,8 @@ Mod state is a fixed-size plain block, at most 256 bytes, with no pointers. It h
 - R, C, K and the recorded call {x, y as raw bits, truth, call, swing};
 - `forced_call` and statistics;
 - for the late snapshot: this pitch's first snapshot poll and windup frame, the pending
-  request, the fielding team, and the learned delivery per team.
+  request, the fielding team, and the learned delivery per team;
+- the batter's and the catcher's actors at the last call, whose names the page shows (§3.11).
 
 Save states copy the block, and the netplay state hash includes it (§5.7, §6.2).
 
@@ -605,40 +635,53 @@ Save states copy the block, and the netplay state hash includes it (§5.7, §6.2
 
 **As built (browser):** an HTML layer over the game, never game state.
 
-**The challenge scene** (`engine/web/src/abs-scene.ts`, 2026-10-17). During the headless
-legs the canvas holds its last frame. Instead of that frozen picture, a card covers the game:
-- **The moment a challenge is made: the announcement** (owner, 2026-10-17: going straight
-  to the rewind was confusing).
-  - The card shows:
-    - "ABS CHALLENGE" in large letters;
-    - who challenged which call ("Away challenges the strike call");
-    - a strike zone being scanned.
-  - The engine waits 1.8 s (`ANNOUNCE_MS`) before the review starts, so the card is not
-    cut short. The page passes the time as `modIntroMs`, and the engine takes it through
+**The challenge scene** (`engine/web/src/abs-scene.ts`, 2026-10-17, reworked twice with the
+owner's feedback the same day):
+- **The moment a challenge is made: the callout.**
+  - Who called for it, in the Replay tag's red look but large and in the middle of the
+    picture: "ECKSTEIN / HAS CALLED FOR A CHALLENGE". The batter challenges a called strike,
+    the catcher a called ball (§3.11).
+  - The engine waits 1.5 s (`ANNOUNCE_MS`) before the review starts, so the callout can be
+    read. The page passes the time as `modIntroMs`, and the engine takes it through
     `mvp_mod_intro`.
   - During the wait the run is stopped at the frame poll before the review, as when it
     waits for the other player online. Nothing reaches the guest.
-- **While the review rewinds (Seeking):** the card stays. When the rewind is long (a team's
-  first pitch, §0), it also shows the leg's progress, from `Timeline::progress()`.
-- **During the replay (Presenting):** only a small tag shows, naming who challenged ("Replay ·
-  Away challenge").
-- **During the re-run (Rerunning):**
-  - the verdict, "Overturned" ("It was a ball") or "Call stands";
-  - where the pitch crossed, drawn in the zone. The zone is 1.5 times its first size (owner,
-    2026-10-17: it was hard to see): about 275 px wide, capped at 40 % of the window's
-    height.
+  - The callout stays while the review rewinds (usually about 50 ms; up to about 2.6 s when
+    the late snapshot misses, §0).
+- **During the replay (Presenting): half speed** (owner, 2026-10-17), with only a small tag
+  naming the team ("Replay · Cardinals challenge").
+  - The paced loop runs the replay's fields at half the pace (`Schedule.setSlow`,
+    `worker.ts`), and the engine starts the replay in a batch of its own, so it is paced
+    that way from its first frame.
+  - Each game frame stays on screen for exactly two animation frames: 30 new frames a
+    second, evenly spaced. The game simulates in whole ticks, so true 60 fps slow motion
+    would need it to draw frames between its own ticks, which it does not.
+  - Measured (paced Chrome, the overturn test): the replay took 3.63 s for 110 frames.
+    Intervals between frames: p5 31.8, median 33.4, p95 34.4, max 39.3 ms; only the two
+    around the switch (26.6 and 39.3 ms) were off. Live play afterwards was back at
+    60 presents a second.
+- **During the re-run (Rerunning): the verdict card.**
+  - "CALL OVERTURNED" or "CALL STANDS", and nothing under it (owner, 2026-10-17).
+  - Where the pitch crossed, drawn in the zone. The zone is 1.5 times its first size (owner:
+    it was hard to see): about 275 px wide, capped at 40 % of the window's height.
+  - The challenges the team has left, with its nickname: "Cardinals: 2 challenges left". No
+    "Back to the game" line (owner).
 
   It fades out 2.2 s after play resumes.
 
 The mod feeds the scene through `Host::publish` with two records:
-- at the challenge: `{"abs":"challenge",team,call,truth,x,y}`;
-- when the review ends: `{"abs":"verdict",team,overturned,call,left}`.
+- at the challenge: `{"abs":"challenge",team,call,truth,x,y,left,by,club}`:
+  - `by`: the challenger's last name;
+  - `club`: the team's nickname;
+  - `left`: the challenges the team will have after this one (one is spent when the call
+    stands; the verdict is known at the challenge);
+- when the review ends: `{"abs":"verdict",team,overturned,call,left,club}`.
 
 The page holds the truth back until after the replay. The banner keeps the other messages.
 `mvp-play` prints the records as `ui:` lines.
 
 **Not built:**
-- challenges left per team on screen;
+- challenges left per team on screen outside a review;
 - a "Challenge?" prompt during the window.
 
 ## 5. Engine hook API v1
