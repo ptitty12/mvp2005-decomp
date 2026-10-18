@@ -135,6 +135,34 @@ test('schedule: the pace changes the period and keeps the position; debts and sh
   assert.equal(s.due(1000 + FIELD_MS * 100), 0);
 });
 
+test('schedule: slow motion at half speed shows every field for exactly two animation frames, then back', () => {
+  // A 60 Hz display whose frames come with up to 3 ms of jitter; a frame runs a field when one is due.
+  const s = new Schedule();
+  s.reset(0);
+  let seed = 7;
+  const jitter = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32 - 0.5) * 6;
+  const runs = (from, frames) => {
+    const out = [];
+    for (let k = from; k < from + frames; ++k) {
+      const now = k * (1000 / 60) + jitter();
+      if (s.due(now) >= 1) {
+        ++s.fields;
+        out.push(k);
+      }
+    }
+    return out;
+  };
+  runs(0, 30);
+  s.setSlow(0.5, 30 * (1000 / 60) - 4);  // the replay starts (just before frame 30)
+  const slow = runs(30, 240);
+  const gaps = slow.slice(1).map((k, i) => k - slow[i]);
+  assert.ok(gaps.length >= 115);
+  assert.deepEqual([...new Set(gaps)], [2]);  // every field on screen for two frames, never one or three
+  s.setSlow(1, 270 * (1000 / 60) - 4);
+  const back = runs(270, 60);
+  assert.ok(back.length >= 58);
+});
+
 // ---- two players in lockstep, simulated ----
 //
 // One poll per field, delay D fields. A player starts field f when its schedule has a field due and

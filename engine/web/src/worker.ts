@@ -38,6 +38,7 @@ const scope = self as unknown as WorkerScope;
 
 const MAX_FIELDS_PER_FRAME = 4;  // catch-up limit per animation frame
 const FAST_BUDGET_MS = 40;       // unpaced mode: run this long, then let the canvas present
+const REPLAY_SPEED = 0.5;        // a gameplay mod's replay (the review's Presenting leg), paced mode
 const MAX_PREFETCH = 2;          // read-ahead requests in flight (server image)
 
 let M: MvpEngine | null = null;
@@ -523,6 +524,9 @@ function afterRun(ran: number, ms: number): boolean {
   if (modsOn) {
     const st = JSON.parse(cstr(M!._mvp_mod_status())) as
       { phase: string; progress: number; log: string[]; notify: string[]; ui: Record<string, unknown>[] };
+    // A review's replay plays at half speed (owner, 2026-10-17); the engine starts it in a batch
+    // of its own, so it is paced that way from its first frame.
+    sched.setSlow(st.phase === 'presenting' ? REPLAY_SPEED : 1, performance.now());
     // Every batch while a review runs (the page's challenge scene shows its progress), else on news.
     if (st.phase !== modPhase || st.phase !== 'live' || st.log.length || st.notify.length || st.ui.length) {
       modPhase = st.phase;

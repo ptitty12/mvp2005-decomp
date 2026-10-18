@@ -988,11 +988,17 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
 #ifdef MVP_WEB_THREADS
   if (g.threaded) web::render_batch_begin();
 #endif
+  // The timeline's due steps; true when they start a review's replay. The batch then ends,
+  // so the page paces the replay from its first frame (at half speed: worker.ts).
+  auto steps = [] {
+    const mods::Phase was = g.mods.phase();
+    while (g.timeline->due()) g.timeline->step();
+    return g.mods.phase() == mods::Phase::Presenting && was != mods::Phase::Presenting;
+  };
   try {
-    if (step_due)
-      while (g.timeline->due()) g.timeline->step();  // the review announced meanwhile starts
+    bool replay_starts = step_due && steps();  // the review announced meanwhile starts
     // A review's headless legs (g.hold) run unpaced, within a budget per batch.
-    while (g.fields_run - run_start < want || (g.hold && now_ms() - t0 < 40)) {
+    while (!replay_starts && (g.fields_run - run_start < want || (g.hold && now_ms() - t0 < 40))) {
       // Netplay: the next frame's input is not here yet (a review replays recorded inputs instead).
       if (web::net_active() && g.mods.phase() == mods::Phase::Live && !web::net_may_run()) break;
       double f0 = now_ms();
@@ -1012,7 +1018,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
       if (dt > g.max_field_ms) g.max_field_ms = dt;
       if (g.timeline) {
         if (intro_holds()) break;  // the page announces the review first
-        while (g.timeline->due()) g.timeline->step();
+        replay_starts = steps();
       }
     }
   } catch (const StopRun& s) {

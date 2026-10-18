@@ -257,9 +257,21 @@ export class Schedule {
   start = 0;
   fields = 0;  // fields run on this schedule
   rate = 1;
+  slow = 1;    // slow motion on top of the pace (a gameplay mod's replay: 0.5)
 
   period(): number {
-    return FIELD_MS / this.rate;
+    return FIELD_MS / (this.rate * this.slow);
+  }
+
+  /**
+   * Slow motion (`slow` < 1), or back to normal (1). The next slot comes a quarter of the new
+   * period from now, so slots fall between animation frames: at half speed every field stays
+   * on screen for exactly two of them, even with a few milliseconds of jitter.
+   */
+  setSlow(slow: number, now: number): void {
+    if (!(slow > 0) || slow === this.slow) return;
+    this.slow = slow;
+    this.start = now - (this.fields + 0.75) * this.period();
   }
 
   // (A microsecond's margin keeps floating-point rounding from putting a slot just after `now`.)
