@@ -40,6 +40,8 @@
 //   paceMargin=X    development (Q5): the online pace's margin over this machine's capacity (default 0.98)
 //   paceTune=K:V,.. development (Q5b): the pacer's options (pacer.ts) and the paced loop's (worker.ts)
 //   stats=1         the statistics overlay shown from the start (Q5; otherwise the Stats button or `)
+//   state=NAME      start from a save state: /states/NAME.mvpstate on this site (states.ts), with its gameplay
+//                   mods and roster packs; F2 saves a state, F4 goes back to the last one
 // The page publishes its state as `window.mvp` for the browser check.
 
 import { AudioOut, type AudioState } from './audio.js';
@@ -55,6 +57,7 @@ import {
   type StatsSummary,
 } from './netstats.js';
 import { PackPanel, type PacksState } from './packs.js';
+import { States, describeNeeds, fetchNamedState, type GameSetup, type StateHeader } from './states.js';
 import type { CacheReport, DiscSource, FromWorker, NetStatus, Pad, PaceState, RunOptions, Status, ToWorker } from './protocol.js';
 
 // The server's image in this browser's storage (P1): found there, or downloaded now.
@@ -176,6 +179,23 @@ const state: PageState = {
 const packsEl = document.getElementById('packs');
 const packPanel = packsEl ? new PackPanel(packsEl) : null;
 if (packPanel) state.packs = packPanel.state;
+
+// Save states (states.ts): F2 / F4 and the Save states panel; `?state=NAME` starts from one.
+const states = new States((msg, transfer = []) => send(msg, transfer), (text, error = false) => {
+  log(`state: ${text}`, error);
+  const el = document.getElementById('states-status');
+  if (el) {
+    el.textContent = text;
+    el.className = error ? 'note err' : 'note';
+  }
+}, {
+  save: document.getElementById('state-save') as HTMLButtonElement | null,
+  load: document.getElementById('state-load') as HTMLButtonElement | null,
+  file: document.getElementById('state-file') as HTMLInputElement | null,
+  download: document.getElementById('state-download') as HTMLButtonElement | null,
+});
+let startState: { data: ArrayBuffer; header: StateHeader } | null = null;  // ?state=
+let setup: GameSetup | null = null;  // the game's mods and packs, for save states
 
 // Online play (E5): the lobby panel, when the page comes from the netplay server.
 const onlineEl = document.getElementById('online');
@@ -326,6 +346,10 @@ function onWorker(msg: FromWorker): void {
       showPhases();
       break;
     case 'packs':
+      if (setup?.packs && msg.report.ok) {
+        setup.packs.set_hash = msg.report.set_hash;
+        setup.packs.result_hash = msg.report.result_hash ?? '';
+      }
       packPanel?.showMounted(msg.report);
       log(`roster packs: set ${msg.report.set_hash}` + (msg.report.ok
         ? `, result ${msg.report.result_hash ?? ''} (${(msg.report.files ?? []).join(', ') || 'nothing patched'})`
@@ -353,10 +377,12 @@ function onWorker(msg: FromWorker): void {
       if (!msg.ok && options.render) showError('gfx', msg.message);
       break;
     case 'first-frame':
+      if (setup) states.started(setup);
       state.firstFrameMs = performance.now() - state.startedAt;
       state.firstFrameField = msg.fields;
       progressEl.hidden = true;
-      setStatus('Running. Enter = START, X = A, Z = B, arrows = D-pad; or a gamepad. F = fullscreen, M = sound, P = pause.');
+      setStatus('Running. Enter = START, X = A, Z = B, arrows = D-pad; or a gamepad. F = fullscreen, M = sound, P = pause, ' +
+                'F2 = save state, F4 = back to it.');
       showPhases();
       updateHint();
       break;
@@ -388,6 +414,9 @@ function onWorker(msg: FromWorker): void {
       break;
     case 'error':
       showError(msg.stage, msg.message);
+      break;
+    case 'state':
+      states.result(msg.result, msg.data);
       break;
     case 'net-send':
       online?.send(msg.data);
@@ -461,6 +490,15 @@ function startEngine(disc: DiscSource): void {
   sentScale = options.scale;
   options.mods = modsPanel.specs();
   options.modIntroMs = modsPanel.introMs();
+  setup = { mods: options.mods, packs: packs.length ? { files: packs.map((p) => p.server ?? p.label) } : null };
+  if (startState) {
+    // The engine loads it at the first frame poll: the single-threaded engine, onto the same packs.
+    options.loadState = startState.data.slice(0);
+    options.loadStatePacks = startState.header.packs?.result_hash ?? '';
+    options.threads = false;
+    transfer.push(options.loadState);
+    states.startFrom(startState.data);
+  }
   if (params.has('modSeed')) options.modSeed = Number(params.get('modSeed'));
   modsPanel.lock();
   send({ type: 'start', disc, canvas: off, width, height, options: { ...options, netplay, packs },
@@ -767,6 +805,12 @@ soundBtn.addEventListener('click', () => {
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.code === 'F2' || e.code === 'F4') {  // save states, wherever the focus is (a button just clicked)
+    e.preventDefault();
+    if (e.code === 'F2') states.save();
+    else void states.load();
+    return;
+  }
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement) return;
   if (e.code === 'Backquote') toggleOverlay();
   else if (e.code === 'KeyF') toggleFullscreen();
@@ -813,8 +857,24 @@ async function init(): Promise<void> {
     $<HTMLAnchorElement>('server-disc-link').href = found.discPage;
     $<HTMLElement>('operator').hidden = false;
   }
+  // ?state=NAME: a save state to start from; its gameplay mods and roster packs are set up first.
+  const stateName = params.get('state');
+  if (stateName) {
+    const got = await fetchNamedState(stateName);
+    if (typeof got === 'string') {
+      log(`state: ${got}`, true);
+    } else {
+      startState = got;
+      modsPanel.useStateMods(got.header.mods ?? []);
+      log(`state: starting from ${stateName}` + (got.header.label ? ` (${got.header.label})` : '') +
+          `, frame ${got.header.frame_polls ?? '?'}; it needs ${describeNeeds(got.header)}`);
+    }
+  }
   // The roster packs the server offers: a dropdown in the panel (packs.ts), before the game starts.
-  if (found.kind !== 'error' && found.packs && packPanel) void packPanel.addServerList(found.packs);
+  if (found.kind !== 'error' && found.packs && packPanel) {
+    if (startState) await packPanel.addServerList(found.packs, fetch, startState.header.packs?.files ?? []);
+    else void packPanel.addServerList(found.packs);
+  }
   if (found.kind === 'error') {
     pickerBox.hidden = true;
     showError('server', found.message);

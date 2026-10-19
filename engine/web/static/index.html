@@ -35,6 +35,8 @@
         <button type="button" id="sound" data-key="M" title="Turn the sound on or off (M)">Sound: off</button>
         <button type="button" id="pause" data-key="P" title="Pause or resume (P); hiding the tab pauses too">Pause</button>
         <button type="button" id="stats-toggle" data-key="`" title="Show or hide the statistics over the game (the ` key, left of 1)" aria-pressed="false">Stats</button>
+        <button type="button" id="state-save" data-key="F2" title="Save the game where it is (F2)" disabled>Save state</button>
+        <button type="button" id="state-load" data-key="F4" title="Back to the last state saved or loaded (F4)" disabled>Load state</button>
         <span class="toolbar-gap"></span>
         <label class="picture" title="Internal resolution: how many times the console's pixels the game is drawn at. Auto picks by the size of the picture on screen.">Picture
           <select id="picture">
@@ -77,6 +79,17 @@
         <details id="mods-details" class="fold">
           <summary>Gameplay mods <span id="mods-summary" class="note"></span></summary>
           <div id="mods" class="panel-body"></div>
+        </details>
+        <details id="states-details" class="fold">
+          <summary>Save states <span class="note">F2 save, F4 back</span></summary>
+          <div class="panel-body">
+            <p class="note">F2 saves the game where it is. F4 goes back to the last state saved or loaded, as often
+              as you like; this browser keeps it. Save states need the single-threaded engine (always on with a
+              gameplay mod) and work offline only.</p>
+            <p><label class="picker">Load a state file <input type="file" id="state-file" accept=".mvpstate" disabled></label>
+              <button type="button" id="state-download" disabled>Download the saved state</button></p>
+            <p id="states-status" class="note" role="status"></p>
+          </div>
         </details>
         <details id="controls-details" class="fold">
           <summary>Controls <span id="controls-summary" class="note"></span></summary>

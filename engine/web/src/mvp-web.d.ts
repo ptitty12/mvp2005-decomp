@@ -44,6 +44,13 @@ export interface MvpEngine {
                tl: number, tr: number): void;
   _mvp_status(): number;
   _mvp_guest_line(): number;
+  // Save-state files (runtime/state_file.h): carried out at the next frame poll; then mvp_state_result.
+  _mvp_state_save(header: number): number;
+  _mvp_state_load(data: number, n: number): number;
+  _mvp_state_result(): number;
+  _mvp_state_out_ptr(): number;
+  _mvp_state_out_len(): number;
+  _mvp_state_out_release(): void;
 
   // E2c: the server's image, the module cache, audio.
   _mvp_open_disc_url(size: number, blockKib: number, maxBlocks: number, maxRun: number, ahead: number): number;

@@ -2,6 +2,8 @@
 
 #include "gfx/texture_decode.h"
 
+#include "common/state_io.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -138,6 +140,40 @@ void GxProcessor::reset() {
   bp_[bp::kScissorTL] = 342u | 342u << 12;
   bp_[bp::kScissorOffset] = 171u | 171u << 10;
   bp_[bp::kAlphaCompare] = 7u << 16 | 7u << 19;
+}
+
+template <class Ar>
+void GxProcessor::state_fields(Ar& a) {
+  a(bp_);
+  a(bp_mask_);
+  a(vcd_lo_);
+  a(vcd_hi_);
+  a(vat_a_);
+  a(vat_b_);
+  a(vat_c_);
+  a(array_base_);
+  a(array_stride_);
+  a(matidx_a_);
+  a(matidx_b_);
+  a(xf_mem_);
+  a(xf_regs_);
+  a(tev_regs_);
+  a(konst_);
+  a(tlut_);
+  a(tmem_);
+}
+
+void GxProcessor::write_state(StateWriter& w) const {
+  const_cast<GxProcessor*>(this)->state_fields(w);  // the writer only reads the fields
+}
+
+void GxProcessor::read_state(StateReader& r) {
+  const std::size_t tlut = tlut_.size(), tmem = tmem_.size();
+  state_fields(r);
+  if (tlut_.size() != tlut || tmem_.size() != tmem) throw StateError("save state: the renderer's TMEM has another size");
+  fmt_valid_ = 0;
+  xs_valid_ = false;
+  ++state_serial_;
 }
 
 void GxProcessor::command(const u8* c, std::size_t len) {

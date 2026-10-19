@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "common/state_io.h"
+
 namespace mvp::rt {
 
 namespace {
@@ -267,6 +269,44 @@ void GxFifo::pending_append(const std::uint8_t* bytes, std::size_t n) {
   }
   std::memcpy(pending_.data() + pend_, bytes, n);
   pend_ += n;
+}
+
+template <class Ar>
+void GxFifo::state_fields(Ar& a) {
+  a(need_);
+  a(consumed_);
+  a(vcd_lo_);
+  a(vcd_hi_);
+  a(vat_a_);
+  a(vat_b_);
+  a(vat_c_);
+  a(commands_);
+  a(bp_loads_);
+  a(primitives_);
+  a(vertices_);
+  a(display_lists_);
+  a(display_list_errors_);
+  a(broken_);
+  a(broken_opcode_);
+  a(broken_offset_);
+}
+
+void GxFifo::write_state(StateWriter& w) const {
+  w(std::vector<std::uint8_t>(pending_.begin() + static_cast<std::ptrdiff_t>(pbeg_),
+                              pending_.begin() + static_cast<std::ptrdiff_t>(pend_)));
+  const_cast<GxFifo*>(this)->state_fields(w);  // the writer only reads the fields
+}
+
+void GxFifo::read_state(StateReader& r) {
+  std::vector<std::uint8_t> pending;
+  r(pending);
+  pending_.assign(std::max<std::size_t>(4096, pending.size()), 0);
+  std::copy(pending.begin(), pending.end(), pending_.begin());
+  pbeg_ = 0;
+  pend_ = pending.size();
+  state_fields(r);
+  vsize_valid_ = 0;
+  batch_n_ = 0;
 }
 
 }  // namespace mvp::rt

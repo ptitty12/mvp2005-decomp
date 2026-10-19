@@ -56,6 +56,11 @@ class Timeline {
   bool due() const { return due_; }
   // Performs the due step; only between rt::run() calls.
   void step();
+  // The tool loaded a save-state file (runtime/state_file.h) in live play: the
+  // snapshots and recorded inputs belong to the run before it, so they are
+  // dropped, and the state loaded becomes the first snapshot (a review of the
+  // next pitch can start there). Only between rt::run() calls, while live.
+  void restart();
 
   Phase phase() const { return mods_.phase(); }
   // How far the current review leg is, 0-1 (1 when live): for the page's challenge scene.

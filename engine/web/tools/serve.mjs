@@ -2,7 +2,7 @@
 // static site directory, and nothing else, on localhost.
 //
 //   node engine/web/tools/serve.mjs [--root DIR] [--port N] [--no-isolation]
-//        [--disc PATH [--login] [--latency MS] [--rate MBPS]]
+//        [--disc PATH [--login] [--latency MS] [--rate MBPS] [--packs DIR]] [--states DIR]
 //
 // DIR defaults to build/engine/emscripten/web/site (what the "emscripten"
 // preset's mvp-web target assembles: the page, the shell, the engine module and
@@ -23,10 +23,17 @@
 // request carries the cookie mvp_access=ok (the page then shows the no-access
 // error). --latency MS / --rate MBPS: each image response waits MS first and
 // is sent at that rate (a remote server, for the read-ahead measurements).
+// --packs DIR (with --disc): the deployment's roster packs (engine/server's
+// pack_store): /config.json also names "/api/packs", which lists DIR's .zip
+// files, and /api/packs/FILE serves one (the page's "Packs on this server").
+//
+// --states DIR (local only): save-state files (runtime/state_file.h), for the
+// page's ?state=NAME: GET /states/NAME.mvpstate serves DIR/NAME.mvpstate. A
+// state is game-derived: DIR is a folder on this machine, never in the repo.
 
 import { createServer } from 'node:http';
-import { createReadStream, statSync } from 'node:fs';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { createReadStream, readdirSync, statSync } from 'node:fs';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -42,6 +49,8 @@ const login = args.includes('--login');
 const latencyMs = Number(arg('--latency', '0'));
 const rateMBps = Number(arg('--rate', '0'));
 const isolate = !args.includes('--no-isolation');
+const packsDir = arg('--packs', '');
+const statesDir = arg('--states', '');
 
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -60,7 +69,7 @@ const stats = { imageRequests: 0, imageBytes: 0, heads: 0 };
 // ---- the mock deployment (--disc) ----
 function mock(req, res, path) {
   if (path === '/config.json') {
-    const body = JSON.stringify({ disc: '/api/disc/image' });
+    const body = JSON.stringify({ disc: '/api/disc/image', ...(packsDir ? { packs: '/api/packs' } : {}) });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': body.length });
     res.end(req.method === 'HEAD' ? undefined : body);
     return true;
@@ -68,6 +77,22 @@ function mock(req, res, path) {
   if (!path.startsWith('/api/')) return false;
   if (login && !/(?:^|;\s*)mvp_access=ok(?:;|$)/.test(req.headers.cookie ?? '')) {
     res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"no access"}');
+    return true;
+  }
+  if (packsDir && (path === '/api/packs' || path.startsWith('/api/packs/'))) {
+    const zips = readdirSync(packsDir).filter((f) => f.toLowerCase().endsWith('.zip'));
+    if (path === '/api/packs') {
+      const list = zips.map((f) => ({ file: f, name: f.replace(/\.zip$/i, ''), version: '', size: statSync(join(packsDir, f)).size }));
+      const body = JSON.stringify({ packs: list });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(req.method === 'HEAD' ? undefined : body);
+      return true;
+    }
+    const f = path.slice('/api/packs/'.length);
+    if (!zips.includes(f)) {
+      res.writeHead(404).end();
+      return true;
+    }
+    sendFile(req, res, join(packsDir, f), 'application/zip');
     return true;
   }
   if (path !== '/api/disc/image') {
@@ -114,6 +139,14 @@ function mock(req, res, path) {
   return true;
 }
 
+function sendFile(req, res, file, type) {
+  const size = statSync(file).size;
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': size, 'Cache-Control': 'private, no-store',
+                       'X-Content-Type-Options': 'nosniff' });
+  if (req.method === 'HEAD') res.end();
+  else createReadStream(file).pipe(res);
+}
+
 const server = createServer((req, res) => {
   if (isolate) {  // P2: cross-origin isolation (SharedArrayBuffer, wasm threads); everything here is same-origin
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -132,6 +165,19 @@ const server = createServer((req, res) => {
     return;
   }
   if (disc && mock(req, res, path)) return;
+  if (statesDir && path.startsWith('/states/')) {  // save-state files (--states)
+    const name = path.slice('/states/'.length);
+    const file = join(statesDir, basename(name));
+    let ok = false;
+    try {
+      ok = basename(name) === name && name.endsWith('.mvpstate') && statSync(file).isFile();
+    } catch {
+      ok = false;
+    }
+    if (ok) sendFile(req, res, file, 'application/octet-stream');
+    else res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
+    return;
+  }
   if (path === '/_stats') {  // the mock's counters, for the browser check
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(stats));
     return;
@@ -161,5 +207,6 @@ const server = createServer((req, res) => {
 
 server.listen(port, '127.0.0.1', () => {
   const { port: p } = server.address();
-  console.log(`serving http://127.0.0.1:${p}/ from ${root}${disc ? ' (mock deployment: /config.json, /api/disc/image)' : ''}`);
+  console.log(`serving http://127.0.0.1:${p}/ from ${root}${disc ? ' (mock deployment: /config.json, /api/disc/image)' : ''}` +
+              `${packsDir ? `, packs from ${packsDir}` : ''}${statesDir ? `, states from ${statesDir}` : ''}`);
 });

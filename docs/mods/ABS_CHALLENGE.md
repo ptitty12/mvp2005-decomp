@@ -948,6 +948,27 @@ enough. A tool gives it three callbacks:
   including during a load (DVD in flight) and with audio playing.
 - **Netplay:** both peers restore and re-run and reach the same hash.
 
+### 6.6 Files (2026-10-19)
+
+A save state can also be written to a file and loaded by another process, native
+or browser, after it boots the same disc with the same roster packs and mods:
+`runtime/state_file.h`. Every part lists its fields once for both directions
+(`common/state_io.h`: `Hardware`, `GxFifo` and the renderer's `GxProcessor` have
+`write_state` / `read_state`), in a portable little-endian stream, so native and
+wasm32 read each other's files. The header is JSON: the mods' specs and settings,
+the packs' set and result hashes, the poll, a label.
+
+- `mvp-play --state-save F:FILE [--state-label TEXT]` saves at frame poll F (with the
+  GX state when it renders: use `--headless`, not `--no-render`); `--state-load FILE`
+  loads at the first frame poll and refuses other mods or packs.
+- The page: F2 saves, F4 goes back; `?state=NAME` starts from a file on the site
+  (WEB.md §2, "Save states").
+- After a load the timeline drops its two slots and recorded inputs (the run before
+  owned them) and snapshots the state loaded (`Timeline::restart`), so the next
+  pitch's call can be challenged and replayed.
+- Checked: native save at poll 2,000, load in a fresh native process and in Chrome,
+  both reach the uninterrupted run's guest line at poll 3,000 (WEB.md §4).
+
 ## 7. Replay route
 
 ### 7.1 Decision: route B, engine save states (owner, 2026-10-17)

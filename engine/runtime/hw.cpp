@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "common/bytes.h"
+#include "common/state_io.h"
 #include "ppc/mem_access.h"
 #include "runtime/ax.h"
 #include "vfs/source.h"
@@ -35,6 +36,107 @@ void Hardware::restore_from(const Hardware& snap) {
   disc_ = disc;
   ax_obs_ = ax_obs;
   set_gfx_observer(gfx);
+}
+
+template <class Ar>
+void Hardware::state_fields(Ar& a) {
+  a(cfg_.rtc_seconds);
+  a(cfg_.sram_language);
+  a(cfg_.sram_flags);
+  a(cfg_.di_latency_tb);
+  a(cfg_.di_tb_per_kib);
+  a(cfg_.ax_voices);
+  a(regs_);
+  a(same_reads_);
+  // VI, AI
+  a(now_tb_);
+  a(frame_start_tb_);
+  a(vi_fields_);
+  a(vi_events_);
+  a(ai_cr_);
+  a(ai_count_base_);
+  a(ai_t0_);
+  // DSP mailboxes, AX, AI DMA
+  a(dsp_state_);
+  a(dsp_boots_);
+  a(dsp_load_n_);
+  a(dsp_cmdlist_next_);
+  a.vec(dsp_out_, [&](DspMail& m) {
+    a(m.tb);
+    a(m.mail);
+    a(m.irq);
+  });
+  a(dsp_frames_);
+  a(ax_.voice_frames);
+  a(ax_.samples);
+  a(ax_.ended);
+  a(ax_.looped);
+  a(ax_.updates);
+  a(ax_.max_running);
+  a(aid_on_);
+  a(aid_blocks_);
+  a(aid_start_tb_);
+  a(aid_end_tb_);
+  a(aid_interrupts_);
+  // DI
+  a(di_sr_);
+  a(di_cvr_);
+  a(di_mar_);
+  a(di_len_);
+  a(di_cr_);
+  a(di_imm_);
+  a(di_cfg_);
+  a(di_cmd_);
+  a(di_done_tb_);
+  a(di_commands_);
+  a(di_bytes_);
+  // PE, the GX FIFO and the write-gather pipe (its bytes; `fast` and `owner` are the host's)
+  a(pe_ctrl_);
+  a(pe_token_);
+  if constexpr (Ar::kReading) gx_.read_state(a);
+  else gx_.write_state(a);
+  a(wgp_->buf);
+  a(wgp_->n);
+  a(wgp_->last_read);
+  a(wgp_dropped_);
+  a(gp_defer_);
+  a(gp_deferred_);
+  a(gp_bursts_);
+  a(fifo_bytes_);
+  a(draw_dones_);
+  // EXI (IPL, SRAM, RTC), the DSP's control and ARAM
+  for (ExiChannel& e : exi_) {
+    a(e.csr);
+    a(e.mar);
+    a(e.len);
+    a(e.cr);
+    a(e.data);
+    a(e.have_cmd);
+    a(e.cmd);
+    a(e.cmd_bytes);
+    a(e.offset);
+  }
+  a(sram_);
+  a(rtc_);
+  a(dsp_cr_);
+  a(dsp_mail_to_cpu_);
+  a(dsp_mail_to_dsp_);
+  a(ar_mm_);
+  a(ar_ar_);
+  a(ar_cnt_);
+  a(dsp_booting_);
+  a(aram_);
+}
+
+void Hardware::write_state(StateWriter& w) const {
+  const_cast<Hardware*>(this)->state_fields(w);  // the writer only reads the fields
+}
+
+void Hardware::read_state(StateReader& r) {
+  const std::size_t regs = regs_.size(), aram = aram_.size();
+  state_fields(r);
+  if (regs_.size() != regs || aram_.size() != aram || wgp_->n >= 32)
+    throw StateError("save state: the hardware's register file or ARAM has another size");
 }
 
 namespace {

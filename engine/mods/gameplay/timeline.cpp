@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <stdexcept>
 
 #include "common/sha1.h"
 #include "runtime/hle.h"
@@ -123,6 +124,17 @@ std::string Timeline::mem1_sha1() {
 void Timeline::log(const std::string& s) {
   if (log_) log_(s);
   else std::printf("timeline: %s\n", s.c_str());
+}
+
+void Timeline::restart() {
+  if (mods_.phase() != Phase::Live) throw std::logic_error("Timeline::restart: only in live play");
+  for (rt::SaveState& s : slot_) s.valid = false;
+  recorded_to_ = rt::g_frame_polls;  // polls before it were the other run's
+  due_ = false;
+  target_ = ~0ull;
+  mods_.snapshot_taken();  // a request from the run before is met by the snapshot below
+  save(0);
+  publish_snapshots();
 }
 
 void Timeline::step() {

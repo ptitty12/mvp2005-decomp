@@ -48,6 +48,7 @@
 #include <emscripten/heap.h>
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +72,7 @@
 #include "runtime/input.h"
 #include "runtime/machine.h"
 #include "runtime/native.h"
+#include "runtime/state_file.h"
 #include "runtime/wasm_host.h"
 #include "translator/cfg.h"
 #include "translator/symbols.h"
@@ -319,6 +321,16 @@ struct Engine {
   // runs for `intro_ms` of host time before it starts. Host-side only: the guest waits at
   // a frame poll, as it does for the other player online.
   double intro_ms = 0, intro_until = 0;
+
+  // Save-state files (runtime/state_file.h): the page's save (F2) and load (F4),
+  // carried out at the next frame poll in live play (single-threaded engine only).
+  enum class StateOp { None, Save, Load };
+  StateOp state_op = StateOp::None;
+  bool state_due = false;               // the run stopped at a frame poll for it
+  std::string state_header;             // a save: the page's header (a JSON object)
+  std::vector<std::uint8_t> state_in;   // a load: the file
+  std::vector<std::uint8_t> state_out;  // the last save's file, until the page takes it
+  std::string state_result;             // the last request's outcome for the page (JSON), until taken
 };
 Engine g;
 std::vector<TimedSource::Record> g_io_log;
@@ -413,7 +425,13 @@ struct WebTimelineTool : mods::Timeline::Tool {
 };
 WebTimelineTool g_timeline_tool;
 
-bool poll_gate(ppc::Cpu& c) { return g.timeline->gate(c); }
+bool poll_gate(ppc::Cpu& c) {
+  if (g.state_op != Engine::StateOp::None && g.mods.phase() == mods::Phase::Live && g.hooks->stop_before(c)) {
+    g.state_due = true;
+    return false;
+  }
+  return g.timeline ? g.timeline->gate(c) : true;
+}
 
 void frame_hook(ppc::Cpu& c, std::uint64_t frame) {
   g.frames = frame;
@@ -773,6 +791,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
     g.timeline->set_log([to_page](const std::string& s) { to_page("timeline: " + s); });
     g_poll_gate = &poll_gate;
   }
+  if (!g.threaded && !net) g_poll_gate = &poll_gate;  // save-state files (mvp_state_save / mvp_state_load)
   attach_renderer();
   apply_audio();
   return 1;
@@ -958,6 +977,65 @@ EMSCRIPTEN_KEEPALIVE void mvp_host_slow(double factor) {
 #endif
 }
 
+// Save-state files (runtime/state_file.h): the page's request, at the frame poll
+// the run stopped at. The outcome waits in g.state_result for mvp_state_result().
+void state_step() {
+  g.state_due = false;
+  const Engine::StateOp op = g.state_op;
+  g.state_op = Engine::StateOp::None;
+  const double t0 = now_ms();
+  const char* name = op == Engine::StateOp::Save ? "save" : "load";
+  char b[200];
+  try {
+    if (op == Engine::StateOp::Save) {
+      rt::SaveState st;
+      rt::save_state(st, *g.m, *g.hooks, *g.hw, g.input.get());
+      const std::vector<std::uint8_t> views = g.rs.export_view();
+      // The page's header with the poll and field it was saved at.
+      std::string header = g.state_header;
+      while (!header.empty() && std::isspace(static_cast<unsigned char>(header.back()))) header.pop_back();
+      if (header.size() < 2 || header.front() != '{' || header.back() != '}') header = "{}";
+      header.pop_back();  // the object's closing brace: the engine's fields follow
+      std::snprintf(b, sizeof b, "%s\"frame_polls\":%llu,\"vi_fields\":%llu,\"saved_by\":\"browser\"}",
+                    header.size() > 1 ? "," : "", static_cast<unsigned long long>(g_frame_polls),
+                    static_cast<unsigned long long>(g.hw->vi_fields()));
+      header += b;
+      g.state_out = rt::write_state_file(header, st, g.mods.save_state(), views);
+      std::snprintf(b, sizeof b, "{\"op\":\"save\",\"ok\":true,\"poll\":%llu,\"bytes\":%llu,\"gx\":%s,\"ms\":%.1f}",
+                    static_cast<unsigned long long>(g_frame_polls), static_cast<unsigned long long>(g.state_out.size()),
+                    views.empty() ? "false" : "true", now_ms() - t0);
+      g.state_result = b;
+    } else {
+      rt::SaveState st;
+      std::vector<std::uint8_t> mods_state, views;
+      std::string err;
+      if (!rt::read_state_file(g.state_in, *g.hw, g.input.get(), st, mods_state, views, &err))
+        throw std::runtime_error(err);
+      g.state_in = {};
+      if (!g.mods.load_state(mods_state))
+        throw std::runtime_error(mods_state.empty() ? "the state was saved without the gameplay mods this game has on"
+                                                    : "the state was saved with other gameplay mods than this game has on");
+      rt::prepare_machine(*g.m, st);
+      rt::load_state(st, *g.m, *g.hooks, *g.hw, g.input.get());
+      g.rs.import_view(views);
+      if (g.timeline) g.timeline->restart();
+      if (g.mixer) {  // the mixer's voices belong to the run before: a fresh one
+        g.hw->set_ax_observer(nullptr);
+        g.mixer.reset();
+        g.audio.clear();
+        apply_audio();
+      }
+      std::snprintf(b, sizeof b, "{\"op\":\"load\",\"ok\":true,\"poll\":%llu,\"fields\":%llu,\"gx\":%s,\"ms\":%.1f}",
+                    static_cast<unsigned long long>(g_frame_polls), static_cast<unsigned long long>(g.hw->vi_fields()),
+                    views.empty() ? "false" : "true", now_ms() - t0);
+      g.state_result = b;
+    }
+  } catch (const std::exception& e) {
+    g.state_in = {};
+    g.state_result = std::string("{\"op\":\"") + name + "\",\"ok\":false,\"error\":\"" + json_escape(e.what()) + "\"}";
+  }
+}
+
 // A requested review waits out the page's announcement (mvp_mod_intro): true while it
 // does. The run has stopped at the frame poll for it, and nothing runs meanwhile.
 bool intro_holds() {
@@ -1006,6 +1084,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
       const double waited0 = g.threaded ? web::render_waited_ms() : 0;
 #endif
       rt::run(g.m->cpu());
+      if (g.state_due) state_step();
       double dt = now_ms() - f0;
       if (g_host_slow > 1) {
         double work = dt;
@@ -1270,5 +1349,42 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_guest_line() {
   g_text = b;
   return g_text.c_str();
 }
+
+// ---- Save-state files (runtime/state_file.h): the page's F2 and F4 ----
+// A request is carried out at the next frame poll in live play (not during a
+// review); mvp_state_result() then has the outcome. Only the single-threaded
+// engine offline: 0 and mvp_last_error() otherwise.
+bool state_possible() {
+  g.error.clear();
+  if (!g.m || g.stopped) g.error = "the game is not running";
+  else if (g.threaded) g.error = "save states need the single-threaded engine (threads=0, or a gameplay mod on)";
+  else if (web::net_active()) g.error = "no save states in an online game";
+  else if (g.state_op != Engine::StateOp::None) g.error = "a save or load is already under way";
+  return g.error.empty();
+}
+// Saves at the next frame poll. `header`: the page's JSON object for the file's header (packs, mods, label).
+EMSCRIPTEN_KEEPALIVE int mvp_state_save(const char* header) {
+  if (!state_possible()) return 0;
+  g.state_header = header && *header ? header : "{}";
+  g.state_op = Engine::StateOp::Save;
+  return 1;
+}
+// Loads the file `p`/`n` at the next frame poll (the bytes are copied).
+EMSCRIPTEN_KEEPALIVE int mvp_state_load(const std::uint8_t* p, double n) {
+  if (!state_possible()) return 0;
+  g.state_in.assign(p, p + static_cast<std::size_t>(n));
+  g.state_op = Engine::StateOp::Load;
+  return 1;
+}
+// The outcome of the last request as JSON ({"op","ok","error"|"poll",...}), once; "" while none.
+EMSCRIPTEN_KEEPALIVE const char* mvp_state_result() {
+  g_text = std::move(g.state_result);
+  g.state_result.clear();
+  return g_text.c_str();
+}
+// The last save's file, until mvp_state_out_release().
+EMSCRIPTEN_KEEPALIVE const std::uint8_t* mvp_state_out_ptr() { return g.state_out.data(); }
+EMSCRIPTEN_KEEPALIVE double mvp_state_out_len() { return static_cast<double>(g.state_out.size()); }
+EMSCRIPTEN_KEEPALIVE void mvp_state_out_release() { g.state_out = {}; }
 
 }  // extern "C"

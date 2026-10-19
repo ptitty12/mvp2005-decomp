@@ -77,6 +77,14 @@
 //   --rewind-test F:N save states (runtime/save_state.h): save the machine at frame
 //                     poll F, run N polls, restore, run them again; prints whether the
 //                     guest state matched (scripted input only)
+//   --state-save F:FILE  a save-state file (runtime/state_file.h) of frame poll F,
+//                     with the mods' state and, when rendering, the renderer's GX
+//                     state (save from a run that renders: --headless, not --no-render)
+//   --state-label TEXT   what the state shows, for its header (the page shows it)
+//   --state-load FILE    start from a save-state file: boot, stop at the first frame
+//                     poll, load it; give the same --pack and --mod as the saving run.
+//                     The script's frames stay absolute (the state's poll and on)
+//   Save-state files are game-derived: keep them under build/ or a scratch folder.
 //
 // Determinism: the renderer and the mixer only read guest state, audio and
 // window events never reach the guest (playback throttles the host, not the
@@ -124,7 +132,9 @@
 #include "runtime/input.h"
 #include "runtime/native.h"
 #include "runtime/save_state.h"
+#include "runtime/state_file.h"
 #include "runtime/sys_hooks.h"
+#include "common/state_io.h"
 #include "translator/program.h"
 
 void mvp_register_game();
@@ -584,9 +594,32 @@ std::string guest_line(Machine& m, YieldingHooks& hooks) {
   return b;
 }
 
+// --state-save F:FILE, --state-load FILE: save-state files (runtime/state_file.h).
+struct StateFiles {
+  std::uint64_t save_at = ~0ull;
+  std::string save_path, load_path, label;
+  bool loaded = false, due = false;
+  mods::Json header;  // what main() knows of the run: the mods and packs
+  std::string mod_settings, pack_result_hash;
+  Machine* m = nullptr;
+  YieldingHooks* hooks = nullptr;
+  Hardware* hw = nullptr;
+  InputQueue* input = nullptr;
+  gfx::GxProcessor* proc = nullptr;  // null without rendering: the file then has no GX state
+  gfx::Renderer* renderer = nullptr;
+  gfx::GpMemory* gp_memory = nullptr;
+};
+StateFiles g_states;
+
 bool poll_gate(ppc::Cpu& c) {
-  RewindTest& t = g_rewind;
+  StateFiles& s = g_states;
   const std::uint64_t poll = rt::g_frame_polls;
+  if (((!s.load_path.empty() && !s.loaded) || poll == s.save_at) &&
+      (!g_mods || g_mods->phase() == mods::Phase::Live) && s.hooks->stop_before(c)) {
+    s.due = true;
+    return false;
+  }
+  RewindTest& t = g_rewind;
   if (t.stage < 3 && ((t.stage == 0 && poll == t.at) || (t.stage > 0 && poll == t.at + t.n)) &&
       t.hooks->stop_before(c)) {
     t.due = true;
@@ -618,6 +651,89 @@ void rewind_step() {
     std::printf("rewind test: poll %llu again: %s: %s\n", static_cast<unsigned long long>(t.at + t.n), again.c_str(),
                 again == t.first ? "IDENTICAL" : "DIFFERENT");
     t.stage = 3;
+  }
+}
+
+double ms_since(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+void state_load(StateFiles& s) {
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto bytes = read_file(s.load_path);
+  if (!bytes) throw StopRun{"--state-load: cannot read " + s.load_path};
+  std::string err;
+  const auto header_text = rt::state_file_header(*bytes, &err);
+  if (!header_text) throw StopRun{"--state-load: " + s.load_path + ": " + err};
+  const auto header = mods::parse_json(*header_text, &err);
+  if (!header || !header->is_obj()) throw StopRun{"--state-load: the header is not JSON: " + err};
+  auto str = [&](const mods::Json* j) { return j && j->is_str() ? j->s : std::string(); };
+  const std::string mods_then = str(header->get("mod_settings"));
+  const mods::Json* packs = header->get("packs");
+  const std::string packs_then = str(packs ? packs->get("result_hash") : nullptr);
+  if (mods_then != s.mod_settings)
+    throw StopRun{"--state-load: saved with the gameplay mods \"" + mods_then + "\"; this run has \"" + s.mod_settings +
+                  "\" (give the same --mod)"};
+  if (packs_then != s.pack_result_hash)
+    throw StopRun{"--state-load: saved with other roster packs (result " + (packs_then.empty() ? "none" : packs_then) +
+                  "; this run " + (s.pack_result_hash.empty() ? "none" : s.pack_result_hash) + ")"};
+  rt::SaveState st;
+  std::vector<u8> mods_state, views;
+  if (!rt::read_state_file(*bytes, *s.hw, s.input, st, mods_state, views, &err))
+    throw StopRun{"--state-load: " + s.load_path + ": " + err};
+  rt::prepare_machine(*s.m, st);
+  rt::load_state(st, *s.m, *s.hooks, *s.hw, s.input);
+  if (g_mods ? !g_mods->load_state(mods_state) : !mods_state.empty())
+    throw StopRun{"--state-load: the gameplay mods' state does not fit this run's mods"};
+  if (s.proc) {
+    if (!views.empty()) {
+      StateReader r(views);
+      s.proc->read_state(r);
+    } else {
+      s.proc->reset();  // the saving run did not render: the game's next frames set it up again
+    }
+  }
+  if (s.renderer) s.renderer->invalidate_textures();
+  if (s.gp_memory) s.gp_memory->field();
+  if (g_timeline) g_timeline->restart();
+  std::printf("state: loaded %s (%s) at poll %llu in %.1f ms: %s\n", s.load_path.c_str(),
+              str(header->get("label")).c_str(), static_cast<unsigned long long>(rt::g_frame_polls), ms_since(t0),
+              guest_line(*s.m, *s.hooks).c_str());
+}
+
+void state_save(StateFiles& s) {
+  const auto t0 = std::chrono::steady_clock::now();
+  rt::SaveState st;
+  rt::save_state(st, *s.m, *s.hooks, *s.hw, s.input);
+  const std::vector<u8> mods_state = g_mods ? g_mods->save_state() : std::vector<u8>();
+  std::vector<u8> views;
+  if (s.proc) {
+    StateWriter w;
+    s.proc->write_state(w);
+    views = std::move(w.out());
+  }
+  mods::Json header = s.header;
+  header.set("frame_polls", mods::Json::integer(static_cast<std::int64_t>(rt::g_frame_polls)));
+  header.set("vi_fields", mods::Json::integer(static_cast<std::int64_t>(s.hw->vi_fields())));
+  header.set("label", mods::Json::string(s.label));
+  const auto file = rt::write_state_file(mods::canonical_json(header), st, mods_state, views);
+  if (!write_file(s.save_path, file.data(), file.size())) throw StopRun{"--state-save: cannot write " + s.save_path};
+  std::printf("state: saved poll %llu to %s (%.1f MiB%s) in %.1f ms: %s\n", static_cast<unsigned long long>(rt::g_frame_polls),
+              s.save_path.c_str(), file.size() / 1048576.0, views.empty() ? ", no GX state" : "", ms_since(t0),
+              guest_line(*s.m, *s.hooks).c_str());
+}
+
+// After rt::run() returned for a save-state file. A load comes first; a save
+// due at the poll loaded then happens when the gate stops again.
+void state_step() {
+  StateFiles& s = g_states;
+  s.due = false;
+  if (!s.load_path.empty() && !s.loaded) {
+    s.loaded = true;
+    state_load(s);
+  } else if (rt::g_frame_polls == s.save_at) {
+    s.save_at = ~0ull;
+    state_save(s);
   }
 }
 
@@ -876,6 +992,18 @@ int main(int argc, char** argv) {
       g_rewind.at = std::strtoull(v.c_str(), nullptr, 10);
       g_rewind.n = colon == std::string::npos ? 60 : std::strtoull(v.c_str() + colon + 1, nullptr, 10);
     }
+    else if (a == "--state-save") {
+      const std::string v = next();
+      const auto colon = v.find(':');
+      if (colon == std::string::npos || colon + 1 >= v.size()) {
+        std::fprintf(stderr, "mvp-play: --state-save wants F:FILE\n");
+        return 2;
+      }
+      g_states.save_at = std::strtoull(v.c_str(), nullptr, 10);
+      g_states.save_path = v.substr(colon + 1);
+    }
+    else if (a == "--state-label") g_states.label = next();
+    else if (a == "--state-load") g_states.load_path = next();
     else if (a == "--capture-review-every")
       play.review_capture_every = std::max<std::uint64_t>(1, std::strtoull(next().c_str(), nullptr, 10));
     else {
@@ -884,7 +1012,8 @@ int main(int argc, char** argv) {
                    "[--headless] [--no-render] [--yield] [--present-every N] [--capture DIR] [--capture-every N] [--capture-from N] [--capture-at F1,F2,...] "
                    "[--draw-log FILE] [--draw-log-from N] [--draw-log-to N] [--dump-textures DIR --dump-field N [--dump-to M]] "
                    "[--perf-every N] [--profile N] [--host-profile N] [--profile-from F] [--trace-entry HEX,... [--trace-file F] [--trace-from N] "
-                   "[--trace-to N] [--trace-peek HEX,...]] [--audio-wav FILE] [--no-audio] [--audio-latency MS] [--pack PATH]... [--mod ID[:K=V,...]]... [--mod-seed N] [--capture-review DIR [--capture-review-every N]] [--rewind-test F:N]\n");
+                   "[--trace-to N] [--trace-peek HEX,...]] [--audio-wav FILE] [--no-audio] [--audio-latency MS] [--pack PATH]... [--mod ID[:K=V,...]]... [--mod-seed N] [--capture-review DIR [--capture-review-every N]] [--rewind-test F:N] "
+                   "[--state-save F:FILE [--state-label TEXT]] [--state-load FILE]\n");
       return 2;
     }
   }
@@ -901,14 +1030,24 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mvp-play: %s\n", err.c_str());
     return 77;
   }
+  g_states.header = mods::Json::object();
+  g_states.header.set("game", mods::Json::string("GV4E69-0"));
+  g_states.header.set("saved_by", mods::Json::string("mvp-play"));
   if (!packs.empty()) {  // E6: roster packs on the virtual disc, before boot
-    std::string log;
-    const auto mounted = mods::mount_pack_paths(in->disc, packs, &log);
+    std::string log, set_hash;
+    const auto mounted = mods::mount_pack_paths(in->disc, packs, &log, &set_hash);
     std::printf("%s", log.c_str());
     if (!mounted.ok) {
       std::fprintf(stderr, "mvp-play: the roster packs cannot be used\n");
       return 1;
     }
+    g_states.pack_result_hash = mounted.result_hash;
+    mods::Json p = mods::Json::object(), files = mods::Json::array();
+    for (const std::string& path : packs) files.arr.push_back(mods::Json::string(std::filesystem::path(path).filename().string()));
+    p.set("set_hash", mods::Json::string(set_hash));
+    p.set("result_hash", mods::Json::string(mounted.result_hash));
+    p.set("files", std::move(files));
+    g_states.header.set("packs", std::move(p));
   }
   std::string script_text = "mvp-input 1\n";
   if (!input_path.empty()) {
@@ -999,6 +1138,13 @@ int main(int argc, char** argv) {
     g_mods = &gameplay;
     std::printf("mods: %s seed %llu\n", gameplay.canonical_settings().c_str(),
                 static_cast<unsigned long long>(mod_seed));
+  }
+  g_states.mod_settings = gameplay.canonical_settings();
+  {
+    mods::Json specs = mods::Json::array();
+    for (const std::string& arg : mod_args) specs.arr.push_back(mods::Json::string(arg));
+    g_states.header.set("mods", std::move(specs));
+    g_states.header.set("mod_settings", mods::Json::string(g_states.mod_settings));
   }
 
   std::unique_ptr<gfx::Renderer> renderer_owner;
@@ -1107,10 +1253,19 @@ int main(int argc, char** argv) {
   g_rewind.hooks = &hooks;
   g_rewind.hw = &hw;
   g_rewind.input = &input;
-  if (g_mods || g_rewind.at != ~0ull) rt::g_poll_gate = &poll_gate;
+  g_states.m = &m;
+  g_states.hooks = &hooks;
+  g_states.hw = &hw;
+  g_states.input = &input;
+  g_states.proc = play.proc;
+  g_states.renderer = renderer;
+  g_states.gp_memory = play.gp_memory;
+  const bool states = g_states.save_at != ~0ull || !g_states.load_path.empty();
+  if (g_mods || g_rewind.at != ~0ull || states) rt::g_poll_gate = &poll_gate;
   try {
     for (;;) {
       rt::run(m.cpu());  // returns at each VI field with --yield, and when the timeline stops it
+      if (g_states.due) state_step();
       if (g_rewind.due) rewind_step();
       if (g_timeline)
         while (g_timeline->due()) g_timeline->step();

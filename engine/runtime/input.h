@@ -111,6 +111,14 @@ class InputQueue {
   const FrameInput& current() const { return current_; }
   // Frame polls so far.
   u64 frames() const { return frames_; }
+  // Save-state files (runtime/state_file.h): continue as a queue that has made
+  // `frames` polls, the last with `current`, and has nothing queued. The source
+  // stays this queue's.
+  void resume_at(const FrameInput& current, u64 frames) {
+    pending_.clear();
+    current_ = current;
+    frames_ = frames;
+  }
 
  private:
   std::deque<FrameInput> pending_;

@@ -209,10 +209,19 @@ class Hardware : public ppc::Io {
   std::unique_ptr<Hardware> snapshot() const;
   void save_into(Hardware& snap) const;
   void restore_from(const Hardware& snap);
+  // Save-state files (runtime/state_file.h): the same device state, field by
+  // field (common/state_io.h), into or from a snapshot object made by
+  // snapshot(). Not the observers, the disc, the access log or the access
+  // counts, which stay the snapshot's (its machine's). A member added to this
+  // class that the guest can see belongs in state_fields() too.
+  void write_state(StateWriter& w) const;
+  void read_state(StateReader& r);
 
   static const char* block_name(u32 addr);
 
  private:
+  template <class Ar>
+  void state_fields(Ar& a);
   u32 reg(u32 addr) const;
   void set_reg(u32 addr, u32 value, int size);
   u32 read_word(u32 a);               // 4-byte-aligned register read, with device behaviour

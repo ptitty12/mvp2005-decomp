@@ -73,8 +73,9 @@ export class PackPanel {
   /**
    * The packs the server offers (`listUrl`: GET -> {packs: [{file, name, version, size, sha256}]}): a
    * dropdown before the file pickers. Choosing one adds it to the set; the choice is remembered.
+   * `want` (a save state's packs, states.ts): add exactly these files instead of the remembered ones.
    */
-  async addServerList(listUrl: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  async addServerList(listUrl: string, fetchFn: typeof fetch = fetch, want?: string[]): Promise<void> {
     let packs: ServerPack[] = [];
     try {
       const r = await fetchFn(listUrl, { credentials: 'same-origin', cache: 'no-store' });
@@ -133,9 +134,10 @@ export class PackPanel {
       select.value = '';
       if (p) void add(p, false);
     });
-    for (const file of recallServerPacks()) {
+    for (const file of want ?? recallServerPacks()) {
       const p = packs.find((x) => x.file === file);
-      if (p) await add(p, true);
+      if (p) await add(p, !want);
+      else if (want) this.say(`The save state needs the pack ${file}, which this server does not offer.`, true);
     }
   }
 

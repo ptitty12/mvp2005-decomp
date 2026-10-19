@@ -26,7 +26,8 @@ import { cacheKey, clearCache, readCached, writeCached } from './module-cache.js
 import { feedPacks, readReport, summarize } from './packs-core.js';
 import { DEFAULT_PACER, FIELD_MS, Pacer, Schedule, type PacerOptions } from './pacer.js';
 import type {
-  CacheReport, DiscSource, FromWorker, NetOptions, NetStatus, Pad, PaceLoss, RunOptions, Status, ToWorker, WorkletIn,
+  CacheReport, DiscSource, FromWorker, NetOptions, NetStatus, Pad, PaceLoss, RunOptions, StateResult, Status, ToWorker,
+  WorkletIn,
 } from './protocol.js';
 
 interface WorkerScope {
@@ -195,6 +196,28 @@ function withBytes<T>(bytes: Uint8Array, f: (ptr: number, len: number) => T): T 
   } finally {
     M!._free(ptr);
   }
+}
+
+// Save-state files (runtime/state_file.h, the page's states.ts): a request the engine carries out at the next
+// frame poll; its outcome comes back with the next batch (pumpState).
+function stateRequest(op: 'save' | 'load', f: () => number): void {
+  if (!M || !booted) {
+    post({ type: 'state', result: { op, ok: false, error: 'the game has not started yet' } });
+    return;
+  }
+  if (!f()) post({ type: 'state', result: { op, ok: false, error: cstr(M._mvp_last_error()) } });
+}
+function pumpState(): void {
+  const text = cstr(M!._mvp_state_result());
+  if (!text) return;
+  const result = JSON.parse(text) as StateResult;
+  let data: ArrayBuffer | undefined;
+  if (result.op === 'save' && result.ok) {
+    const ptr = M!._mvp_state_out_ptr(), n = M!._mvp_state_out_len();
+    data = heap().slice(ptr, ptr + n).buffer;
+    M!._mvp_state_out_release();
+  }
+  post({ type: 'state', result, data }, data ? [data] : []);
 }
 
 function setPad(port: number, p: Pad): void {
@@ -409,6 +432,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
 
   // Roster packs (E6): checked, applied to this disc's tables and mounted on the
   // virtual disc before anything boots. The handshake below carries their set hash.
+  let packsResult = '';
   if (options.packs?.length) {
     t = performance.now();
     post({ type: 'progress', text: 'Applying the roster packs to your disc', step: 0, steps: 0 });
@@ -421,6 +445,12 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
       return;
     }
     phase('packs', t, { files: report.files, bytes: report.bytes });
+    packsResult = report.result_hash ?? '';
+  }
+  // A save-state file to load: only onto the same roster packs (its header's result hash).
+  if (options.loadState && (options.loadStatePacks ?? '') !== packsResult) {
+    options.loadState = undefined;
+    post({ type: 'state', result: { op: 'load', ok: false, error: 'the state was saved with other roster packs than this game has' } });
   }
 
   // The translation: this browser's cache, else the translator.
@@ -490,6 +520,11 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
     return;
   }
   booted = true;
+  if (options.loadState) {  // a save-state file: loaded at the first frame poll
+    const data = new Uint8Array(options.loadState);
+    options.loadState = undefined;
+    stateRequest('load', () => withBytes(data, (p, n) => M!._mvp_state_load(p, n)));
+  }
   M._mvp_render_scale(options.scale ?? 1);  // Q1: the Picture setting
   if (options.gpuLoad) M._mvp_gpu_load(options.gpuLoad);  // Q5 (development): a GPU that cannot keep up
   if (options.tracePresent) M._mvp_trace(1);
@@ -521,6 +556,7 @@ function afterRun(ran: number, ms: number): boolean {
   }
   pumpAudio();
   pumpDisc();
+  pumpState();
   if (modsOn) {
     const st = JSON.parse(cstr(M!._mvp_mod_status())) as
       { phase: string; progress: number; log: string[]; notify: string[]; ui: Record<string, unknown>[] };
@@ -861,5 +897,13 @@ scope.onmessage = (ev: MessageEvent<ToWorker>) => {
       audioPort = msg.port;
       enableAudio();
       break;
+    case 'state-save':
+      stateRequest('save', () => withBytes(new TextEncoder().encode(msg.header + '\0'), (p) => M!._mvp_state_save(p)));
+      break;
+    case 'state-load': {
+      const data = new Uint8Array(msg.data);
+      stateRequest('load', () => withBytes(data, (p, n) => M!._mvp_state_load(p, n)));
+      break;
+    }
   }
 };

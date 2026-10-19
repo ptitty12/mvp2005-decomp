@@ -150,6 +150,8 @@ export interface RunOptions {
   mods?: string[];     // gameplay mods: "id" or "id:key=value,...", e.g. "abs:miss=8" (docs/mods/); single-threaded engine
   modSeed?: number;    // the mods' match seed (default: a random one per game)
   modIntroMs?: number; // how long the page announces a review before it starts (the ABS "challenge" card)
+  loadState?: ArrayBuffer;  // a save-state file to load at the first frame poll (states.ts); single-threaded engine
+  loadStatePacks?: string;  // ... the roster packs' result hash it was saved with ('' for none): checked first
   discCache?: { blockKib?: number; maxBlocks?: number; maxRun?: number; ahead?: number };  // the server image's cache
 }
 
@@ -171,7 +173,22 @@ export type ToWorker =
   | { type: 'net-open'; delay?: number }    // the data channel to the other player is open (Q5: the delay chosen)
   | { type: 'pace-peer'; report: PaceReport }  // Q5: the other player's pace report
   | { type: 'net-recv'; data: ArrayBuffer }  // a datagram from the other player
-  | { type: 'net-quit' };                   // the page is leaving the game
+  | { type: 'net-quit' }                    // the page is leaving the game
+  // Save-state files (states.ts): save at the next frame poll with this header (JSON), or load these bytes.
+  | { type: 'state-save'; header: string }
+  | { type: 'state-load'; data: ArrayBuffer };
+
+// The outcome of a save or a load (mvp_state_result), with a save's file.
+export interface StateResult {
+  op: 'save' | 'load';
+  ok: boolean;
+  error?: string;
+  poll?: number;    // the frame poll saved at, or loaded
+  fields?: number;  // a load: the VI field it continues from
+  bytes?: number;   // a save: the file's size
+  gx?: boolean;     // the file has (a save) or had (a load) the renderer's GX state
+  ms?: number;      // the engine's time for it
+}
 
 export interface Status {
   fields: number;
@@ -252,7 +269,8 @@ export type FromWorker =
   | { type: 'net'; status: NetStatus; windows?: string; diagnostic?: string }
   | { type: 'pace'; report: PaceReport; state: PaceState }  // Q5: for the other player (text message), and the overlay
   | { type: 'mod'; phase: string; progress: number; log: string[]; notify: string[];  // gameplay mods (mvp_mod_status)
-      ui: Record<string, unknown>[] };  // ... the review leg's progress (0-1) and the mods' UI records
+      ui: Record<string, unknown>[] }  // ... the review leg's progress (0-1) and the mods' UI records
+  | { type: 'state'; result: StateResult; data?: ArrayBuffer };  // a save's or a load's outcome (a save's file)
 
 // Q5b: the paced loop's schedule time given up so far (ms), by reason: after a wait for the
 // other player (`gate`), behind by more fields than the loop catches up (`debt`), far behind (`far`).

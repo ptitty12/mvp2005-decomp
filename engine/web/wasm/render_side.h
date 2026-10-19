@@ -9,8 +9,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
+#include <vector>
 
+#include "common/state_io.h"
 #include "gfx/digest_tap.h"
 #include "gfx/draw.h"
 #include "gfx/gp_memory.h"
@@ -106,6 +109,27 @@ class RenderSide {
   }
   void load_view(int slot) {
     if (proc_ && views_[slot]) *proc_ = *views_[slot];
+    if (renderer_) renderer_->invalidate_textures();
+    gp_.field();
+  }
+  // Save-state files (runtime/state_file.h): the GX processor's state as bytes
+  // (empty before the renderer is attached), and back. Empty bytes reset it: the
+  // game's next frames set up what they draw with.
+  std::vector<std::uint8_t> export_view() const {
+    if (!proc_) return {};
+    StateWriter w;
+    proc_->write_state(w);
+    return std::move(w.out());
+  }
+  void import_view(std::span<const std::uint8_t> bytes) {
+    if (proc_) {
+      if (bytes.empty()) {
+        proc_->reset();
+      } else {
+        StateReader r(bytes);
+        proc_->read_state(r);
+      }
+    }
     if (renderer_) renderer_->invalidate_textures();
     gp_.field();
   }

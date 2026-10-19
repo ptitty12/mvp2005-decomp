@@ -1,5 +1,5 @@
 add_library(engine_runtime STATIC native.cpp machine.cpp boot.cpp hw.cpp gx_fifo.cpp sys_hooks.cpp hle.cpp hle_game.cpp
-            input.cpp ax.cpp host_yield.cpp mod_hooks.cpp save_state.cpp)
+            input.cpp ax.cpp host_yield.cpp mod_hooks.cpp save_state.cpp state_file.cpp)
 target_link_libraries(engine_runtime PUBLIC engine_ppc engine_vfs)
 target_compile_options(engine_runtime PRIVATE ${ENGINE_WARN})
 
@@ -8,6 +8,7 @@ engine_test(test_clock SOURCES tests/test_clock.cpp LIBS engine_runtime)
 engine_test(test_devices SOURCES tests/test_devices.cpp LIBS engine_runtime)
 engine_test(test_input SOURCES tests/test_input.cpp LIBS engine_runtime)
 engine_test(test_ax SOURCES tests/test_ax.cpp LIBS engine_runtime)
+engine_test(test_state_file SOURCES tests/test_state_file.cpp LIBS engine_runtime)
 
 # Local only (Q4): the native implementations of game functions (hle_game.h)
 # against the interpreter running the originals from the disc's main.dol.

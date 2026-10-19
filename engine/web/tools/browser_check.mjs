@@ -57,6 +57,8 @@
 //              (it must resume: the summary's download.resumedFrom)
 //   --fallback after a download error, press "Play without keeping the game data"
 //   --params Q more page parameters (e.g. storeSpare=100000000 for the quota error)
+//   --states DIR  save-state files for the page's state=NAME (serve.mjs --states; local only)
+//   --mock-packs DIR  with --server-disc: the mock server offers DIR's pack zips (serve.mjs --packs)
 //   --profile  a browser profile directory on disk (persistent: what a player's
 //              browser keeps between visits, and its real storage quota) instead of a
 //              fresh in-memory context
@@ -166,6 +168,8 @@ const profile = opt('--profile', '');
 const interruptAt = Number(opt('--interrupt-download', '0'));
 const fallback = flag('--fallback');
 const pageParams = opt('--params', '');
+const statesDir = opt('--states', '');
+const mockPacks = opt('--mock-packs', '');
 const label = tag ? `${browserName}-${tag}` : browserName;
 const chromiumArgs = ['--enable-unsafe-webgpu', ...(audible ? [] : ['--mute-audio']),
                       ...(jsFlags ? [`--js-flags=${jsFlags}`] : []),
@@ -221,7 +225,9 @@ if (realServer) {
 } else {
   const serverArgs = [join(here, 'serve.mjs'), '--port', '0', '--root', site];
   if (noIsolation) serverArgs.push('--no-isolation');
+  if (statesDir) serverArgs.push('--states', resolve(statesDir));
   if (serverDisc) {
+    if (mockPacks) serverArgs.push('--packs', resolve(mockPacks));
     serverArgs.push('--disc', disc);
     if (login) serverArgs.push('--login');
     if (latency) serverArgs.push('--latency', latency);
@@ -437,7 +443,8 @@ async function runOnce(context, run) {
              paused: s.paused, pad: s.pad, probe: s.audioProbe(), discTrace: s.discTrace,
              packs: s.packs?.mounted ?? null, ioLog: s.ioLog, digest: s.digest,
              hint: s.hint ?? null, autoScale: s.autoScale ?? null,
-             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time/.test(l)).slice(0, 20) };
+             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time/.test(l)).slice(0, 20),
+             stateLog: s.log.filter((l) => /^state: /.test(l)).slice(0, 40) };
   });
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
@@ -645,7 +652,7 @@ async function runOnce(context, run) {
     windows, final: state.stopped?.status ?? state.stats?.status ?? null, guestLine: state.stopped?.guestLine ?? null,
     packs: state.packs,
     error: state.error ?? null, consoleErrors: consoleErrors.slice(0, 20), hidden,
-    hint: state.hint, autoScale: state.autoScale, pictureLog: state.log,  // Q5; and a gameplay mod review's timing
+    hint: state.hint, autoScale: state.autoScale, pictureLog: state.log, stateLog: state.stateLog,  // save states  // Q5; and a gameplay mod review's timing
     audio: { page: state.audio, attachedAtField: state.audioAttachedAtField, samples: audioSamples },
   });
   const origin = new URL(base).origin;

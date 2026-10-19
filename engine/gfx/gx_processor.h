@@ -23,6 +23,11 @@
 #include "gfx/gp_memory.h"
 #include "gfx/gx_regs.h"
 
+namespace mvp {
+class StateWriter;
+class StateReader;
+}  // namespace mvp
+
 namespace mvp::gfx {
 
 // A vertex as the CP loads it, before the transform unit.
@@ -95,6 +100,12 @@ class GxProcessor {
 
   void reset();
 
+  // Save-state files (runtime/state_file.h): the registers, XF memory, TLUT and
+  // TMEM that reset() clears, field by field (common/state_io.h). Reading drops
+  // the caches built from them.
+  void write_state(StateWriter& w) const;
+  void read_state(StateReader& r);
+
   // Executes one complete command (opcode and payload).
   void command(const u8* cmd, std::size_t len);
 
@@ -149,6 +160,8 @@ class GxProcessor {
   void set_keep_primitive_info(bool on) { keep_prim_info_ = on; }
 
  private:
+  template <class Ar>
+  void state_fields(Ar& a);
   void load_bp(u32 value);
   void load_cp(u8 reg, u32 value);
   void load_xf(u32 addr, u32 count, const u8* data);

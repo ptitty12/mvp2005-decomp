@@ -56,7 +56,10 @@ Everything below is run by agents; the owner never runs commands.
    and `/api/disc/image` serves PATH to HEAD and to ranged GETs (206,
    `Cache-Control: private, no-store`); `--login` makes `/api/*` answer 401
    without the cookie `mvp_access=ok`; `--latency MS` and `--rate MB/S` slow it
-   down.
+   down. `--packs DIR` (with `--disc`) adds `"packs": "/api/packs"` to the config
+   and offers DIR's pack zips there, as the deployment's pack store does.
+   `--states DIR` serves save-state files for the page's `?state=NAME` from
+   `/states/NAME.mvpstate` (local only: states are game-derived).
 5. **Check in real browsers** (local only: it needs the disc):
    `node engine/web/tools/browser_check.mjs --browser chrome|msedge|chromium|firefox|webkit`
    with `--disc PATH` (default `MVP_DISC`), `--script FILE` (an `mvp-input`
@@ -426,6 +429,21 @@ Everything below is run by agents; the owner never runs commands.
   still has them. The owner uploads and removes them on the Server disc page
   (`DEPLOY_DOKPLOY.md` §8). `browser_check.mjs --real-server ... --packs-dir DIR
   --server-packs FILE` chooses them from the list as a player does.
+- **Save states** (2026-10-19; `src/states.ts`, engine `mvp_state_*`, `runtime/state_file.h`).
+  F2 saves the game where it is and F4 goes back to the last state saved or
+  loaded (also the toolbar's Save state / Load state, and the Save states panel:
+  load a `.mvpstate` file, download the saved one). The engine saves and loads at
+  the next frame poll in live play (the poll gate, as a review does), in the
+  single-threaded engine and offline only; a load also restores the renderer's GX
+  state, starts a fresh mixer and restarts the mods' timeline (its snapshots
+  belonged to the run before). The last state is kept in this browser
+  (IndexedDB `mvp-states`), so F4 works after a reload once the same game runs.
+  `?state=NAME` starts from `/states/NAME.mvpstate` on the same site: the page
+  reads its header first, takes its gameplay mods (unless `mod=` is given: the
+  same mods, other settings allowed) and its roster packs from the server's list,
+  starts the single-threaded engine, and the Worker loads it at the first frame
+  poll, after checking that the mounted packs' result hash is the state's. A file
+  is about 50 MB (MEM1, ARAM, the VM region); it never leaves the machine.
 - **The translation cache** (`src/module-cache.ts`, engine `wasm/module_cache.*`).
   After the first frame the Worker serializes the translator's output (the wasm
   binary and the tables the runtime fills from it, about 52 MB) and writes it to
@@ -663,6 +681,14 @@ Three different WebAssembly engines (V8, SpiderMonkey, JavaScriptCore), paced
 or not, with or without rendering, with or without sound, read from a file or a
 server, paused or not, with yields at every field: the same guest state as the
 native build that does not yield.
+
+**Save-state files (2026-10-19).** A state saved by native `mvp-play` at frame poll
+2,000 (`--state-save 2000:FILE`, no input) and loaded into a fresh process
+(`--state-load FILE`) reaches frame 3,000 with the line of the run that never
+stopped (22,097,623,848 instructions, time base 2,301,835,817, MEM1 `57bd399e...`);
+so does Chrome loading the same file (`browser_check.mjs --states DIR --params
+state=NAME --frames 3000`), and Chrome again after F2 at frame 2,051 and F4 later
+(back to 2,051, then on to 3,000).
 
 **Since E3a and E2d (2026-10-14):** the native engine takes the floating-point
 unavailable exception (E3A_LOG.md), which changed the guest state once, and the

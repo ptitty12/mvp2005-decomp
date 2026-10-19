@@ -54,6 +54,7 @@ export function absSpec(s: AbsSettings): string | null {
 export class ModsPanel {
   private settings = loadAbs();
   private locked = false;
+  private fromState = false;  // fromUrl holds a save state's mods
   private bannerTimer = 0;
   private reviewing = false;
   private scene: ChallengeScene | null;
@@ -66,9 +67,18 @@ export class ModsPanel {
 
   // The specs for the next game: the URL's, else the panel's.
   specs(): string[] {
-    if (this.fromUrl.length) return this.fromUrl;
+    if (this.fromUrl.length || this.fromState) return this.fromUrl;
     const s = absSpec(this.settings);
     return s ? [s] : [];
+  }
+
+  // A save state's mods (states.ts, ?state=): the game must run with them. The address's mod=, when
+  // given, still wins (its settings may differ, e.g. more umpire misses; the mods must be the same).
+  useStateMods(specs: string[]): void {
+    if (this.fromUrl.length || this.locked) return;
+    this.fromUrl = specs;
+    this.fromState = true;
+    this.build();
   }
 
   // How long the engine waits before a review so the scene can announce it (ms).
@@ -114,10 +124,10 @@ export class ModsPanel {
     const root = this.root;
     if (!root) return;
     root.textContent = '';
-    if (this.fromUrl.length) {
+    if (this.fromUrl.length || this.fromState) {
       const p = document.createElement('p');
       p.className = 'note';
-      p.textContent = `From the address: ${this.fromUrl.join(' ')}`;
+      p.textContent = `${this.fromState ? 'From the save state' : 'From the address'}: ${this.fromUrl.join(' ') || 'none'}`;
       root.append(p);
       this.updateSummary();
       return;

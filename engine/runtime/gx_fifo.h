@@ -16,6 +16,11 @@
 #include <string>
 #include <vector>
 
+namespace mvp {
+class StateWriter;
+class StateReader;
+}  // namespace mvp
+
 namespace mvp::rt {
 
 // One command (Q4: GfxObserver::gx_commands).
@@ -100,7 +105,15 @@ class GxFifo {
   // offset, length, first bytes) and the bytes from the lost position on.
   std::string broken_context() const;
 
+  // Save-state files (runtime/state_file.h): the parse state (the bytes of an
+  // incomplete command, the vertex formats, the counts); not the observer, the
+  // memory or the report's history.
+  void write_state(StateWriter& w) const;
+  void read_state(StateReader& r);
+
  private:
+  template <class Ar>
+  void state_fields(Ar& a);
   // Length of the command at p (n bytes available), 0 if more bytes are needed
   // to know it, or ~0 if p[0] starts no command.
   std::size_t command_length(const std::uint8_t* p, std::size_t n) const;
