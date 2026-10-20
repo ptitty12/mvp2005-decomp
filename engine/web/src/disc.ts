@@ -22,18 +22,19 @@
 // "discPage" names the Server disc page (the operator's upload page), and "packs"
 // the roster packs the server offers (GET: {packs: [...]}; packs.ts shows them in
 // a dropdown). For the server's admin it also says "admin": true, with
-// "adminToken" (the CSRF token its own requests carry) and "states" (its save
-// states on the server: states.ts).
+// "adminToken" (the CSRF token its own requests carry), "states" (its save
+// states on the server: states.ts) and "card" (its memory card there: card.ts).
 //
 // fetch is a parameter so the unit tests (tests/disc.test.mjs) run these
 // against fake responses.
 
 import type { DiscOffer } from './disc-store.js';
 
-/** This browser is the server's admin: its save states (`states`, GET/POST/DELETE) and the CSRF token its requests carry. */
+/** This browser is the server's admin: its save states (`states`, GET/POST/DELETE), its memory card (`card`, GET/PUT) and the CSRF token its requests carry. */
 export interface ServerAdmin {
   token: string;
   states?: string;
+  card?: string;
 }
 
 export type ServerDisc =
@@ -78,6 +79,8 @@ export async function findServerDisc(base: string, fetchFn: Fetch = fetch): Prom
     admin = { token: c.adminToken };
     const states = sameOrigin(c.states);
     if (states) admin.states = states;
+    const card = sameOrigin(c.card);
+    if (card) admin.card = card;
   }
   const disc = c.disc;
   if (typeof disc !== 'string' || !disc) {

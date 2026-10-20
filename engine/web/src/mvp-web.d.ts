@@ -51,6 +51,11 @@ export interface MvpEngine {
   _mvp_state_out_ptr(): number;
   _mvp_state_out_len(): number;
   _mvp_state_out_release(): void;
+  // The memory card in slot A (runtime/memcard.h): before mvp_boot, its bytes (or n = 0: a new card); offline only.
+  _mvp_card_set(data: number, n: number): number;
+  _mvp_card_writes(): number;  // -1 without a card
+  _mvp_card_ptr(): number;
+  _mvp_card_len(): number;
 
   // E2c: the server's image, the module cache, audio.
   _mvp_open_disc_url(size: number, blockKib: number, maxBlocks: number, maxRun: number, ahead: number): number;

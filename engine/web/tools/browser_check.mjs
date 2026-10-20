@@ -454,7 +454,8 @@ async function runOnce(context, run) {
              packs: s.packs?.mounted ?? null, ioLog: s.ioLog, digest: s.digest,
              hint: s.hint ?? null, autoScale: s.autoScale ?? null,
              log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time/.test(l)).slice(0, 20),
-             stateLog: s.log.filter((l) => /^state: /.test(l)).slice(0, 40) };
+             stateLog: s.log.filter((l) => /^state: /.test(l)).slice(0, 40),
+             card: s.card ?? null, cardLog: s.log.filter((l) => /^card: /.test(l)).slice(0, 20) };
   });
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
@@ -664,6 +665,7 @@ async function runOnce(context, run) {
     packs: state.packs,
     error: state.error ?? null, consoleErrors: consoleErrors.slice(0, 20), hidden,
     hint: state.hint, autoScale: state.autoScale, pictureLog: state.log, stateLog: state.stateLog,  // save states  // Q5; and a gameplay mod review's timing
+    card: state.card, cardLog: state.cardLog,  // the memory card (card.ts)
     audio: { page: state.audio, attachedAtField: state.audioAttachedAtField, samples: audioSamples },
   });
   const origin = new URL(base).origin;

@@ -58,6 +58,7 @@ import {
 } from './netstats.js';
 import { PackPanel, type PacksState } from './packs.js';
 import { States, describeNeeds, fetchNamedState, type GameSetup, type StateHeader } from './states.js';
+import { MemoryCards } from './card.js';
 import type { CacheReport, DiscSource, FromWorker, NetStatus, Pad, PaceState, RunOptions, Status, ToWorker } from './protocol.js';
 
 // The server's image in this browser's storage (P1): found there, or downloaded now.
@@ -106,6 +107,7 @@ interface PageState {
   overlay?: { shown: boolean; local: StatsSummary; peer: StatsSummary | null; text: string };  // Q5 (netstats.ts)
   hint?: { shown: boolean; text: string; dismissed: boolean };  // Q5: the note for a machine that cannot keep up
   autoScale?: { ceiling: number; steps: unknown[]; lastBusy: number | null };  // Q5: the Picture's Auto and the GPU
+  card?: { inserted: 'kept' | 'new' | 'none'; writes: number; sent: number };  // the memory card (card.ts)
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -199,6 +201,20 @@ const states = new States((msg, transfer = []) => send(msg, transfer), (text, er
   serverSave: document.getElementById('state-server-save') as HTMLButtonElement | null,
 });
 let startState: { data: ArrayBuffer; header: StateHeader } | null = null;  // ?state=
+
+// The memory card in slot A (card.ts): this browser's, and the admin's on the server too.
+const cards = new MemoryCards((text, error = false) => {
+  log(`card: ${text}`, error);
+  const el = document.getElementById('card-status');
+  if (el) {
+    el.textContent = text;
+    el.className = error ? 'note err' : 'note';
+  }
+}, {
+  download: document.getElementById('card-download') as HTMLButtonElement | null,
+  file: document.getElementById('card-file') as HTMLInputElement | null,
+  summary: document.getElementById('card-summary'),
+});
 let setup: GameSetup | null = null;  // the game's mods and packs, for save states
 
 // Online play (E5): the lobby panel, when the page comes from the netplay server.
@@ -422,6 +438,13 @@ function onWorker(msg: FromWorker): void {
     case 'state':
       states.result(msg.result, msg.data);
       break;
+    case 'card':
+      if (state.card) {
+        state.card.writes = msg.writes;
+        state.card.sent++;
+      }
+      cards.wrote(msg.data);
+      break;
     case 'net-send':
       online?.send(msg.data);
       break;
@@ -442,6 +465,11 @@ function startEngine(disc: DiscSource): void {
     // A roster pack from the server is still downloading: start with it, not without it.
     setStatus('Waiting for the roster pack download...');
     void packPanel.settled().then(() => startEngine(disc));
+    return;
+  }
+  if (!cards.ready()) {  // the memory card goes in at boot: read it first (this browser's, the server's)
+    setStatus('Reading the memory card...');
+    void cards.load().then(() => startEngine(disc));
     return;
   }
   const stored = disc.kind === 'file' && !!disc.stored;
@@ -503,6 +531,12 @@ function startEngine(disc: DiscSource): void {
     states.startFrom(startState.data);
   }
   if (params.has('modSeed')) options.modSeed = Number(params.get('modSeed'));
+  // The memory card: not in an online game, nor in a test run (a script or a stop: the boot would change).
+  const testRun = !!(options.script || options.stopFields || options.stopFrames);
+  const cardParam = params.get('card');
+  options.card = !netplay && (cardParam === '1' || (cardParam !== '0' && !testRun)) ? cards.forGame() : undefined;
+  if (options.card instanceof ArrayBuffer) transfer.push(options.card);
+  state.card = { inserted: options.card === undefined ? 'none' : options.card === 'new' ? 'new' : 'kept', writes: 0, sent: 0 };
   modsPanel.lock();
   send({ type: 'start', disc, canvas: off, width, height, options: { ...options, netplay, packs },
          vsync: vsync ? (vsync.buffer as SharedArrayBuffer) : undefined, frames }, transfer);
@@ -862,6 +896,9 @@ async function init(): Promise<void> {
   }
   // The server's admin: its save states on the server (states.ts).
   if (found.kind !== 'error' && found.admin) states.setServer(found.admin);
+  // The memory card: this browser's, and for the admin the server's (card.ts); read before the game starts.
+  if (found.kind !== 'error' && found.admin) cards.setServer(found.admin);
+  void cards.load();
   // ?state=NAME: a save state to start from; its gameplay mods and roster packs are set up first.
   const stateName = params.get('state');
   if (stateName) {

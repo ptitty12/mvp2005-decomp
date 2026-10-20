@@ -330,6 +330,9 @@ struct Engine {
   std::string state_header;             // a save: the page's header (a JSON object)
   std::vector<std::uint8_t> state_in;   // a load: the file
   std::vector<std::uint8_t> state_out;  // the last save's file, until the page takes it
+  // The memory card in slot A (runtime/memcard.h), offline only: what mvp_card_set gave before mvp_boot.
+  bool card_wanted = false;
+  std::vector<std::uint8_t> card_in;
   std::string state_result;             // the last request's outcome for the page (JSON), until taken
 };
 Engine g;
@@ -756,6 +759,15 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   g.timed = std::make_unique<TimedSource>(g.disc->image.get());
   if (g_io_logging) g.timed->log = &g_io_log;
   g.hw->set_disc(g.timed.get());
+  if (g.card_wanted && !net) {  // the memory card: the page's, or a new one
+    if (g.card_in.empty()) {
+      const auto& s = g.hw->sram();  // the counter bias and the language this console formats with
+      const std::uint32_t bias = std::uint32_t(s[0x0C]) << 24 | std::uint32_t(s[0x0D]) << 16 | std::uint32_t(s[0x0E]) << 8 | s[0x0F];
+      g.card_in = MemoryCard::formatted(bias, s[0x12], std::uint64_t(HardwareConfig{}.rtc_seconds) * 40500000ull);
+    }
+    g.hw->insert_card(std::move(g.card_in));
+    g.card_in = {};
+  }
   g.hooks = std::make_unique<YieldingHooks>(g.m.get(), g.hw.get());
   g.m->memory().io = g.hw.get();
   g.m->cpu().hooks = g.hooks.get();
@@ -796,6 +808,37 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   apply_audio();
   return 1;
 }
+
+// The memory card in slot A (before mvp_boot; runtime/memcard.h): the card's bytes
+// (MemoryCard::kSize), or none (n = 0) for a new card formatted as the game
+// formats one. Offline only: an online game has no card on either side (both
+// machines must be the same). Without it the slot is empty, as before.
+EMSCRIPTEN_KEEPALIVE int mvp_card_set(const std::uint8_t* p, double n) {
+  g.error.clear();
+  if (g.m) {
+    g.error = "the memory card goes in before mvp_boot";
+    return 0;
+  }
+  if (n != 0 && n != MemoryCard::kSize) {
+    g.error = "a memory card is " + std::to_string(MemoryCard::kSize) + " bytes";
+    return 0;
+  }
+  g.card_wanted = true;
+  g.card_in.assign(p, p + static_cast<std::size_t>(n));
+  return 1;
+}
+// How many times the game has programmed or erased the card (the page keeps the
+// card when it moves and then settles), or -1 without a card.
+EMSCRIPTEN_KEEPALIVE double mvp_card_writes() {
+  const MemoryCard* c = g.hw ? g.hw->card() : nullptr;
+  return c ? static_cast<double>(c->writes()) : -1;
+}
+// The card's bytes (MemoryCard::kSize of them), valid until the run goes on; null without a card.
+EMSCRIPTEN_KEEPALIVE const std::uint8_t* mvp_card_ptr() {
+  const MemoryCard* c = g.hw ? g.hw->card() : nullptr;
+  return c ? c->image().data() : nullptr;
+}
+EMSCRIPTEN_KEEPALIVE double mvp_card_len() { return mvp_card_ptr() ? static_cast<double>(MemoryCard::kSize) : 0; }
 
 // Gameplay mods (before mvp_boot): "id" or "id:key=value,...". 0 and mvp_last_error() on a bad spec.
 EMSCRIPTEN_KEEPALIVE int mvp_mod_enable(const char* spec) {

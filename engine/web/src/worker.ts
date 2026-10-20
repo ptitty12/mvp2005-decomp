@@ -220,6 +220,26 @@ function pumpState(): void {
   post({ type: 'state', result, data }, data ? [data] : []);
 }
 
+// The memory card (card.ts): once the game's writes to it have settled (no new one for CARD_SETTLE
+// fields, guest time), the card goes to the page, which keeps it; at the end of a run too.
+const CARD_SETTLE = 60;
+let cardOn = false;
+let cardSeen = 0, cardSeenAt = 0, cardSent = 0;
+function pumpCard(final: boolean): void {
+  if (!cardOn) return;
+  const n = M!._mvp_card_writes();
+  if (n !== cardSeen) {
+    cardSeen = n;
+    cardSeenAt = fieldsRun;
+  }
+  if (cardSeen === cardSent || (!final && fieldsRun < cardSeenAt + CARD_SETTLE)) return;
+  const ptr = M!._mvp_card_ptr(), len = M!._mvp_card_len();
+  if (!ptr || !len) return;
+  const data = heap().slice(ptr, ptr + len).buffer;
+  cardSent = cardSeen;
+  post({ type: 'card', data, writes: cardSeen }, [data]);
+}
+
 function setPad(port: number, p: Pad): void {
   M?._mvp_set_pad(port, p.connected ? 1 : 0, p.buttons, p.stickX, p.stickY, p.cX, p.cY, p.trigL, p.trigR);
 }
@@ -507,6 +527,14 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
     phase('netplay-handshake', t);
   }
 
+  // The memory card in slot A, offline only (an online game has none on either machine).
+  if (options.card && !options.netplay) {
+    const data = options.card === 'new' ? new Uint8Array(0) : new Uint8Array(options.card);
+    options.card = undefined;
+    if (withBytes(data, (p, n) => M!._mvp_card_set(p, n))) cardOn = true;
+    else post({ type: 'log', text: `memory card: ${cstr(M._mvp_last_error())}; the slot stays empty`, error: true });
+  }
+
   t = performance.now();
   post({ type: 'progress', text: 'Booting', step: 5, steps: 5 });
   if (options.ioLog) M._mvp_io_log_enable();
@@ -557,6 +585,7 @@ function afterRun(ran: number, ms: number): boolean {
   pumpAudio();
   pumpDisc();
   pumpState();
+  pumpCard(ran < 0);
   if (modsOn) {
     const st = JSON.parse(cstr(M!._mvp_mod_status())) as
       { phase: string; progress: number; log: string[]; notify: string[]; ui: Record<string, unknown>[] };

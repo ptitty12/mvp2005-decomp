@@ -152,6 +152,7 @@ export interface RunOptions {
   modIntroMs?: number; // how long the page announces a review before it starts (the ABS "challenge" card)
   loadState?: ArrayBuffer;  // a save-state file to load at the first frame poll (states.ts); single-threaded engine
   loadStatePacks?: string;  // ... the roster packs' result hash it was saved with ('' for none): checked first
+  card?: ArrayBuffer | 'new';  // the memory card in slot A (card.ts): its bytes, or a new one; offline only
   discCache?: { blockKib?: number; maxBlocks?: number; maxRun?: number; ahead?: number };  // the server image's cache
 }
 
@@ -270,7 +271,8 @@ export type FromWorker =
   | { type: 'pace'; report: PaceReport; state: PaceState }  // Q5: for the other player (text message), and the overlay
   | { type: 'mod'; phase: string; progress: number; log: string[]; notify: string[];  // gameplay mods (mvp_mod_status)
       ui: Record<string, unknown>[] }  // ... the review leg's progress (0-1) and the mods' UI records
-  | { type: 'state'; result: StateResult; data?: ArrayBuffer };  // a save's or a load's outcome (a save's file)
+  | { type: 'state'; result: StateResult; data?: ArrayBuffer }  // a save's or a load's outcome (a save's file)
+  | { type: 'card'; data: ArrayBuffer; writes: number };  // the memory card, after the game's writes to it settled
 
 // Q5b: the paced loop's schedule time given up so far (ms), by reason: after a wait for the
 // other player (`gate`), behind by more fields than the loop catches up (`debt`), far behind (`far`).
