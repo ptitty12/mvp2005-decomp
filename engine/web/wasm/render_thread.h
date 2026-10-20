@@ -43,6 +43,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "runtime/gx_fifo.h"
 
@@ -92,6 +93,18 @@ void render_digest(bool on, std::uint64_t detail_from, std::uint64_t detail_to);
 // ring with the range), or memory there was written without the cache.
 void render_gp_flush(std::uint32_t ea, std::uint32_t len);
 void render_gp_write_through(std::uint32_t addr, std::uint32_t len);
+
+// Save-state files (runtime/state_file.h) with the render thread: the GX
+// processor's state once the render thread has finished every record so far
+// (RenderSide::export_view; empty without a renderer), and back before the next
+// record (import_view, which also starts the GP's snapshots over, as a field
+// does). A load replaces guest memory outside the guest's write paths: call
+// render_memory_replaced() before it, which does what a guest write over all of
+// memory does (waits for the commands that read it, ends the render thread's
+// copies).
+std::vector<std::uint8_t> render_view_export();
+void render_view_import(const std::uint8_t* data, std::size_t len);
+void render_memory_replaced();
 
 // For mvp_status and the tools (snapshots the render thread took at its last present).
 std::string render_trace_take();

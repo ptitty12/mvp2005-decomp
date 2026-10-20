@@ -106,6 +106,8 @@ enum : u32 {
   kGpuLoad,     // Q5 (development): {passes}
   kShadow,      // Q6: {addr, len} + memory there: a copy of what the next commands read (GpMemory::shadow)
   kShadowEnd,   // Q6: {addr, len}: the guest writes there next; copies there end
+  kViewExport,  // save states: the GX processor's state into Shared::view_out
+  kViewImport,  // save states: {pointer, length} (Ref): the GX processor's state (the emulation waits until it is done)
 };
 
 constexpr u32 kRingBytes = 16u << 20;
@@ -154,8 +156,9 @@ struct Shared {
   std::atomic<u32> emu_active{0};  // a run batch is producing records
   std::atomic<int> gfx_state{0};   // 0 starting, 1 ready, 2 failed
   std::atomic<u64> presents{0};
-  std::mutex mu;                   // guards the snapshot strings
+  std::mutex mu;                   // guards the snapshot strings and view_out
   std::string trace, digest, status, gfx_message;
+  std::vector<u8> view_out;        // save states: kViewExport's bytes
 
   // Render thread only.
   RenderSide side;
@@ -596,6 +599,18 @@ void handle(const gfx::RenderRing::Record& r) {
       S->side.gp_end_shadow(v.a, v.b);
       return;
     }
+    case kViewExport: {
+      std::vector<u8> v = S->side.export_view();
+      std::lock_guard<std::mutex> lock(S->mu);
+      S->view_out = std::move(v);
+      return;
+    }
+    case kViewImport: {
+      Ref v;
+      std::memcpy(&v, r.data, sizeof v);
+      S->side.import_view({v.p, v.n});
+      return;
+    }
     default:
       return;
   }
@@ -996,6 +1011,36 @@ void render_batch_end() {
 void render_flush() {
   put(kFlush, u32{0});
   publish_and_kick();
+}
+
+namespace {
+// Save states: waits until the render thread has finished every record so far.
+void finish_all() {
+  publish_and_kick();
+  S->fence_ms += S->ring.wait_read(S->ring.end(), kFenceSpinUs);
+  S->synced = S->ring.end();
+}
+}  // namespace
+
+std::vector<std::uint8_t> render_view_export() {
+  if (disabled()) return {};
+  put(kViewExport, u32{0});
+  finish_all();
+  std::lock_guard<std::mutex> lock(S->mu);
+  return std::move(S->view_out);
+}
+
+void render_view_import(const std::uint8_t* data, std::size_t len) {
+  if (disabled()) return;
+  ++S->gp_gen;  // as the render side's GpMemory::field() in import_view
+  put(kViewImport, Ref{data, static_cast<u32>(len)});
+  finish_all();  // the bytes are the caller's
+}
+
+void render_memory_replaced() {
+  if (!S->gp_lines) return;
+  gp_wait(0, S->gp_lines * kLine - 1);  // as a guest write over all of memory
+  finish_all();
 }
 
 void render_resize(int width, int height) {

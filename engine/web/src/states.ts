@@ -1,6 +1,6 @@
 // Save states on the page (runtime/state_file.h): F2 saves the game where it is,
 // F4 goes back to the last state saved or loaded. The engine saves and loads at
-// the next frame poll, in the single-threaded engine and offline only.
+// the next frame poll, offline only (either engine: the threaded one through its render thread).
 //
 // The last state is kept in this browser (IndexedDB), so F4 still works after a
 // reload once the same game is running again: same roster packs and gameplay

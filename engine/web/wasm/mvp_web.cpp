@@ -791,7 +791,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
     g.timeline->set_log([to_page](const std::string& s) { to_page("timeline: " + s); });
     g_poll_gate = &poll_gate;
   }
-  if (!g.threaded && !net) g_poll_gate = &poll_gate;  // save-state files (mvp_state_save / mvp_state_load)
+  if (!net) g_poll_gate = &poll_gate;  // save-state files (mvp_state_save / mvp_state_load)
   attach_renderer();
   apply_audio();
   return 1;
@@ -977,6 +977,27 @@ EMSCRIPTEN_KEEPALIVE void mvp_host_slow(double factor) {
 #endif
 }
 
+// The GX processor's state for save-state files, wherever it runs: inline, or on
+// the render thread (web/wasm/render_thread.h).
+void views_export(std::vector<std::uint8_t>& out) {
+#ifdef MVP_WEB_THREADS
+  if (g.threaded) {
+    out = web::render_view_export();
+    return;
+  }
+#endif
+  out = g.rs.export_view();
+}
+void views_import(const std::vector<std::uint8_t>& views) {
+#ifdef MVP_WEB_THREADS
+  if (g.threaded) {
+    web::render_view_import(views.data(), views.size());
+    return;
+  }
+#endif
+  g.rs.import_view(views);
+}
+
 // Save-state files (runtime/state_file.h): the page's request, at the frame poll
 // the run stopped at. The outcome waits in g.state_result for mvp_state_result().
 void state_step() {
@@ -990,7 +1011,8 @@ void state_step() {
     if (op == Engine::StateOp::Save) {
       rt::SaveState st;
       rt::save_state(st, *g.m, *g.hooks, *g.hw, g.input.get());
-      const std::vector<std::uint8_t> views = g.rs.export_view();
+      std::vector<std::uint8_t> views;
+      views_export(views);
       // The page's header with the poll and field it was saved at.
       std::string header = g.state_header;
       while (!header.empty() && std::isspace(static_cast<unsigned char>(header.back()))) header.pop_back();
@@ -1016,8 +1038,11 @@ void state_step() {
         throw std::runtime_error(mods_state.empty() ? "the state was saved without the gameplay mods this game has on"
                                                     : "the state was saved with other gameplay mods than this game has on");
       rt::prepare_machine(*g.m, st);
+#ifdef MVP_WEB_THREADS
+      if (g.threaded) web::render_memory_replaced();  // the render thread is done reading memory as it was
+#endif
       rt::load_state(st, *g.m, *g.hooks, *g.hw, g.input.get());
-      g.rs.import_view(views);
+      views_import(views);
       if (g.timeline) g.timeline->restart();
       if (g.mixer) {  // the mixer's voices belong to the run before: a fresh one
         g.hw->set_ax_observer(nullptr);
@@ -1352,12 +1377,11 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_guest_line() {
 
 // ---- Save-state files (runtime/state_file.h): the page's F2 and F4 ----
 // A request is carried out at the next frame poll in live play (not during a
-// review); mvp_state_result() then has the outcome. Only the single-threaded
-// engine offline: 0 and mvp_last_error() otherwise.
+// review); mvp_state_result() then has the outcome. Offline only (either
+// engine): 0 and mvp_last_error() otherwise.
 bool state_possible() {
   g.error.clear();
   if (!g.m || g.stopped) g.error = "the game is not running";
-  else if (g.threaded) g.error = "save states need the single-threaded engine (threads=0, or a gameplay mod on)";
   else if (web::net_active()) g.error = "no save states in an online game";
   else if (g.state_op != Engine::StateOp::None) g.error = "a save or load is already under way";
   return g.error.empty();

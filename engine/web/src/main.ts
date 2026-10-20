@@ -492,10 +492,9 @@ function startEngine(disc: DiscSource): void {
   options.modIntroMs = modsPanel.introMs();
   setup = { mods: options.mods, packs: packs.length ? { files: packs.map((p) => p.server ?? p.label) } : null };
   if (startState) {
-    // The engine loads it at the first frame poll: the single-threaded engine, onto the same packs.
+    // The engine loads it at the first frame poll, onto the same packs (either engine).
     options.loadState = startState.data.slice(0);
     options.loadStatePacks = startState.header.packs?.result_hash ?? '';
-    options.threads = false;
     transfer.push(options.loadState);
     states.startFrom(startState.data);
   }
