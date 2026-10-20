@@ -515,3 +515,8 @@
   - Checked: server tests 43/43; web shell tsc clean; Chrome end to end on the real server with the disc (link, cookie, game running, Server disc page); 1366x768, 1920x1000 and 390 px wide.
   - Not run: browser_check/netplay_check (their login step now opens `/healthz?key=`; checked with `node --check` only).
   | Owner: redeploy, then copy the private link from the mvp service's Logs tab (line `mvp-server: private link:`), put your domain in it, open it once per browser, and send it to your brother.
+- 2026-10-20 | claude-side-gfx (Q8) | engine: thin lines at 2x/3x, a pass over the graphics (owner: "weird yellow lines when i go full screen") | Branch engine/gfx-pass:
+  - **Fixed:** above 1x, 2D vertices go to whole console pixels (Q8-G1, docs/engine/Q8_LOG.md). The pitching view's mini-map no longer shows a line of dirt across its dark inset, and the team-select titles lose their letter seams. This was the 2026-10-17 open item "thin one-pixel lines across the score bug's base-runner diamond at 3x". It showed most in fullscreen, because on the owner's 3440x1440 display fullscreen draws at 3x almost pixel for pixel; windowed is 2x, scaled down.
+  - **The pass:** page CSS, the present filters, fullscreen at start and mid-game (threaded and single-threaded), and native 1x-vs-3x captures of menus, Fenway play and both ABS states, checked with a 3x-only line detector. Nothing else is the renderer's. Distant foul poles show as thin yellow hairlines at 2x/3x (they are thinner than a pixel; at 1x they drop out). That is correct, not a seam.
+  - Checked: the new test_gfx_render case (fails without the fix), msvc renderer and play tests 12/12, Q7's scale-change check, Chrome fullscreen.
+  | Owner: redeploy once it is on main.

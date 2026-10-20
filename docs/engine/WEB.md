@@ -470,7 +470,9 @@ Everything below is run by agents; the owner never runs commands.
   pixels as the canvas shows, up to 3x, and follows fullscreen; a software
   adapter stays at 1x), shows the 640 x 448 frame at 4:3 (the game's 3D
   cameras are 4:3), scales it to the canvas with an area filter (larger) or
-  sharp bilinear (smaller), and samples textures with the game's LOD bias. (Q5)
+  sharp bilinear (smaller), and samples textures with the game's LOD bias.
+  Above 1x, 2D vertices go to whole console pixels (Q8, `docs/engine/Q8_LOG.md`),
+  so menus and the HUD cover the pixels they cover at 1x. (Q5)
   Auto also respects the GPU: the renderer times its render passes on the GPU
   with timestamp queries where the browser has them (`gfx/wgpu/gpu_timer.h`;
   Chrome does, rounded to 100 us), and while the GPU is busy more than 85 % of

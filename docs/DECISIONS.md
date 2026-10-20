@@ -517,6 +517,13 @@ Agents may propose entries under "Open questions"; only the owner moves them to 
   - Same day, same request: the site takes the look of the game's own menus (docs/engine/WEB.md, "The look").
   | Owner request; the disc must not become public. | engine/server/src/access.ts; 43/43 server tests; Chrome end to end: 403/401 without the link, 303 + cookie with it, game running, Server disc page
 
+- 2026-10-20 | **Q8: thin lines at 2x and 3x** (side session, under the owner's delegation; docs/engine/Q8_LOG.md). Owner report: "some weird yellow lines when i go full screen", with "a full pass on graphics". It is PROGRESS's open item of 2026-10-17 (lines across the score bug's base-runner diamond at 3x).
+  - **The bug:** a pixel is drawn when its center is inside, and 2D edges between a center and a pixel boundary cover a part of a console pixel at 2x and 3x instead of all or none of it. The mini-map's black backing quad starts at y = 55.44 under a scissor from row 55, so the top third of row 55 was left to the inset's 3D field: a line of dirt. The team-select titles' letter quads had seams the same way.
+  - **Q8-G1:** above 1x, 2D vertices (w exactly 1, the transform's orthographic output) go to whole console pixels, `ceil(v - 0.5)`, before upload, as Dolphin's vertex rounding does. A 2D edge then covers the console pixels it covers at 1x, whole. 1x and perspective draws are unchanged; rendering only.
+  - **Not bugs:** distant foul poles and flag poles are thinner than a console pixel, so 2x and 3x draw them as continuous yellow hairlines where 1x shows dots or nothing.
+
+  | `test_gfx_render` Q8 case (fails at 2x/3x without the fix); msvc renderer and play tests 12/12; native 3x pitch state: the line gone, as 1x; Q7-T1 scale-change check; Chrome fullscreen 1920 x 1440 (section 5 of the log). | branch engine/gfx-pass
+
 ## Open questions for owner
 
 - 2026-10-14 | **K1c (OSInit, DVDInit): the name commit is held on one verify.py false positive (owner).** *Status (2026-10-14, claude-w2):* blockers 1 and 2 are resolved on `work/k1c-finish`; blocker 3 is new. Naming fn_8043188C OSInit and fn_80422FD8 DVDInit (`tools/goals/renames/k1c.tsv`, evidence there) makes dtk's SDK signatures rename 150 more symbols. work/k1c landed everything that is correct on its own: six contract commits, the BB2 overlay without its macro, fn_8042515C's parameter renamed, the .bss data splits of the two linked units (fstload.c: bb2Buf and __fstLoad's static block; EXIBios.c: Ecb), and stateBusy's switch table in dvd's split (without it dtk exports the static as `stateBusy_8042427C` and verify counts fn_8042427C as 100% -> 0%). Blockers:
