@@ -1,5 +1,6 @@
 #include "mods/gameplay/abs.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -50,6 +51,16 @@ constexpr u32 kHudCircleShown = 0x90;
 //   whose +0x14 is the nickname ("Red Sox").
 constexpr u32 kPActors = 0x65C, kActorCatcher = 1, kActorBatter = 9, kActorLastName = 0x360;
 constexpr u32 kTeamRecord = 0xE64, kTeamStrings = 0xB0, kTeamNickname = 0x14;
+
+// The zone in inches (§3.12; the game measures in inches): the crossing's x is in units
+// of the zone's half-width, 9.0 in (the 17 in plate and half an inch), and y in units
+// of its half-height, 10.2 in times the batter's height scale (height / 69 in) (V:
+// fn_80189E58 sets ball+0x438 = 9.0 and +0x43C = 10.2; fn_8018CFCC maps x, y to the
+// world with them). The scale is fn_801C17EC's: ball (P+0x6CC) +0x44C -> +0x680, the
+// float at +0xAB4, or 1.0 when that pointer is null. The game has no ball size of its
+// own (kAbsBallRadiusIn: a regulation ball).
+constexpr u32 kPBall = 0x6CC, kBallGame = 0x44C, kGameBatter = 0x680, kBatterHeightScale = 0xAB4;
+constexpr double kZoneHalfWidthIn = 9.0, kZoneHalfHeightIn = 10.2;
 
 // The challenge on a standard controller, native prototype (§7.6): L, R and Z
 // pressed together. Netplay gets an engine button that never reaches the guest.
@@ -104,6 +115,12 @@ float bits_to_float(u32 b) {
   std::memcpy(&f, &b, 4);
   return f;
 }
+
+// The zone's half-width and half-height in inches for the batter at the plate, from
+// umpire A (A+0x14 -> P; the height scale as fn_801C17EC reads it).
+struct ZoneIn {
+  double half_w = kZoneHalfWidthIn, half_h = kZoneHalfHeightIn;
+};
 
 const char* phase_tag(Phase p) {
   switch (p) {
@@ -317,13 +334,14 @@ class AbsMod final : public Mod {
       ++s.swings;
       return;  // a swing is a strike whatever the umpire thinks
     }
-    // Exact in double: |x| and 1.0 are floats, their difference and its x256 are exact.
-    const double ax = bits_to_float(xb & 0x7FFFFFFFu), ay = bits_to_float(yb & 0x7FFFFFFFu);
-    const u32 truth = (ax <= 1.0 && ay <= 1.0) ? 1 : 0;
-    double d = (ax > ay ? ax : ay) - 1.0;
-    if (d < 0) d = -d;
+    // A strike when any part of the ball touches the zone (abs_judge). The umpire model's
+    // edge weighting goes by how far the ball's edge is from the zone's edge.
+    const ZoneIn zone = zone_in(h, a);
+    const AbsPitch pitch = abs_judge(bits_to_float(xb), bits_to_float(yb), zone.half_w, zone.half_h);
+    const u32 truth = pitch.strike ? 1 : 0;
+    const double d = pitch.margin;
     const double scaled = d * 256.0;
-    const int bucket = scaled >= 255.0 ? 255 : static_cast<int>(scaled);
+    const int bucket = scaled >= 0 && scaled < 255.0 ? static_cast<int>(scaled) : 255;
     u32 call = truth, miss = 0;
     if (h.setting("umpire") == 1) {
       call = game_call;
@@ -352,12 +370,28 @@ class AbsMod final : public Mod {
     const u32 p = h.r32(a + kAGame);  // who may challenge this call, for the page
     s.batter_actor = actor(h, p, kActorBatter);
     s.catcher_actor = actor(h, p, kActorCatcher);
-    char line[200];
-    std::snprintf(line, sizeof line, "%sframe %u called %s (truth %s, game %s) x %.4f y %.4f d %.4f%s", phase_tag(h.phase()),
-                  s.last_frame, call ? "strike" : "ball", truth ? "strike" : "ball", game_call ? "strike" : "ball",
-                  static_cast<double>(bits_to_float(xb)), static_cast<double>(bits_to_float(yb)), d,
-                  miss ? " MISSED" : "");
+    char line[220];
+    std::snprintf(line, sizeof line, "%sframe %u called %s (truth %s, game %s) x %.4f y %.4f d %.4f off %.2f in%s",
+                  phase_tag(h.phase()), s.last_frame, call ? "strike" : "ball", truth ? "strike" : "ball",
+                  game_call ? "strike" : "ball", static_cast<double>(bits_to_float(xb)),
+                  static_cast<double>(bits_to_float(yb)), d, pitch.off_in, miss ? " MISSED" : "");
     h.log(line);
+  }
+
+  // The zone for the batter at the plate (ZoneIn), from umpire A; the standard 69 in
+  // batter's while the chain is not set up or the scale is not a batter's.
+  static ZoneIn zone_in(Host& h, u32 a) {
+    ZoneIn z;
+    if (!ram(a)) return z;
+    const u32 p = h.r32(a + kAGame);
+    const u32 ball = ram(p) ? h.r32(p + kPBall) : 0;
+    const u32 game = ram(ball) ? h.r32(ball + kBallGame) : 0;
+    const u32 batter = ram(game) ? h.r32(game + kGameBatter) : 0;
+    if (ram(batter)) {
+      const double scale = bits_to_float(h.r32(batter + kBatterHeightScale));
+      if (scale > 0.5 && scale < 1.5) z.half_h *= scale;
+    }
+    return z;
   }
 
   void challenge(Host& h, int port) {
@@ -396,15 +430,19 @@ class AbsMod final : public Mod {
     h.log(line);
     // The page's challenge scene (abs-scene.ts): who challenged and for which team, which
     // call, and (shown after the replay) where the pitch crossed, zone-normalized (|x|,
-    // |y| <= 1 is a strike), and the challenges the team will have left (one is spent
-    // when the call stands).
+    // |y| <= 1 is the zone), the zone's half sizes and the ball's radius in inches, how
+    // far a ball missed the zone, and the challenges the team will have left (one is
+    // spent when the call stands). The batter at the plate is still the one who took it.
     const u32 left = s.challenges[team] - (s.last_truth == s.last_call ? 1u : 0u);
-    char ui[200];
+    const ZoneIn zone = zone_in(h, s.umpire);
+    const double px = bits_to_float(s.last_x), py = bits_to_float(s.last_y);
+    const AbsPitch pitch = abs_judge(px, py, zone.half_w, zone.half_h);
+    char ui[320];
     std::snprintf(ui, sizeof ui,
                   "{\"abs\":\"challenge\",\"team\":\"%s\",\"call\":\"%s\",\"truth\":\"%s\",\"x\":%.3f,\"y\":%.3f,"
-                  "\"left\":%u,",
-                  team ? "away" : "home", s.last_call ? "strike" : "ball", s.last_truth ? "strike" : "ball",
-                  static_cast<double>(bits_to_float(s.last_x)), static_cast<double>(bits_to_float(s.last_y)), left);
+                  "\"w\":%.2f,\"h\":%.2f,\"r\":%.2f,\"off\":%.1f,\"left\":%u,",
+                  team ? "away" : "home", s.last_call ? "strike" : "ball", s.last_truth ? "strike" : "ball", px, py,
+                  zone.half_w, zone.half_h, kAbsBallRadiusIn, pitch.off_in, left);
     h.publish(std::string(ui) + "\"by\":\"" + by + "\",\"club\":\"" + team_name(h, s.umpire, team) + "\"}");
     h.notify(s.last_call ? "ABS challenge: reviewing the strike call" : "ABS challenge: reviewing the ball call");
   }
@@ -418,5 +456,28 @@ class AbsMod final : public Mod {
 }  // namespace
 
 std::unique_ptr<Mod> make_abs_mod() { return std::make_unique<AbsMod>(); }
+
+AbsPitch abs_judge(double x, double y, double half_w_in, double half_h_in) {
+  // The ball's centre in inches from the zone's centre (one quadrant: the zone is
+  // symmetric), and how far it is outside the zone along each axis.
+  const double cx = std::fabs(x) * half_w_in, cy = std::fabs(y) * half_h_in;
+  const double dx = cx > half_w_in ? cx - half_w_in : 0.0, dy = cy > half_h_in ? cy - half_h_in : 0.0;
+  const double r = kAbsBallRadiusIn;
+  AbsPitch p;
+  if (dx == 0.0 && dy == 0.0) {  // the centre is in the zone
+    const double mx = half_w_in - cx, my = half_h_in - cy;
+    p.strike = true;
+    p.margin = mx * half_h_in <= my * half_w_in ? (mx + r) / half_w_in : (my + r) / half_h_in;
+    return p;
+  }
+  // Outside: the ball touches the zone when its centre is within one radius of the
+  // zone's rectangle (at a corner, of the corner itself).
+  const double dist2 = dx * dx + dy * dy;
+  const double dist = std::sqrt(dist2);
+  p.strike = dist2 <= r * r;
+  p.off_in = p.strike ? 0.0 : dist - r;
+  p.margin = std::fabs(dist - r) / (dx * half_h_in >= dy * half_w_in ? half_w_in : half_h_in);
+  return p;
+}
 
 }  // namespace mvp::mods

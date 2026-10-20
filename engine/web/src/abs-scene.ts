@@ -5,23 +5,30 @@
 // replay itself plays at half speed (worker.ts) with only a small "Replay" tag.
 // After it, the verdict, in the look of the game's own pause screen: "Call Overturned"
 // or "Call Stands", the scoreboard row with the team and the challenges it has left,
-// and where the pitch crossed; it fades out shortly after play resumes.
-// Host-side only: nothing here reaches the game.
+// and where the pitch crossed, drawn to scale: the batter's zone and the ball (a strike
+// when any part of it touches the zone), with how far a ball missed by; it fades out
+// shortly after play resumes. Host-side only: nothing here reaches the game.
 
 interface Challenge {
   team: string;   // "home" | "away"
   call: string;   // the umpire's call: "strike" | "ball"
   truth: string;  // what the pitch was
-  x: number;      // plate crossing, zone-normalized: |x|, |y| <= 1 is a strike
+  x: number;      // where the ball's centre crossed, zone-normalized: |x|, |y| <= 1 is inside the zone
   y: number;
+  w: number;      // the zone's half-width and half-height, and the ball's radius, in inches
+  h: number;
+  r: number;
+  off: number;    // a ball: inches between the ball's edge and the zone
   by: string;     // who called for it (the batter's or the catcher's last name; may be "")
   club: string;   // the team's nickname (may be "")
   left: number;   // the team's challenges after this one
 }
 
 const SVG = 'http://www.w3.org/2000/svg';
-// Zone geometry in SVG units: half width 50, half height 65 (a zone is taller than wide).
-const HW = 50, HH = 65, BALL_R = 8.5;
+// The zone in SVG units: half width 50; the half height and the ball follow in proportion,
+// from the engine's inches (a 69 in batter's zone, 9.0 by 10.2 in, until a challenge says).
+const HW = 50;
+const ZONE_W = 9.0, ZONE_H = 10.2, BALL_IN = 1.45;
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
   const e = document.createElementNS(SVG, tag);
@@ -42,8 +49,13 @@ export class ChallengeScene {
   private club: HTMLSpanElement;   // the scoreboard row: the team (silver) ...
   private left: HTMLSpanElement;   // ... and its challenges left (the blue tab)
   private zone: SVGSVGElement;
+  private cells: SVGRectElement[] = [];
+  private box: SVGRectElement;
   private ballAt: SVGGElement;      // where the pitch crossed (moved there)
   private ball: SVGGElement;       // the game's white ring (its drop animation)
+  private ballEdge: SVGCircleElement;
+  private ballRing: SVGCircleElement;
+  private off: HTMLDivElement;     // how far a ball missed the zone (or that a strike only touched it)
   private callout: HTMLDivElement;
   private calloutName: HTMLSpanElement;
   private tag: HTMLDivElement;
@@ -78,21 +90,27 @@ export class ChallengeScene {
     // The zone as the game draws it at the plate: nine translucent cells in a light frame;
     // the pitch as its white ring.
     this.zone = svg('svg', { viewBox: '-110 -120 220 240', class: 'abs-zone', 'aria-hidden': 'true' });
-    for (let i = 0; i < 3; ++i) {
-      for (let j = 0; j < 3; ++j) {
-        this.zone.append(svg('rect', { x: -HW + (i * 2 * HW) / 3 + 1.5, y: -HH + (j * 2 * HH) / 3 + 1.5,
-                                       width: (2 * HW) / 3 - 3, height: (2 * HH) / 3 - 3, class: 'abs-zone-cell' }));
-      }
+    for (let k = 0; k < 9; ++k) {
+      const cell = svg('rect', { class: 'abs-zone-cell' });
+      this.cells.push(cell);
+      this.zone.append(cell);
     }
-    this.zone.append(svg('rect', { x: -HW, y: -HH, width: 2 * HW, height: 2 * HH, class: 'abs-zone-box' }));
+    this.box = svg('rect', { class: 'abs-zone-box' });
+    this.zone.append(this.box);
     this.ballAt = svg('g', {});
     this.ball = svg('g', { class: 'abs-ball' });
-    this.ball.append(svg('circle', { cx: 0, cy: 0, r: BALL_R, class: 'abs-ball-edge' }),
-                     svg('circle', { cx: 0, cy: 0, r: BALL_R, class: 'abs-ball-ring' }));
+    this.ballEdge = svg('circle', { cx: 0, cy: 0, class: 'abs-ball-edge' });
+    this.ballRing = svg('circle', { cx: 0, cy: 0, class: 'abs-ball-ring' });
+    this.ball.append(this.ballEdge, this.ballRing);
     this.ballAt.append(this.ball);
     this.zone.append(this.ballAt);
+    this.drawZone(ZONE_W, ZONE_H, BALL_IN);
 
-    this.card.append(this.title, row, this.zone);
+    this.off = document.createElement('div');
+    this.off.className = 'abs-off';
+    this.off.hidden = true;
+
+    this.card.append(this.title, row, this.zone, this.off);
     this.root.append(this.card);
 
     this.callout = document.createElement('div');
@@ -121,9 +139,11 @@ export class ChallengeScene {
   update(phase: string, _progress: number, records: Record<string, unknown>[]): void {
     for (const r of records) {
       if (r.abs === 'challenge') {
+        const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
         this.challenge = { team: String(r.team), call: String(r.call), truth: String(r.truth),
-                           x: Number(r.x), y: Number(r.y), by: String(r.by ?? ''), club: String(r.club ?? ''),
-                           left: Number(r.left) };
+                           x: Number(r.x), y: Number(r.y), w: num(r.w, ZONE_W), h: num(r.h, ZONE_H),
+                           r: num(r.r, BALL_IN), off: Number(r.off) || 0,
+                           by: String(r.by ?? ''), club: String(r.club ?? ''), left: Number(r.left) };
         this.verdictShown = false;
         this.showCallout();  // at once: the engine waits ANNOUNCE_MS before the review starts
       } else if (r.abs === 'verdict' && this.challenge) {
@@ -199,20 +219,52 @@ export class ChallengeScene {
       this.root.classList.toggle('abs-overturned', overturned);
       this.root.classList.toggle('abs-stands', !overturned);
       this.title.textContent = overturned ? 'Call Overturned' : 'Call Stands';
+      const hh = this.drawZone(c.w, c.h, c.r);
       const cx = Math.max(-100, Math.min(100, c.x * HW));
-      const cy = Math.max(-110, Math.min(110, -c.y * HH));
+      const cy = Math.max(-110, Math.min(110, -c.y * hh));
       this.ballAt.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`);
       this.ballAt.style.display = '';
+      // A ball: how far its edge missed the zone. A strike whose centre was outside: it touched.
+      const outside = Math.abs(c.x) > 1 || Math.abs(c.y) > 1;
+      if (c.truth === 'ball') this.off.textContent = c.off < 0.1 ? 'Missed by less than 0.1 in' : `Missed by ${c.off.toFixed(1)} in`;
+      else this.off.textContent = outside ? 'Touched the zone' : '';
+      this.off.hidden = !this.off.textContent;
     } else {
       this.title.textContent = 'Review complete';
       this.ballAt.style.display = 'none';
+      this.off.hidden = true;
     }
     this.showRow();
     this.root.hidden = false;
-    // The ring drops in again each time (its animation runs when the element is shown again).
-    this.ball.style.animation = 'none';
-    void this.ball.getBoundingClientRect();
-    this.ball.style.animation = '';
+    // The ring drops in again each time, and the popup after it (their animations run when shown again).
+    for (const e of [this.ball, this.off] as (HTMLElement | SVGElement)[]) {
+      e.style.animation = 'none';
+      void e.getBoundingClientRect();
+      e.style.animation = '';
+    }
+  }
+
+  // The zone and the ball to scale: half-width `w`, half-height `h` and the ball's radius
+  // `r` in inches, the zone's half-width HW SVG units. The ring's outer edge is the ball's
+  // edge. Returns the half-height in SVG units.
+  private drawZone(w: number, h: number, r: number): number {
+    const k = HW / w, hh = Math.min(110, h * k), br = r * k;
+    for (let i = 0; i < 3; ++i) {
+      for (let j = 0; j < 3; ++j) {
+        const cell = this.cells[3 * i + j]!;
+        cell.setAttribute('x', String(-HW + (i * 2 * HW) / 3 + 1.5));
+        cell.setAttribute('y', String(-hh + (j * 2 * hh) / 3 + 1.5));
+        cell.setAttribute('width', String((2 * HW) / 3 - 3));
+        cell.setAttribute('height', String((2 * hh) / 3 - 3));
+      }
+    }
+    this.box.setAttribute('x', String(-HW));
+    this.box.setAttribute('y', String(-hh));
+    this.box.setAttribute('width', String(2 * HW));
+    this.box.setAttribute('height', String(2 * hh));
+    this.ballRing.setAttribute('r', String(br - 1.25));       // a 2.5 wide white ring inside the ball's edge
+    this.ballEdge.setAttribute('r', String(Math.max(0, br - 3.5)));  // and a dark line inside it
+    return hh;
   }
 
   private fadeOut(): void {

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "mods/gameplay/abs.h"
 #include "mods/gameplay/host.h"
 #include "mods/gameplay/timeline.h"
 #include "runtime/hle.h"
@@ -60,6 +61,34 @@ class ReviewMod final : public Mod {
 };
 
 }  // namespace
+
+TEST_CASE("ABS truth: a strike when any part of the ball touches the zone") {
+  const double w = 9.0, h = 10.2;  // the zone's half sizes in inches (a 69 in batter)
+  // The centre in the zone.
+  CHECK(abs_judge(0.2, -0.5, w, h).strike);
+  CHECK(abs_judge(0.2, -0.5, w, h).off_in == 0.0);
+  // Beside the zone: the edge of a 1.45 in ball reaches 1.45 in past it.
+  CHECK(abs_judge(1.0 + 1.40 / w, 0.0, w, h).strike);
+  const AbsPitch wide = abs_judge(-(1.0 + 1.60 / w), 0.3, w, h);
+  CHECK(!wide.strike);
+  CHECK(wide.off_in == doctest::Approx(0.15));
+  // Low: inches along y scale with the batter's half-height.
+  const AbsPitch low = abs_judge(0.1, -1.3, w, h);
+  CHECK(!low.strike);
+  CHECK(low.off_in == doctest::Approx(0.3 * h - 1.45));
+  // The same zone units are more inches for a taller batter: 1.38 in low, then 1.51 in.
+  CHECK(abs_judge(0.1, -1.135, w, h).strike);
+  CHECK(!abs_judge(0.1, -1.135, w, 1.1 * h).strike);
+  // A corner: within one radius of the corner itself, not of the two edges' lines.
+  CHECK(abs_judge(1.1, 1.1, w, h).strike);    // 0.90 and 1.02 in out: 1.36 in from the corner
+  CHECK(!abs_judge(1.12, 1.1, w, h).strike);  // 1.08 and 1.02 in out: 1.49 in
+  // The pitch of the first ring-up state (x -1.0443, y 0.8242): 0.40 in past the edge, so
+  // it touches the zone; the centre rule had called it a ball.
+  CHECK(abs_judge(-1.0443, 0.8242, w, h).strike);
+  // The margin (the umpire model's edge weighting) is zero where the ball's edge meets the zone.
+  CHECK(abs_judge(1.0 + 1.45 / w, 0.0, w, h).margin == doctest::Approx(0.0).epsilon(1e-9));
+  CHECK(abs_judge(0.0, 0.0, w, h).margin == doctest::Approx((w + 1.45) / w));
+}
 
 TEST_CASE("settings: defaults, overrides, ranges and the canonical handshake form") {
   GameplayHost h;

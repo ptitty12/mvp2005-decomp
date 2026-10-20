@@ -501,6 +501,25 @@ three games; then the same games with the mod logging each release):
 - **Quit, then a new game from the main menu,** was not traced. I: it starts a game the same
   way as the first one, which runs `fn_801BACA0` (field 3863).
 
+### 3.12 The zone in inches (2026-10-20)
+
+The game measures in inches: the rubber is at (513.36, 0, 513.36) from the plate's back tip,
+60.5 ft; second base at (1080, 0, 1080); `1/17.6` turns in/s into mph (V, constants).
+
+| What | Where | Value | Tag |
+|---|---|---|---|
+| The normalized crossing | written by `fn_80233444` (the aim plus the pitcher's error, `fn_80232F28`), clamped to x in [-4, 4], y in [-4, 2.6]; copied to ball+0x3B8/+0x3BC by `fn_801896E8` | | V |
+| The world crossing | ball+0x3C0 = `fn_8018CFCC(ball, n)`: x = c.x + 12.728 - nx*m438/sqrt 2, z = c.z + 12.728 + nx*m438/sqrt 2, y = s*c.y + ny*m43C*s | computed from the normalized point, not the reverse | V |
+| Zone centre ball+0x420 | `fn_80189E58` | (0, 29.28, 0) | V |
+| Half-width ball+0x438 | `fn_80189E58` (its only writer found) | **9.0 in** (the plate's 8.5 and 0.5) | V |
+| Half-height ball+0x43C | `fn_80189E58` | **10.2 in**, times s | V |
+| Height scale s | `fn_801C17EC(ball)`: ball+0x44C -> +0x680 -> float +0xAB4, 1.0 when that pointer is null; written by `fn_8023DA90` as height / 69 in | a 6 ft batter: 1.043, zone 19.9-41.2 in | V |
+| The ball | P+0x6CC (`Unk80188698`; ABS_CHALLENGE called it "the batter" in §3.7: it is the ball) | | V |
+| Ball radius | none in the game (no tunable, no constant near 1.45 or 2.9) | 1.45 in, regulation | I |
+
+The game's own "inches outside" (`fn_80023B94`, matched C) is `|nx * m438| - m438` and
+`|ny * m43C * s| - m43C * s`. The HUD's second marker (§3.7) is `fn_8018CFCC` of the same point.
+
 ### 3.11 Names for the page: the challenger and the team
 
 T, 2026-10-17: MEM1 dumps of the batter game (Cardinals at Red Sox), taken at polls 6000,
@@ -527,8 +546,18 @@ T, 2026-10-17: MEM1 dumps of the batter game (Cardinals at Red Sox), taken at po
 
 ### 4.1 Truth and the umpire model
 
-**Truth** is the game's rulebook test, `|x| <= 1 && |y| <= 1` on the location of §3.3, which
-is exactly what ABS means.
+**Truth** (owner, 2026-10-20: "if it touches the zone at all then it's a strike") is a strike
+when any part of the ball touches the zone, corners included (`abs_judge`, `mods/gameplay/abs.h`):
+- In inches (§3.12): the ball's centre is at `(|x| * 9.0, |y| * 10.2 * s)` from the zone's
+  centre, the zone's half sizes are 9.0 and `10.2 * s`, and the ball's radius is 1.45 in (the
+  game has no ball size; a regulation ball is 9 to 9.25 in around).
+- A strike when the centre is within 1.45 in of the zone's rectangle: `dx^2 + dy^2 <= 1.45^2`,
+  with `dx`, `dy` how far the centre is outside the zone along each axis.
+- A ball's distance from the zone, `sqrt(dx^2 + dy^2) - 1.45` in, goes to the page ("Missed
+  by 0.2 in").
+- The zone is the one the game draws and calls with (9.0 in, the 17 in plate and half an
+  inch); the game's own call tests the ball's centre (§3.3). Until 2026-10-20 the mod did
+  too, so a ball that visibly touched the zone on the verdict card could be called a ball.
 
 **The umpire's call** is rewritten in a before-hook on `fn_801BB338`, the function
 `fn_801BB1E0` calls right after the decision (as built, `engine/mods/gameplay/abs.cpp`):
@@ -540,10 +569,10 @@ is exactly what ABS means.
 on fn_801BB338(A, flag, r):                  # before its first instruction
   swing = word(T->m3A4 + 0x28C + 4) in {1,2,4,6,7}     # = fn_801D0294, T = A+0x10
   if swing: return                           # swinging strikes are not umpire calls
-  truth = |x| <= 1 && |y| <= 1               # x, y = (T->m3B0)->m4 + 0x28 / +0x2C
+  truth = the ball touches the zone           # x, y = (T->m3B0)->m4 + 0x28 / +0x2C; abs_judge
   if abs.umpire == game: call = r5           # the game's own call (its variable zone, if on)
   else:
-    d = max(|x|, |y|) - 1                    # signed L-inf distance to the boundary
+    d = the ball's edge to the zone's edge   # in zone units, either way (abs_judge's margin)
     call = truth XOR (rng(0) < P_miss(|d|))
   if a review is re-running: call = its verdict          # §7.2 (the draw still happens)
   r5 = call; [r1+8] = call; record {frame, x, y, truth, call} in mod state
@@ -555,7 +584,10 @@ on fn_801BB338(A, flag, r):                  # before its first instruction
 - `k` is calibrated per sigma so that the mean of `P_miss` over called pitches equals
   `abs.miss`, using the locations of called pitches in traced games.
 - One unit of x is half the zone width and one unit of y half the zone height, so "near the
-  edge" scales with the batter's zone.
+  edge" scales with the batter's zone. Since 2026-10-20, `d` is measured from the ball's edge
+  (where truth changes) along the nearer edge's axis. `k` was calibrated with the centre's
+  distance, so over many pitches the miss rate may now run a little off the setting (to be
+  re-measured over a larger sample).
 - **It is computed in integers:**
   - `w` is a 256-entry Q16 table built by repeated Q32 multiplication with
     `exp(-1/(256 sigma))`, compared against a 32-bit RNG draw.
@@ -962,12 +994,12 @@ the packs' set and result hashes, the poll, a label.
   GX state when it renders: use `--headless`, not `--no-render`); `--state-load FILE`
   loads at the first frame poll and refuses other mods or packs.
 - The page: F2 saves, F4 goes back; `?state=NAME` starts from a file on the site
-  (WEB.md �2, "Save states").
+  (WEB.md §2, "Save states").
 - After a load the timeline drops its two slots and recorded inputs (the run before
   owned them) and snapshots the state loaded (`Timeline::restart`), so the next
   pitch's call can be challenged and replayed.
 - Checked: native save at poll 2,000, load in a fresh native process and in Chrome,
-  both reach the uninterrupted run's guest line at poll 3,000 (WEB.md �4).
+  both reach the uninterrupted run's guest line at poll 3,000 (WEB.md §4).
 
 ## 7. Replay route
 

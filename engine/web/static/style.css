@@ -485,8 +485,16 @@ pre:empty { display: none; }
 .abs-zone-cell { fill: rgba(150, 132, 230, 0.3); }
 .abs-zone-box { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 2; }
 .abs-ball { transform-box: fill-box; transform-origin: center; animation: abs-drop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2); }
-.abs-ball-edge { fill: none; stroke: rgba(0, 0, 0, 0.75); stroke-width: 7; }
-.abs-ball-ring { fill: none; stroke: #fff; stroke-width: 3.5; }
+/* The ball to scale: the white ring's outer edge is the ball's edge (a strike when it touches the
+   zone, 2026-10-20), a dark line inside it for contrast. */
+.abs-ball-edge { fill: none; stroke: rgba(0, 0, 0, 0.75); stroke-width: 2; }
+.abs-ball-ring { fill: rgba(255, 255, 255, 0.12); stroke: #fff; stroke-width: 2.5; }
+/* How far a ball missed the zone: a small gold-on-gunmetal tag that pops in after the ball lands. */
+.abs-off { display: inline-block; margin: 0.45rem auto 0; padding: 0.2rem 0.75rem; font-weight: 700;
+  font-stretch: condensed; text-transform: uppercase; letter-spacing: 0.03em; font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+  color: var(--gold); background: linear-gradient(180deg, var(--gun-hi), var(--gun) 55%, var(--gun-lo));
+  border: 1px solid var(--bar-line); text-shadow: 1px 1px 0 #000;
+  animation: abs-pop 220ms ease-out 400ms backwards; }
 /* The callout the moment a challenge is made: the Replay tag's look, large, in the middle (owner, 2026-10-17). */
 .abs-callout { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3;
   max-width: 86%; padding: 0.7rem 1.5rem 0.8rem; border-radius: 6px; background: #d32f2f; color: #fff;
@@ -503,6 +511,6 @@ pre:empty { display: none; }
 @keyframes abs-drop { from { transform: scale(2.6); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes abs-blink { 50% { opacity: 0.55; } }
 @media (prefers-reduced-motion: reduce) {
-  .abs-card, .abs-ball, .abs-tag, .abs-callout { animation: none; }
+  .abs-card, .abs-ball, .abs-tag, .abs-callout, .abs-off { animation: none; }
   .abs-scene { transition: none; }
 }
