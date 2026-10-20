@@ -2,7 +2,7 @@
 // players' pages offer in a dropdown, so nobody has to bring their own file. The owner
 // uploads and removes them on the Server disc page (src/disc_page.ts); the pages
 // list them with GET /api/packs and download one with GET /api/packs/<file>, behind
-// the private link like the disc (src/server.ts).
+// anyone may use them; uploads and removals are the admin's (src/server.ts).
 //
 // A pack is accepted only if it is a zip holding a pack.json (at the top, or in its
 // one folder: docs/MODDING.md §2) for this game, with an id, a name and a version.

@@ -1,18 +1,20 @@
-// The "Server disc" page (deploy): GET /disc, behind the private link. It shows
-// the private link (src/access.ts) with a Copy button. The owner picks
-// the disc image on their computer and the page uploads it to the server in
-// chunks (src/disc_store.ts), resuming where it stopped after a dropped
-// connection or a reload (choose the same file again). The server keeps the
-// image only if it is GV4E69 revision 0; afterwards /config.json names it and
-// every player's browser downloads it once and keeps it (P1: engine/web/src/disc-store.ts).
+// The "Server disc" page (deploy): GET /disc, the admin's only (src/access.ts). It
+// shows the player link with a Copy button. The owner picks the disc image on
+// their computer and the page uploads it to the server in chunks
+// (src/disc_store.ts), resuming where it stopped after a dropped connection or a
+// reload (choose the same file again). The server keeps the image only if it is
+// GV4E69 revision 0; afterwards /config.json names it and every player's browser
+// downloads it once and keeps it (P1: engine/web/src/disc-store.ts).
 //
 // With a packs directory (MVP_PACKS_DIR) the page also manages the roster packs the
 // game page offers in its dropdown (src/pack_store.ts): the list, Remove, and the
-// upload of a pack zip.
+// upload of a pack zip. With a states directory (MVP_STATES_DIR) it manages the
+// admin's save states (src/state_store.ts): the list, Play from it, Remove, and
+// the upload of a .mvpstate file (gzipped in the browser first).
 //
 // The page is self-contained: its one style and its scripts are pinned by hash
 // in its Content-Security-Policy. Requests carry the page's CSRF token in the
-// X-MVP-CSRF header (bound to the access cookie: src/server.ts). It has the game
+// X-MVP-CSRF header (bound to the admin cookie: src/server.ts). It has the game
 // page's look (src/theme.ts).
 import { createHash } from 'node:crypto';
 
@@ -69,7 +71,7 @@ export const DISC_PAGE_SCRIPT = `(function () {
 
   async function refresh() {
     var j = await api('GET', '/api/disc');
-    if (j.httpStatus === 401) { say('This browser has no access to the server any more. Open the private link again, then reload.', 'err'); return; }
+    if (j.httpStatus === 401) { say('This browser is not the admin any more. Open your admin link again, then reload.', 'err'); return; }
     if (j.httpStatus !== 200) { say('The server answered HTTP ' + j.httpStatus + '.', 'err'); return; }
     status = j;
     show();
@@ -106,7 +108,7 @@ export const DISC_PAGE_SCRIPT = `(function () {
         continue;
       }
       if (r.httpStatus === 409 && typeof r.received === 'number') { offset = r.received; await sleep(500); continue; }
-      if (r.httpStatus === 401) throw new Error('This browser has no access to the server any more. Open the private link again in another tab, then choose the same file to continue.');
+      if (r.httpStatus === 401) throw new Error('This browser is not the admin any more. Open your admin link again in another tab, then choose the same file to continue.');
       if (r.httpStatus === 404 || r.httpStatus === 413 || r.httpStatus === 422) throw new Error(r.error || ('HTTP ' + r.httpStatus));
       if (++failures > 10) throw new Error('The connection keeps failing. Choose the same file again later to continue where it stopped.');
       progressText.textContent = 'The connection failed; trying again (' + failures + ' of 10)...';
@@ -213,7 +215,7 @@ export const PACKS_PAGE_SCRIPT = `(function () {
 
   async function refresh() {
     var r = await fetch('/api/packs', { credentials: 'same-origin', cache: 'no-store' });
-    if (r.status === 401) { say('This browser has no access to the server any more. Open the private link again, then reload.', 'err'); return; }
+    if (r.status === 401) { say('This browser is not the admin any more. Open your admin link again, then reload.', 'err'); return; }
     if (!r.ok) { say('The server answered HTTP ' + r.status + '.', 'err'); return; }
     render((await r.json()).packs || []);
   }
@@ -241,7 +243,112 @@ export const PACKS_PAGE_SCRIPT = `(function () {
   refresh().catch(function (e) { say(String(e), 'err'); });
 })();`;
 
-/** The private link card: Copy (the clipboard API needs HTTPS; elsewhere the old copy command, or the keyboard). */
+/**
+ * The save states section: the admin's states on the server, Play from it (the game page with ?state=), Remove, and
+ * the upload of a .mvpstate file under a name (gzipped in the browser where it can: a third of the size).
+ */
+export const STATES_PAGE_SCRIPT = `(function () {
+  'use strict';
+  var token = document.querySelector('meta[name="mvp-csrf"]').getAttribute('content');
+  function $(id) { return document.getElementById(id); }
+  var list = $('states-list'), fileEl = $('state-file'), nameEl = $('state-name'), btn = $('state-upload'), msg = $('state-msg');
+  var MB = 1048576, busy = false, NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  function say(text, kind) { msg.textContent = text; msg.className = kind || 'note'; }
+  function slug(s) {
+    return s.toLowerCase().replace(/\\.mvpstate$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64).replace(/-+$/, '');
+  }
+
+  async function call(method, url, body) {
+    var headers = { 'X-MVP-CSRF': token };
+    if (body) headers['Content-Type'] = 'application/octet-stream';
+    var r = await fetch(url, { method: method, headers: headers, body: body, credentials: 'same-origin', cache: 'no-store' });
+    var j = {};
+    try { j = await r.json(); } catch (e) { j = {}; }
+    j.httpStatus = r.status;
+    return j;
+  }
+
+  function render(states) {
+    list.replaceChildren();
+    if (!states.length) {
+      var none = document.createElement('li');
+      none.className = 'note';
+      none.textContent = 'No save states yet. F2 in the game copies one to your slot here ("quick"); "Save to the server" keeps one under a name.';
+      list.append(none);
+      return;
+    }
+    states.forEach(function (s) {
+      var li = document.createElement('li');
+      var text = document.createElement('span');
+      var slot = s.name === 'quick';
+      text.textContent = (slot ? 'Your slot (F2)' : s.name) + (s.label && !slot ? ': ' + s.label : '') + ' (frame ' + s.frame + ', ' +
+        (s.size / MB).toFixed(1) + ' MB, ' + new Date(s.saved).toLocaleString() + ')';
+      var play = document.createElement('a');
+      play.href = '/?state=' + encodeURIComponent(s.name);
+      play.textContent = 'Play from it';
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'plain';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', async function () {
+        if (busy || !window.confirm('Remove the save state ' + s.name + ' from the server?')) return;
+        busy = true;
+        var r = await call('DELETE', '/api/states/' + encodeURIComponent(s.name));
+        busy = false;
+        if (r.httpStatus === 200) say('Removed ' + s.name + '.', 'ok');
+        else say(r.error || ('The server answered HTTP ' + r.httpStatus + '.'), 'err');
+        await refresh();
+      });
+      var actions = document.createElement('span');
+      actions.className = 'row';
+      actions.append(play, rm);
+      li.append(text, actions);
+      list.append(li);
+    });
+  }
+
+  async function refresh() {
+    var r = await fetch('/api/states', { credentials: 'same-origin', cache: 'no-store' });
+    if (r.status === 401) { say('This browser is not the admin any more. Open your admin link again, then reload.', 'err'); return; }
+    if (!r.ok) { say('The server answered HTTP ' + r.status + '.', 'err'); return; }
+    render((await r.json()).states || []);
+  }
+
+  function update() { btn.disabled = busy || !fileEl.files || !fileEl.files.length; }
+  fileEl.addEventListener('change', function () {
+    var file = fileEl.files && fileEl.files[0];
+    if (file && !nameEl.value) nameEl.value = slug(file.name);
+    update();
+    say('');
+  });
+  btn.addEventListener('click', async function () {
+    var file = fileEl.files && fileEl.files[0];
+    var name = slug(nameEl.value || (file ? file.name : ''));
+    if (!file || busy) return;
+    if (!NAME.test(name)) { say('Give the state a name: lowercase letters, digits and hyphens.', 'err'); return; }
+    nameEl.value = name;
+    busy = true; update(); fileEl.disabled = true;
+    var r;
+    try {
+      var body = file;
+      if (typeof CompressionStream !== 'undefined') {
+        say('Compressing ' + file.name + ' (' + (file.size / MB).toFixed(0) + ' MB)...');
+        body = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+      }
+      say('Uploading ' + name + ' (' + (body.size / MB).toFixed(1) + ' MB)...');
+      r = await call('POST', '/api/states/' + encodeURIComponent(name), body);
+    } catch (e) {
+      r = { httpStatus: 0, error: 'The upload failed: ' + e.message };
+    }
+    busy = false; fileEl.disabled = false; fileEl.value = ''; nameEl.value = ''; update();
+    if (r.httpStatus === 200) say('Done: ' + name + ' is on the server. Play from it here or with ?state=' + name + ' on the game page.', 'ok');
+    else say(r.error || ('The server answered HTTP ' + r.httpStatus + '.'), 'err');
+    await refresh();
+  });
+  refresh().catch(function (e) { say(String(e), 'err'); });
+})();`;
+
+/** The player link card: Copy (the clipboard API needs HTTPS; elsewhere the old copy command, or the keyboard). */
 export const LINK_PAGE_SCRIPT = `(function () {
   'use strict';
   var link = document.getElementById('link'), copy = document.getElementById('copy'), msg = document.getElementById('link-msg');
@@ -264,26 +371,40 @@ export const LINK_PAGE_SCRIPT = `(function () {
 const sha = (s: string) => `'sha256-${createHash('sha256').update(s).digest('base64')}'`;
 /** CSP of the Server disc page: its one style and its scripts by hash; requests to this site only. */
 export const DISC_PAGE_CSP =
-  `default-src 'none'; style-src ${sha(DISC_PAGE_CSS)}; script-src ${sha(LINK_PAGE_SCRIPT)} ${sha(DISC_PAGE_SCRIPT)} ${sha(PACKS_PAGE_SCRIPT)}; ` +
+  `default-src 'none'; style-src ${sha(DISC_PAGE_CSS)}; script-src ${sha(LINK_PAGE_SCRIPT)} ${sha(DISC_PAGE_SCRIPT)} ` +
+  `${sha(PACKS_PAGE_SCRIPT)} ${sha(STATES_PAGE_SCRIPT)}; ` +
   `connect-src 'self'; img-src data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`;
 
-/** What the page manages: the disc upload (MVP_DISC_DIR), the roster packs (MVP_PACKS_DIR), or both. */
+/** What the page manages: the disc upload (MVP_DISC_DIR), the roster packs (MVP_PACKS_DIR), the save states (MVP_STATES_DIR). */
 export interface DiscPageParts {
   disc: boolean;
   packs: boolean;
+  states?: boolean;
 }
 
-/** `link`: the private link (https://site/?key=...), shown with a Copy button. */
+/** `link`: the player link (https://site/?key=...), shown with a Copy button. */
 export function discPage(csrf: string, link: string, parts: DiscPageParts = { disc: true, packs: false }): string {
   const access = `
-<div class="card"><h2>Private link</h2>
-<p class="note">Open this link once in each browser that plays here; that browser then stays in. Anyone with the link
-can play and download the disc, so send it only to people you trust. Invite links from the lobby carry it too.</p>
-<div class="row"><input id="link" type="text" readonly size="48" spellcheck="false" aria-label="Private link" value="${escapeHtml(link)}">
+<div class="card"><h2>Player link</h2>
+<p class="note">Anyone can open the site and play with a disc image of their own. Opening this link once lets a browser
+play with this server's disc instead (it then stays in), so send it only to people you trust; invite links from the
+lobby carry it too. Browsers that opened the old private link already have it.</p>
+<div class="row"><input id="link" type="text" readonly size="48" spellcheck="false" aria-label="Player link" value="${escapeHtml(link)}">
 <button id="copy" type="button">Copy</button></div>
 <p id="link-msg" class="note" role="status"></p>
 <p class="note">To replace the link (if it leaked), give the server a new access key (ACCESS_KEY in Dokploy) and
 redeploy: every browser then needs the new link.</p></div>`;
+  const states = parts.states
+    ? `
+<div class="card"><h2>Save states</h2>
+<p class="note">Your save states, for you only. F2 in the game copies the state to your slot here ("quick"), and F4 in a
+browser that has none of its own comes back to it; "Save to the server" in the game keeps one under a name. Play from
+one here, or open the game page with ?state=&lt;name&gt;: the page sets up the state's gameplay mods and roster packs.</p>
+<ul id="states-list" class="packs"><li class="note">Asking the server...</li></ul>
+<div class="row"><input id="state-file" type="file" accept=".mvpstate"><input id="state-name" type="text" placeholder="name"
+spellcheck="false" aria-label="State name" size="20"><button id="state-upload" type="button" disabled>Upload</button></div>
+<p id="state-msg" class="note" role="status"></p></div>`
+    : '';
   const packs = parts.packs
     ? `
 <div class="card"><h2>Roster packs</h2>
@@ -299,7 +420,7 @@ new version of a pack replaces the old one. Both players of an online game need 
     ? `
 <div class="card"><h1>Server disc</h1><p id="current" class="note">Asking the server...</p></div>`
     : `
-<div class="card"><h1>Server packs</h1></div>`;
+<div class="card"><h1>${parts.states ? 'Server' : 'Server packs'}</h1></div>`;
   const disc = parts.disc
     ? `
 <div class="card"><h2>Upload the disc image</h2>
@@ -315,7 +436,7 @@ new one is complete and checked. If the upload stops, choose the same file again
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><meta name="mvp-csrf" content="${escapeHtml(csrf)}">
 <title>Server disc - MVP Baseball 2005</title><link rel="icon" href="data:,"><style>${DISC_PAGE_CSS}</style></head><body>${TOPBAR_HTML}<main>
-${head}${access}${disc}${packs}
+${head}${access}${disc}${packs}${states}
 <p class="back"><a href="/">Back to the game</a></p>
-</main><script>${LINK_PAGE_SCRIPT}</script>${parts.disc ? `<script>${DISC_PAGE_SCRIPT}</script>` : ''}${parts.packs ? `<script>${PACKS_PAGE_SCRIPT}</script>` : ''}</body></html>`;
+</main><script>${LINK_PAGE_SCRIPT}</script>${parts.disc ? `<script>${DISC_PAGE_SCRIPT}</script>` : ''}${parts.packs ? `<script>${PACKS_PAGE_SCRIPT}</script>` : ''}${parts.states ? `<script>${STATES_PAGE_SCRIPT}</script>` : ''}</body></html>`;
 }

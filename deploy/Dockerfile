@@ -80,8 +80,11 @@ ENV NODE_ENV=production \
     MVP_SITE=/app/site \
     MVP_ACCESS_KEY_FILE=/data/access-key \
     MVP_ACCESS_KEY_CREATE=1 \
+    MVP_ADMIN_KEY_FILE=/data/admin-key \
+    MVP_ADMIN_KEY_CREATE=1 \
     MVP_DISC_DIR=/data/disc \
     MVP_PACKS_DIR=/data/packs \
+    MVP_STATES_DIR=/data/states \
     MVP_TURN_MODE=off \
     MVP_TURN_SECRET_FILE=/data/turn/secret \
     MVP_TURN_SECRET_CREATE=1 \
@@ -91,18 +94,20 @@ COPY --from=server /src/engine/server/package.json /app/server/package.json
 COPY --from=server /src/engine/server/dist/src /app/server/dist/src
 COPY --from=server /src/engine/server/node_modules /app/server/node_modules
 # The site is the engine's own file types only (as engine/server/tools/package.mjs); the manifest; the volume's
-# layout: /data (the access key, 0600), /data/disc (the uploaded disc, owner only), /data/packs (the uploaded
-# roster packs, owner only), /data/turn (coturn's secret, readable by coturn's own user in its container).
+# layout: /data (the access and admin keys, 0600), /data/disc (the uploaded disc, owner only), /data/packs (the
+# uploaded roster packs, owner only), /data/states (the admin's save states, owner only), /data/turn (coturn's
+# secret, readable by coturn's own user in its container). A volume from before keeps its own layout: the server
+# creates what is missing there (the admin key, states/) itself, as the node user that owns /data.
 RUN set -eu; \
     cd /app; \
     bad=$(find site -type f ! -regex '.*\.\(html\|css\|js\|wasm\|txt\|json\)$'); \
     if [ -n "$bad" ]; then echo "unexpected files in the site: $bad" >&2; exit 1; fi; \
     test -f site/index.html; test -f site/mvp-web.wasm; test -f site/main.js; test -f site/build-id.json; \
     find site server -type f | LC_ALL=C sort | xargs sha256sum > MANIFEST.txt; \
-    mkdir -p /data/disc /data/packs /data/turn; \
-    chown node:node /data /data/disc /data/packs /data/turn; \
+    mkdir -p /data/disc /data/packs /data/states /data/turn; \
+    chown node:node /data /data/disc /data/packs /data/states /data/turn; \
     chmod 0755 /data /data/turn; \
-    chmod 0700 /data/disc /data/packs
+    chmod 0700 /data/disc /data/packs /data/states
 USER node
 WORKDIR /app/server
 VOLUME ["/data"]

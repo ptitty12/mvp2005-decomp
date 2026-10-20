@@ -30,6 +30,7 @@ import { startServer, type App } from '../src/server.js';
 import { iceServers } from '../src/turn.js';
 
 const KEY = 'disc-upload-tests-0123456789';
+const ADMIN = 'disc-upload-admin-0123456789';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-disc-test-'));
 const site = join(dir, 'site');
 let counter = 0;
@@ -203,21 +204,28 @@ describe('disc identity check', () => {
 // ---- the upload ----
 
 function config(over: Partial<ServerConfig> = {}): ServerConfig {
-  return { ...defaults, site, accessKey: KEY, port: 0, discDir: join(dir, `disc-${++counter}`), expectDisc: EXPECT, ...over };
+  return { ...defaults, site, accessKey: KEY, adminKey: ADMIN, port: 0, discDir: join(dir, `disc-${++counter}`), expectDisc: EXPECT, ...over };
 }
 
-/** Opens the private link as a browser would; returns the access cookie. */
+/** Opens the player link as a browser would; returns the access cookie. */
 async function enter(app: App): Promise<string> {
   const r = await fetch(app.link, { redirect: 'manual' });
   assert.equal(r.status, 303);
   return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
 }
 
-/** A client of the Server disc page with access: its cookie and CSRF token. */
+/** Opens the admin link as a browser would; returns its cookies as a Cookie header. */
+async function enterAdmin(app: App): Promise<string> {
+  const r = await fetch(app.adminLink, { redirect: 'manual' });
+  assert.equal(r.status, 303);
+  return r.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+}
+
+/** A client of the Server disc page, the admin's: its cookies and CSRF token. */
 class Owner {
   constructor(readonly app: App, readonly cookie: string, readonly token: string) {}
   static async open(app: App): Promise<Owner> {
-    const cookie = await enter(app);
+    const cookie = await enterAdmin(app);
     const r = await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-security-policy'), DISC_PAGE_CSP);
@@ -265,11 +273,15 @@ describe('Server disc upload', () => {
     for (const a of running) await a.close();
   });
 
-  it('needs access, and is off without a disc directory', async () => {
+  it('is the admin\'s only, and off without a disc directory', async () => {
     const app = await start();
-    for (const p of ['/api/disc', '/api/disc/uploads']) {
-      const r = await fetch(`${app.url}${p}`, { method: p.endsWith('uploads') ? 'POST' : 'GET' });
-      assert.equal(r.status, 401, p);
+    const player = await enter(app);
+    for (const cookie of [undefined, player]) {
+      for (const p of ['/api/disc', '/api/disc/uploads']) {
+        const r = await fetch(`${app.url}${p}`, { method: p.endsWith('uploads') ? 'POST' : 'GET', headers: cookie ? { Cookie: cookie } : {} });
+        assert.equal(r.status, 401, p);
+      }
+      assert.equal((await fetch(`${app.url}/disc`, { headers: cookie ? { Cookie: cookie } : {} })).status, 404);
     }
     const off = await start({ discDir: '' });
     const cookie = await enter(off);
@@ -291,9 +303,8 @@ describe('Server disc upload', () => {
     assert.equal(r.status, 403);
     r = await o.api('POST', '/api/disc/uploads', body, 'text/plain');
     assert.equal(r.status, 415);
-    // The token is bound to the access cookie (the same for every browser with access): a server with another key
-    // has another cookie and another token.
-    const other = await start({ accessKey: 'another-key-0123456789' });
+    // The token is bound to the admin cookie: a server with another admin key has another cookie and another token.
+    const other = await start({ adminKey: 'another-admin-key-0123456789' });
     const elsewhere = await Owner.open(other);
     assert.notEqual(elsewhere.token, o.token);
     r = await o.api('POST', '/api/disc/uploads', body, 'application/json', { 'X-MVP-CSRF': elsewhere.token });
@@ -305,7 +316,9 @@ describe('Server disc upload', () => {
     const discDir = join(dir, 'resume');
     let app = await start({ discDir });
     let o = await Owner.open(app);
-    assert.deepEqual(await (await o.api('GET', '/config.json')).json(), { discPage: '/disc' });
+    const before = (await (await o.api('GET', '/config.json')).json()) as Record<string, unknown>;
+    assert.equal(before.discPage, '/disc');
+    assert.equal(before.disc, undefined);  // no image yet
     let st = await o.status();
     assert.equal(st.disc, null);
     assert.equal(st.upload, null);

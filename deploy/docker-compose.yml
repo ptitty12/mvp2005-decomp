@@ -12,18 +12,25 @@
 #   TURN_EXTERNAL_IP  the server's public IPv4 address, for coturn; detected when empty
 #   TURN_HOST         where players reach coturn; default: the site's own host name. Set it to the
 #                     server's IP address when the domain goes through a proxy (e.g. Cloudflare's orange cloud)
-#   ACCESS_KEY        empty (default): the key of the private link is generated on the first start and
+#   ACCESS_KEY        empty (default): the key of the player link (it lets a browser play with the
+#                     server's disc; the site itself is open to anyone) is generated on the first start and
 #                     kept in the volume. Set it to any new value of 16 or more letters, digits, ".", "_",
 #                     "~" or "-" to replace the link (e.g. to lock out a leaked one): every browser then
 #                     needs the new link. Keep it set; removing it brings back the generated link
+#   ADMIN_KEY         empty (default): the key of the admin link (the Server disc page and the save
+#                     states, the owner's only) is generated on the first start and kept in the volume.
+#                     Set it the same way to replace the admin link
 #
 # Everything that must survive a redeploy is in the named volume mvp-data (/data):
-#   access-key   the key of the private link https://<site>/?key=<key>, generated on the first start
+#   access-key   the key of the player link https://<site>/?key=<key>, generated on the first start
+#                (owner-only file)
+#   admin-key    the key of the admin link https://<site>/?admin=<key>, generated on the first start
 #                (owner-only file)
 #   disc/        the disc image uploaded on the Server disc page (owner-only directory), and its
 #                piece hashes for the players' one-time download (GV4E69.manifest.json)
 #   packs/       roster packs uploaded on the same page (owner-only directory), offered to the
 #                players in the game page's Roster packs list
+#   states/      the admin's save states (owner-only directory, gzipped), for the admin only
 #   turn/secret  the TURN shared secret, generated on the first start and read by coturn
 # The images hold no game data and no secrets.
 #
@@ -45,6 +52,7 @@ services:
       MVP_TURN_MODE: ${TURN_MODE:-relay}
       MVP_TURN_HOST: ${TURN_HOST:-}
       MVP_ACCESS_KEY: ${ACCESS_KEY:-}
+      MVP_ADMIN_KEY: ${ADMIN_KEY:-}
     volumes:
       - mvp-data:/data
     expose:

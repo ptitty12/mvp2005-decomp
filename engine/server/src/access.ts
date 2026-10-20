@@ -1,25 +1,37 @@
-// Access to the private server: a private link instead of a password (owner,
-// 2026-10-17). The owner opens https://site/?key=<key> once in each browser;
-// the server answers with a cookie that keeps that browser in for 400 days
-// (renewed on every page load), and nobody ever types anything.
+// Who may do what on the server (owner, 2026-10-20: "just anyone who goes to the
+// site should be able to access", "only i should be able to see /access the save
+// states"; DECISIONS). The site is open: anyone can load the page, play with a
+// disc image of their own, use the lobby and the roster packs. Two links give a
+// browser more, each opened once (the server answers with a cookie that lasts
+// 400 days, renewed on every page load, and nobody types anything):
 //
-// The cookie is HMAC-SHA256(key, "mvp-access-v1"): stateless, so it survives
-// restarts and redeploys, and a new key (MVP_ACCESS_KEY) locks out every
-// browser at once. Lobby invite links carry the key, so an invite also lets a
-// new browser in. A browser without the cookie sees only a short "private
-// server" page (noAccessPage) or a 401.
+// - the player link, https://site/?key=<access key>: this server's own disc
+//   image. It stays behind a link because serving the whole retail disc to
+//   anyone who finds the address would be distributing it (DECISIONS
+//   2026-10-17). Lobby invites carry it, and browsers that opened the old
+//   private link keep it.
+// - the admin link, https://site/?admin=<admin key>: the owner. The Server disc
+//   page (the disc and pack uploads) and the save states (src/state_store.ts).
+//   The admin is a player too.
+//
+// Each cookie is HMAC-SHA256(key, label): stateless, so it survives restarts and
+// redeploys, and a new key takes that access from every browser at once.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
-import { THEME_CSS, TOPBAR_HTML } from './theme.js';
-
 export const ACCESS_COOKIE = 'mvp_access';
+export const ADMIN_COOKIE = 'mvp_admin';
 /** How long a browser keeps access after its last page load (400 days: browsers cap cookie lifetimes there). */
 export const ACCESS_DAYS = 400;
 
-/** The cookie value that shows a browser opened the private link. */
+/** The cookie value that shows a browser opened the player link. */
 export function accessToken(key: string): string {
   return createHmac('sha256', key).update('mvp-access-v1').digest('base64url');
+}
+
+/** The cookie value that shows a browser opened the admin link. */
+export function adminToken(key: string): string {
+  return createHmac('sha256', key).update('mvp-admin-v1').digest('base64url');
 }
 
 /** Compares a candidate with a secret in constant time (hashed first, so the lengths do not show either). */
@@ -30,13 +42,26 @@ export function sameSecret(candidate: string | null | undefined, secret: string)
   return timingSafeEqual(a, b);
 }
 
-export function accessCookie(token: string, secure: boolean): string {
-  return `${ACCESS_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ACCESS_DAYS * 86400}${secure ? '; Secure' : ''}`;
+function cookie(name: string, token: string, secure: boolean): string {
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ACCESS_DAYS * 86400}${secure ? '; Secure' : ''}`;
 }
 
-/** The private link on `origin` ("https://mvp.example.com"); `room`: an invite link to that game. */
+export function accessCookie(token: string, secure: boolean): string {
+  return cookie(ACCESS_COOKIE, token, secure);
+}
+
+export function adminCookie(token: string, secure: boolean): string {
+  return cookie(ADMIN_COOKIE, token, secure);
+}
+
+/** The player link on `origin` ("https://mvp.example.com"); `room`: an invite link to that game. */
 export function privateLink(origin: string, key: string, room?: string): string {
   return `${origin}/?${room ? `room=${encodeURIComponent(room)}&` : ''}key=${encodeURIComponent(key)}`;
+}
+
+/** The admin link on `origin`. */
+export function adminLink(origin: string, key: string): string {
+  return `${origin}/?admin=${encodeURIComponent(key)}`;
 }
 
 export function parseCookies(header: string | undefined): Map<string, string> {
@@ -50,7 +75,7 @@ export function parseCookies(header: string | undefined): Map<string, string> {
   return out;
 }
 
-/** Whether a request is a page load (gets the "private server" page) rather than an API call (gets 401). */
+/** Whether a request is a page load rather than an API call. */
 export function isNavigation(req: IncomingMessage): boolean {
   const mode = req.headers['sec-fetch-mode'];
   if (mode) return mode === 'navigate';
@@ -59,21 +84,4 @@ export function isNavigation(req: IncomingMessage): boolean {
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
-// ---- the page a browser without access sees ----
-
-/** The game page's look (src/theme.ts), with one narrow card. */
-export const NO_ACCESS_CSS = `${THEME_CSS}
-main,.title{max-width:512px}main{margin-top:12vh}`;
-
-const sha = (s: string) => `'sha256-${createHash('sha256').update(s).digest('base64')}'`;
-/** CSP of the "private server" page: its one style by hash, no script. */
-export const NO_ACCESS_CSP = `default-src 'none'; style-src ${sha(NO_ACCESS_CSS)}; img-src data:; frame-ancestors 'none'; base-uri 'none'`;
-
-/** The "private server" page: says nothing about the server beyond that. */
-export function noAccessPage(): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>MVP Baseball 2005</title><link rel="icon" href="data:,"><style>${NO_ACCESS_CSS}</style></head><body>
-${TOPBAR_HTML}<main><div class="card"><h1>Private server</h1><p>This is a private server. Open the private link you were sent.</p></div></main></body></html>`;
 }

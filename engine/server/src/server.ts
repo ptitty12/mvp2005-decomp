@@ -1,26 +1,33 @@
 // The VPS server (E5): one Node process behind a TLS reverse proxy.
 //
-//   any  /...?key=<key>                      the private link (src/access.ts): 303 to the same
-//                                            address without the key, with the access cookie
-//   GET  /healthz                            "ok" (open; for monitoring)
-//   GET  /robots.txt                         "Disallow: /" (open)
-//   GET  /config.json                        {"disc":"/api/disc/image"} or {}; "discPage" with uploads; with a
-//                                            disc also "discHash", "discSize" and "discManifest" (P1), or
-//                                            "discPreparing" while the image is being hashed
-//   GET/HEAD /api/disc/image                 the owner's disc image (src/files.ts)
+// Who may do what (src/access.ts): anyone, a player (opened the player link, or
+// an invite: this server's disc) and the admin (opened the admin link).
+//
+//   any  /...?key=<key>                      the player link: 303 to the same address without the
+//                                            key, with the access cookie
+//   any  /...?admin=<key>                    the admin link: the same, with the admin cookie too
+//   GET  /healthz                            "ok" (for monitoring)
+//   GET  /robots.txt                         "Disallow: /"
+//   GET  /config.json                        what this browser may use: "packs"; a player also "disc"
+//                                            ("/api/disc/image") with "discHash", "discSize" and
+//                                            "discManifest" (P1), or "discPreparing" while the image is
+//                                            being hashed; the admin also "admin", "adminToken",
+//                                            "discPage" and "states"
+//   GET/HEAD /api/disc/image                 the owner's disc image (src/files.ts): players
 //   GET  /api/disc/manifest                  the image's piece hashes, for the players' one-time download
-//                                            into their own browser storage (src/disc_hash.ts)
+//                                            into their own browser storage (src/disc_hash.ts): players
 //   GET  /disc, /api/disc, /api/disc/uploads  the Server disc page and its chunked upload (deploy:
-//                                            src/disc_page.ts, src/disc_store.ts), with uploads on
+//                                            src/disc_page.ts, src/disc_store.ts): the admin
 //   GET  /api/packs, /api/packs/<file>       the roster packs the pages offer in a dropdown, and one
 //                                            pack's zip (src/pack_store.ts), with a packs directory
-//   POST /api/packs, DELETE /api/packs/<file> upload or remove a pack (the Server disc page, its token)
+//   POST /api/packs, DELETE /api/packs/<file> upload or remove a pack: the admin, from its pages
+//   GET  /api/states, /api/states/<name>     the admin's save states and one of them (gzipped,
+//                                            src/state_store.ts), with a states directory
+//   POST /api/states/<name>, DELETE ...      store (the body) or remove a state: the admin, from its pages
+//   GET  /states/<name>.mvpstate             one of them for the game page's ?state=<name>: the admin
 //   GET  /api/rooms                          open rooms (src/lobby.ts)
-//   WS   /ws                                 lobby and WebRTC signaling
+//   WS   /ws                                 lobby and WebRTC signaling (this site's pages only)
 //   GET  anything else                       the engine site (static files)
-//
-// Everything except /healthz and /robots.txt needs the access cookie: a page
-// load without it gets the "private server" page (403), anything else 401.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -29,11 +36,13 @@ import { WebSocketServer } from 'ws';
 
 import {
   ACCESS_COOKIE,
-  NO_ACCESS_CSP,
+  ADMIN_COOKIE,
   accessCookie,
   accessToken,
+  adminCookie,
+  adminLink,
+  adminToken,
   isNavigation,
-  noAccessPage,
   parseCookies,
   privateLink,
   sameSecret,
@@ -44,6 +53,7 @@ import { ManifestCache } from './disc_hash.js';
 import { DiscStore, type Answer } from './disc_store.js';
 import { serveDisc, serveStatic } from './files.js';
 import { PackStore } from './pack_store.js';
+import { StateStore } from './state_store.js';
 import { Lobby } from './lobby.js';
 import { iceServers } from './turn.js';
 
@@ -72,8 +82,10 @@ export interface App {
   lobby: Lobby;
   /** http://127.0.0.1:port */
   url: string;
-  /** The private link on `url` (tests and tools): opening it gives a browser access. */
+  /** The player link on `url` (tests and tools): opening it lets a browser use the server's disc. */
   link: string;
+  /** The admin link on `url` (tests and tools); '' without an admin key. */
+  adminLink: string;
   /** Resolves when the served disc's manifest is computed (or cannot be): tests. */
   discReady(): Promise<void>;
   close(): Promise<void>;
@@ -143,9 +155,13 @@ function sameOriginPost(req: IncomingMessage, cfg: ServerConfig): boolean {
 export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise<App> {
   const now = opts.now ?? Date.now;
   const log = opts.log ?? ((m: string) => console.log(`mvp-server: ${m}`));
-  // The access cookie's value: the same for every browser with access, and across restarts (src/access.ts).
+  // The cookies' values: the same for every browser with that access, and across restarts (src/access.ts).
   const token = accessToken(cfg.accessKey);
-  const hasAccess = (req: IncomingMessage) => sameSecret(parseCookies(req.headers.cookie).get(ACCESS_COOKIE), token);
+  const adminTok = cfg.adminKey ? adminToken(cfg.adminKey) : '';
+  /** The admin: opened the admin link (never without an admin key). */
+  const isAdmin = (req: IncomingMessage) => !!adminTok && sameSecret(parseCookies(req.headers.cookie).get(ADMIN_COOKIE), adminTok);
+  /** A player: opened the player link (or an invite), or is the admin. Players may use the server's disc. */
+  const isPlayer = (req: IncomingMessage) => sameSecret(parseCookies(req.headers.cookie).get(ACCESS_COOKIE), token) || isAdmin(req);
   const lobby = new Lobby({
     // An invite carries the key, so it also lets the other player's browser in.
     invite: (room, origin) => privateLink(origin, cfg.accessKey, room),
@@ -156,6 +172,9 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
   const store = cfg.discDir ? await DiscStore.open({ dir: cfg.discDir, expect: cfg.expectDisc, maxBytes: cfg.maxDiscBytes, now, log }) : null;
   // Roster packs the pages offer in a dropdown: only when a packs directory is configured.
   const packs = cfg.packsDir ? await PackStore.open({ dir: cfg.packsDir, maxBytes: cfg.maxPackBytes, log }) : null;
+  // The admin's save states: only with a states directory and an admin to see them.
+  const states = cfg.statesDir && cfg.adminKey ? await StateStore.open({ dir: cfg.statesDir, maxBytes: cfg.maxStateBytes, log }) : null;
+  if (cfg.statesDir && !cfg.adminKey) log('save states are off: they need an admin key (MVP_ADMIN_KEY or MVP_ADMIN_KEY_FILE)');
   /**
    * The image the disc route serves, its URL and version: an uploaded one, else the configured file.
    * `sidecar`: where its manifest is kept between restarts (uploads only).
@@ -172,10 +191,10 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     if (d) void manifests.get(d.path, d.sidecar);
   };
   warmManifest();
-  // CSRF tokens of the Server disc page: bound to the access cookie, under a key derived from the access key, so
-  // an open page keeps working across a restart (an upload continues) and a page elsewhere can neither read nor
-  // forge one.
-  const discKey = createHmac('sha256', cfg.accessKey).update('mvp-disc-csrf-v1').digest();
+  // CSRF tokens of the admin's pages (the Server disc page; the game page gets its own in /config.json): bound to
+  // the admin cookie, under a key derived from the admin key, so an open page keeps working across a restart (an
+  // upload continues) and a page elsewhere can neither read nor forge one.
+  const discKey = createHmac('sha256', cfg.adminKey || cfg.accessKey).update('mvp-disc-csrf-v1').digest();
   const discToken = (cookie: string) => createHmac('sha256', discKey).update(`disc:${cookie}`).digest('base64url');
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
@@ -191,9 +210,10 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
    * Each request must come from the page itself: the X-MVP-CSRF header holds the page's token,
    * Sec-Fetch-Site (when sent) says same-origin and Origin (when sent) is this site.
    */
-  /** A request from the Server disc page itself: its CSRF token, same-origin. */
+  /** A request from one of the admin's pages: the admin cookie, the page's CSRF token, same-origin. */
   const fromDiscPage = (req: IncomingMessage): boolean => {
-    const cookie = parseCookies(req.headers.cookie).get(ACCESS_COOKIE)!;
+    if (!isAdmin(req)) return false;
+    const cookie = parseCookies(req.headers.cookie).get(ADMIN_COOKIE)!;
     const got = String(req.headers['x-mvp-csrf'] ?? '');
     const want = discToken(cookie);
     const tokenOk = got.length === want.length && timingSafeEqual(Buffer.from(got), Buffer.from(want));
@@ -277,6 +297,75 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     res.writeHead(200, { ...headers, 'Content-Length': String(info.size) }).end(data);
   };
 
+  /** One stored state as the file it is (gzipped): the browser inflates it (Content-Encoding). */
+  const sendState = async (res: ServerResponse, method: string, name: string): Promise<void> => {
+    const p = await states!.path(name);
+    if (!p) {
+      sendJson(res, { status: 404, body: { error: 'No such state.' } });
+      return;
+    }
+    const data = await readFile(p);
+    res
+      .writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Encoding': 'gzip',
+        'Content-Length': String(data.length),
+        'Cache-Control': 'private, no-store',
+      })
+      .end(method === 'HEAD' ? undefined : data);
+  };
+
+  /**
+   * The admin's save states (src/state_store.ts), for the admin only (the caller checked):
+   *   GET          /api/states          {states: [{name, label, frame, mods, packs, size, saved}]}
+   *   GET/HEAD     /api/states/<name>   the state (gzipped, Content-Encoding: gzip)
+   *   POST         /api/states/<name>   store the body (a state, gzipped or not) under that name, replacing one
+   *   DELETE       /api/states/<name>   remove it
+   * POST and DELETE come from the admin's pages (the CSRF token).
+   */
+  const handleStates = async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<void> => {
+    const rest = path.slice('/api/states'.length);
+    if (rest === '' || rest === '/') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.writeHead(405, { Allow: 'GET, HEAD' }).end();
+        return;
+      }
+      res
+        .writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' })
+        .end(method === 'HEAD' ? undefined : JSON.stringify({ states: await states!.list() }));
+      return;
+    }
+    const name = rest.slice(1);
+    if (!StateStore.validName(name)) {
+      sendJson(res, { status: 404, body: { error: 'No such state.' } });
+      return;
+    }
+    if (method === 'GET' || method === 'HEAD') {
+      await sendState(res, method, name);
+      return;
+    }
+    if (method !== 'POST' && method !== 'DELETE') {
+      res.writeHead(405, { Allow: 'GET, HEAD, POST, DELETE' }).end();
+      return;
+    }
+    if (!fromDiscPage(req)) {
+      sendJson(res, { status: 403, body: { error: 'This request must come from a page of this site, opened by its admin.' } });
+      return;
+    }
+    if (method === 'DELETE') {
+      sendJson(res, await states!.remove(name));
+      return;
+    }
+    const tooLarge = { status: 413, body: { error: `A save state can be at most ${Math.floor(states!.maxBytes / 1048576)} MB.` } };
+    if (Number(req.headers['content-length'] ?? 0) > states!.maxBytes) {
+      res.setHeader('Connection', 'close');  // refuse at once; do not wait for a body this large
+      sendJson(res, tooLarge);
+      return;
+    }
+    const body = await readBodyBytes(req, states!.maxBytes);
+    sendJson(res, body === null ? tooLarge : await states!.save(name, body));
+  };
+
   const handleUpload = async (req: IncomingMessage, res: ServerResponse, method: string, path: string, url: URL): Promise<void> => {
     if (!fromDiscPage(req)) {
       sendJson(res, { status: 403, body: { error: 'This request must come from the Server disc page of this site.' } });
@@ -338,15 +427,18 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     const path = decodeURIComponent(url.pathname);
     const method = req.method ?? 'GET';
 
-    // The private link: the right key gives this browser the cookie and goes on to the same address without the key
-    // (so it stays out of the address bar, history and bookmarks).
+    // The player and admin links: the right key gives this browser its cookie(s) and goes on to the same address
+    // without the key (so it stays out of the address bar, history and bookmarks). A wrong key gives nothing.
     const key = url.searchParams.get('key');
-    if (key !== null && sameSecret(key, cfg.accessKey)) {
+    const admin = url.searchParams.get('admin');
+    const adminOk = admin !== null && !!cfg.adminKey && sameSecret(admin, cfg.adminKey);
+    if (adminOk || (key !== null && sameSecret(key, cfg.accessKey))) {
       url.searchParams.delete('key');
+      url.searchParams.delete('admin');
       const location = url.pathname.replace(/^\/+/, '/') + url.search;  // never "//host"
-      res
-        .writeHead(303, { Location: location, 'Set-Cookie': accessCookie(token, cfg.secureCookies), 'Cache-Control': 'no-store' })
-        .end();
+      const cookies = [accessCookie(token, cfg.secureCookies)];
+      if (adminOk) cookies.push(adminCookie(adminTok, cfg.secureCookies));
+      res.writeHead(303, { Location: location, 'Set-Cookie': cookies, 'Cache-Control': 'no-store' }).end();
       return;
     }
     if (path === '/healthz') {
@@ -358,25 +450,29 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       return;
     }
 
-    // ---- everything below needs access (a wrong key counts as none) ----
-    if (key !== null || !hasAccess(req)) {
-      if (isNavigation(req)) {
-        res
-          .writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': NO_ACCESS_CSP })
-          .end(noAccessPage());
-      } else {
-        res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"no access"}');
-      }
-      return;
+    // ---- open to anyone from here; the player's and the admin's routes check for themselves ----
+    const player = isPlayer(req), owner = isAdmin(req);
+    /** The answer for a route this browser may not use: 401, without saying more. */
+    const noAccess = () => res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end('{"error":"no access"}');
+    // Every page load renews the cookies: a browser in use keeps its access.
+    if (method === 'GET' && isNavigation(req)) {
+      const renew: string[] = [];
+      if (player) renew.push(accessCookie(token, cfg.secureCookies));
+      if (owner) renew.push(adminCookie(adminTok, cfg.secureCookies));
+      if (renew.length) res.setHeader('Set-Cookie', renew);
     }
-    // Every page load renews the cookie: a browser in use keeps access.
-    if (method === 'GET' && isNavigation(req)) res.setHeader('Set-Cookie', accessCookie(token, cfg.secureCookies));
     if (store && path.startsWith('/api/disc/uploads')) {
-      await handleUpload(req, res, method, path, url);
+      if (!owner) noAccess();
+      else await handleUpload(req, res, method, path, url);
       return;
     }
     if (packs && (path === '/api/packs' || path.startsWith('/api/packs/'))) {
       await handlePacks(req, res, method, path);
+      return;
+    }
+    if (states && (path === '/api/states' || path.startsWith('/api/states/'))) {
+      if (!owner) noAccess();
+      else await handleStates(req, res, method, path);
       return;
     }
     if (method !== 'GET' && method !== 'HEAD') {
@@ -384,7 +480,7 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       return;
     }
     if (path === '/config.json') {
-      const d = servedDisc();
+      const d = player ? servedDisc() : null;  // the server's disc is for players only
       const body: Record<string, string | number | boolean> = {};
       if (d) {
         body.disc = d.url;
@@ -397,9 +493,19 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
           body.discManifest = d.version ? `/api/disc/manifest?v=${d.version}` : '/api/disc/manifest';
         }
       }
-      if (store || packs) body.discPage = '/disc';
       if (packs) body.packs = '/api/packs';
+      if (owner) {
+        body.admin = true;
+        // The CSRF token the game page sends with the admin's own requests (storing and removing save states).
+        body.adminToken = discToken(parseCookies(req.headers.cookie).get(ADMIN_COOKIE)!);
+        if (store || packs || states) body.discPage = '/disc';
+        if (states) body.states = '/api/states';
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' }).end(JSON.stringify(body));
+      return;
+    }
+    if ((path === '/api/disc/manifest' || path === '/api/disc/image') && !player) {
+      noAccess();
       return;
     }
     if (path === '/api/disc/manifest') {
@@ -430,19 +536,27 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       await serveDisc(d.path, req, res);
       return;
     }
-    if ((store || packs) && path === '/disc') {
-      const csrf = discToken(parseCookies(req.headers.cookie).get(ACCESS_COOKIE)!);
-      // The private link as the owner would send it: on the public URL, else on the address this page was opened at.
+    // The Server disc page is the admin's; for anyone else it does not exist.
+    if (owner && (store || packs || states) && path === '/disc') {
+      const csrf = discToken(parseCookies(req.headers.cookie).get(ADMIN_COOKIE)!);
+      // The player link as the owner would send it: on the public URL, else on the address this page was opened at.
       const origin = cfg.publicUrl
         ? new URL(cfg.publicUrl).origin
         : `${cfg.secureCookies ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}`;
       res
         .writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': DISC_PAGE_CSP })
-        .end(method === 'HEAD' ? undefined : discPage(csrf, privateLink(origin, cfg.accessKey), { disc: !!store, packs: !!packs }));
+        .end(method === 'HEAD' ? undefined : discPage(csrf, privateLink(origin, cfg.accessKey), { disc: !!store, packs: !!packs, states: !!states }));
       return;
     }
     if (store && path === '/api/disc') {
-      sendJson(res, { status: 200, body: store.status() });
+      if (!owner) noAccess();
+      else sendJson(res, { status: 200, body: store.status() });
+      return;
+    }
+    // ?state=<name> on the game page: /states/<name>.mvpstate (src/state_store.ts), the admin's only.
+    if (states && path.startsWith('/states/') && path.endsWith('.mvpstate')) {
+      if (!owner) noAccess();
+      else await sendState(res, method, path.slice('/states/'.length, -'.mvpstate'.length));
       return;
     }
     if (path === '/api/rooms') {
@@ -466,7 +580,7 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
 
   server.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0];
-    if (path !== '/ws' || !hasAccess(req) || !originAllowed(req, cfg)) {
+    if (path !== '/ws' || !originAllowed(req, cfg)) {  // the site's own pages only (anyone may play)
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       socket.destroy();
       return;
@@ -504,6 +618,7 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     lobby,
     url: local,
     link: privateLink(local, cfg.accessKey),
+    adminLink: cfg.adminKey ? adminLink(local, cfg.adminKey) : '',
     discReady: async () => {
       const d = servedDisc();
       if (d) await manifests.ready(d.path, d.sidecar);

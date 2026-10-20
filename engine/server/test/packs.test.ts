@@ -14,6 +14,7 @@ import { checkPack, readZipManifest } from '../src/pack_store.js';
 import { startServer, type App } from '../src/server.js';
 
 const KEY = 'pack-tests-0123456789';
+const ADMIN = 'pack-tests-admin-0123456789';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-pack-test-'));
 const site = join(dir, 'site');
 let counter = 0;
@@ -104,7 +105,7 @@ describe('pack zips', () => {
 describe('roster packs on the server', () => {
   const running: App[] = [];
   const start = async (over: Partial<ServerConfig> = {}) => {
-    const app = await startServer({ ...defaults, site, accessKey: KEY, port: 0, packsDir: join(dir, `packs-${++counter}`), ...over },
+    const app = await startServer({ ...defaults, site, accessKey: KEY, adminKey: ADMIN, port: 0, packsDir: join(dir, `packs-${++counter}`), ...over },
       { log: () => {} });
     running.push(app);
     return app;
@@ -112,14 +113,17 @@ describe('roster packs on the server', () => {
   after(async () => {
     for (const a of running) await a.close();
   });
-  /** Opens the private link as a browser would; returns the access cookie. */
+  /** Opens the player link as a browser would; returns the access cookie. */
   const enter = async (app: App) => {
     const r = await fetch(app.link, { redirect: 'manual' });
     assert.equal(r.status, 303);
     return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
   };
+  /** The admin on the Server disc page: its cookies, CSRF token and HTML. */
   const owner = async (app: App) => {
-    const cookie = await enter(app);
+    const r0 = await fetch(app.adminLink, { redirect: 'manual' });
+    assert.equal(r0.status, 303);
+    const cookie = r0.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
     const r = await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('content-security-policy'), DISC_PAGE_CSP);
@@ -140,17 +144,20 @@ describe('roster packs on the server', () => {
     assert.equal((await fetch(`${app.url}/disc`, { headers: { Cookie: cookie } })).status, 404);
   });
 
-  it('needs access, and names the packs and the page in /config.json', async () => {
+  it('lets anyone list and download packs, names them in /config.json, and leaves the page to the admin', async () => {
     const app = await start();
-    assert.equal((await fetch(`${app.url}/api/packs`)).status, 401);
-    assert.equal((await fetch(`${app.url}/api/packs/test-league.zip`)).status, 401);
-    assert.equal((await fetch(`${app.url}/disc`)).status, 401);
+    assert.equal((await fetch(`${app.url}/api/packs`)).status, 200);
+    assert.equal((await fetch(`${app.url}/api/packs/test-league.zip`)).status, 404);  // no such pack (yet)
+    assert.equal((await fetch(`${app.url}/disc`)).status, 404);
+    assert.equal((await fetch(`${app.url}/disc`, { headers: { Cookie: await enter(app) } })).status, 404);  // a player is not the admin
+    const anyone = await (await fetch(`${app.url}/config.json`)).json() as Record<string, unknown>;
+    assert.deepEqual(anyone, { packs: '/api/packs' });
     const o = await owner(app);
     assert.match(o.html, /Roster packs/);
     assert.doesNotMatch(o.html, /Upload the disc image/);  // no disc directory: the packs part only
-    // The private link comes first, on the address the page was opened at, with a Copy button.
-    assert.ok(o.html.indexOf('Private link') < o.html.indexOf('Roster packs'));
-    assert.ok(o.html.includes(`id="link" type="text" readonly size="48" spellcheck="false" aria-label="Private link" value="${app.link}"`), app.link);
+    // The player link comes first, on the address the page was opened at, with a Copy button.
+    assert.ok(o.html.indexOf('Player link') < o.html.indexOf('Roster packs'));
+    assert.ok(o.html.includes(`id="link" type="text" readonly size="48" spellcheck="false" aria-label="Player link" value="${app.link}"`), app.link);
     assert.match(o.html, /<button id="copy" type="button">Copy<\/button>/);
     // Every script on the page is pinned in its CSP.
     for (const [, script] of o.html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
@@ -169,6 +176,7 @@ describe('roster packs on the server', () => {
     const app = await start();
     const o = await owner(app);
     assert.equal((await send(app, { ...o, token: 'x'.repeat(43) }, 'POST', '/api/packs', pack())).status, 403);
+    assert.equal((await send(app, { ...o, cookie: await enter(app) }, 'POST', '/api/packs', pack())).status, 403);  // a player, not the admin
     assert.equal((await send(app, o, 'POST', '/api/packs', pack(), 'application/zip', { 'Sec-Fetch-Site': 'cross-site' })).status, 403);
     assert.equal((await send(app, o, 'POST', '/api/packs', pack(), 'text/plain')).status, 415);
     const bad = await send(app, o, 'POST', '/api/packs', pack({ game: 'GXXE01-0' }));

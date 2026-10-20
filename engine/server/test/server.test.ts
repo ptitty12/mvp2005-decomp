@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
-import { ACCESS_COOKIE, NO_ACCESS_CSP, accessToken, parseCookies } from '../src/access.js';
+import { ACCESS_COOKIE, ADMIN_COOKIE, accessToken, adminToken, parseCookies } from '../src/access.js';
 import { defaults, loadConfig, type ServerConfig } from '../src/config.js';
 import { parseRange } from '../src/files.js';
 import { parseClientMsg } from '../src/lobby.js';
@@ -19,6 +19,7 @@ import { SITE_CSP, startServer, type App } from '../src/server.js';
 import { turnCredentials } from '../src/turn.js';
 
 const KEY = 'test-access-key.0123456789~';
+const ADMIN = 'test-admin-key.0123456789~ab';
 const dir = mkdtempSync(join(tmpdir(), 'mvp-server-test-'));
 const site = join(dir, 'site');
 const discPath = join(dir, 'disc.bin');
@@ -66,47 +67,51 @@ function rawGet(app: App, path: string, headers: Record<string, string>): Promis
 
 const NAVIGATE = { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' };
 
-/** Opens the private link as a browser would; returns the cookie it gets ("mvp_access=..."). */
+/** Opens the player link as a browser would; returns the cookie it gets ("mvp_access=..."). */
 async function enter(app: App): Promise<string> {
   const r = await fetch(app.link, { redirect: 'manual' });
   assert.equal(r.status, 303);
   return (r.headers.get('set-cookie') ?? '').split(';')[0]!;
 }
 
-describe('private link', () => {
+/** Opens the admin link as a browser would; returns its cookies as a Cookie header ("mvp_access=...; mvp_admin=..."). */
+async function enterAdmin(app: App): Promise<string> {
+  const r = await fetch(app.adminLink, { redirect: 'manual' });
+  assert.equal(r.status, 303);
+  return r.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+}
+
+describe('access: an open site, the player link and the admin link', () => {
   let app: App;
-  before(async () => (app = await startServer(config())));
+  before(async () => (app = await startServer(config({ adminKey: ADMIN }))));
   after(() => app.close());
 
-  it('shows page loads without access the private-server page, and gives API calls a 401', async () => {
+  it('opens the site to anyone, and the server disc only to players', async () => {
     let raw = await rawGet(app, '/?room=abc', NAVIGATE);
-    assert.equal(raw.status, 403);
+    assert.equal(raw.status, 200);
+    assert.equal(raw.body, '<!doctype html><title>engine</title>');
     assert.equal(raw.cookie, undefined);
-    assert.equal(raw.headers['content-security-policy'], NO_ACCESS_CSP);
-    assert.match(NO_ACCESS_CSP, /^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; img-src data:; frame-ancestors 'none'; base-uri 'none'$/);
+    assert.equal(raw.headers['content-security-policy'], SITE_CSP);
     assert.equal(raw.headers['x-robots-tag'], 'noindex, nofollow');
-    assert.match(raw.body, /This is a private server\. Open the private link you were sent\./);
-    assert.match(raw.body, /<meta name="robots" content="noindex">/);
-    assert.doesNotMatch(raw.body, /<script|<form|<a /);
     raw = await rawGet(app, '/main.js', { 'Sec-Fetch-Mode': 'navigate' });
-    assert.equal(raw.status, 403);
-    raw = await rawGet(app, '/', { Accept: 'text/html,application/xhtml+xml' });  // curl-like, no Sec-Fetch-*
-    assert.equal(raw.status, 403);
-    raw = await rawGet(app, '/config.json', { Accept: '*/*', 'Sec-Fetch-Mode': 'cors' });
-    assert.equal(raw.status, 401);
-    let r: Response;
-    for (const p of ['/config.json', '/api/disc/image', '/api/rooms', '/main.js', '/nothing', '/login', '/setup']) {
+    assert.equal(raw.status, 200);
+    let r = await fetch(`${app.url}/config.json`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), {});  // no disc, no admin
+    assert.equal((await fetch(`${app.url}/api/rooms`)).status, 200);
+    for (const p of ['/api/disc/image', '/api/disc/manifest']) {
       r = await fetch(`${app.url}${p}`, { redirect: 'manual' });
       assert.equal(r.status, 401, p);
       assert.deepEqual(await r.json(), { error: 'no access' });
     }
     r = await fetch(`${app.url}/api/disc/image`, { method: 'HEAD', redirect: 'manual' });
     assert.equal(r.status, 401);
-    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `${ACCESS_COOKIE}=${'x'.repeat(43)}` } });
-    assert.equal(r.status, 401);
+    // A made-up cookie is no cookie.
+    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `${ACCESS_COOKIE}=${'x'.repeat(43)}; ${ADMIN_COOKIE}=${'y'.repeat(43)}` } });
+    assert.deepEqual(await r.json(), {});
   });
 
-  it('lets a browser in with the right key: 303 to the same address without it, and a lasting cookie', async () => {
+  it('gives a browser the disc with the player link: 303 to the same address without the key, and a lasting cookie', async () => {
     assert.equal(app.link, `${app.url}/?key=${KEY}`);
     let r = await fetch(`${app.url}/?room=ab&key=${KEY}`, { redirect: 'manual' });
     assert.equal(r.status, 303);
@@ -134,55 +139,94 @@ describe('private link', () => {
       assert.equal(raw.status, 303, from);
       assert.match(raw.location ?? '', /^\/(?!\/)/, from);
     }
-    // In: the site, and every page load renews the cookie (API calls do not).
-    r = await fetch(`${app.url}/`, { headers: { Cookie: cookie } });
+    // A player: the disc, and every page load renews the cookie (API calls do not).
+    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `other=1; ${cookie}` } });
     assert.equal(r.status, 200);
-    assert.equal(await r.text(), '<!doctype html><title>engine</title>');
-    assert.equal(r.headers.get('content-security-policy'), SITE_CSP);
-    assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
-    assert.equal(r.headers.get('x-robots-tag'), 'noindex, nofollow');
     assert.equal(r.headers.get('set-cookie'), null);
+    const body = (await r.json()) as Record<string, unknown>;
+    assert.equal(body.disc, '/api/disc/image');
+    assert.equal(body.admin, undefined);
+    assert.equal((await fetch(`${app.url}/api/disc/image`, { method: 'HEAD', headers: { Cookie: cookie } })).status, 200);
     const raw = await rawGet(app, '/?room=ab', { ...NAVIGATE, Cookie: cookie });
     assert.equal(raw.status, 200);
     assert.equal(raw.cookie, sc);
-    r = await fetch(`${app.url}/config.json`, { headers: { Cookie: `other=1; ${cookie}` } });
-    assert.equal(r.status, 200);
   });
 
-  it('treats a wrong key as no access', async () => {
+  it('gives nothing for a wrong key, and takes nothing away either', async () => {
     const cookie = await enter(app);
-    for (const k of ['wrong-key-0123456789', '', KEY.slice(0, -1), `${KEY}x`]) {
+    for (const k of ['wrong-key-0123456789', '', KEY.slice(0, -1), `${KEY}x`, ADMIN]) {
       const raw = await rawGet(app, `/?key=${encodeURIComponent(k)}`, NAVIGATE);
-      assert.equal(raw.status, 403, k);
-      assert.equal(raw.cookie, undefined);
-      // Even with the cookie: the link was wrong.
-      assert.equal((await rawGet(app, `/?key=${encodeURIComponent(k)}`, { ...NAVIGATE, Cookie: cookie })).status, 403, k);
-      const r = await fetch(`${app.url}/config.json?key=${encodeURIComponent(k)}`, { redirect: 'manual' });
-      assert.equal(r.status, 401, k);
+      assert.equal(raw.status, 200, k);
+      assert.equal(raw.cookie, undefined, k);
+      const r = await fetch(`${app.url}/config.json?key=${encodeURIComponent(k)}`, { headers: { Cookie: cookie } });
+      assert.equal(((await r.json()) as Record<string, unknown>).disc, '/api/disc/image', k);
+    }
+    for (const k of ['wrong-key-0123456789', '', ADMIN.slice(0, -1), KEY]) {
+      const raw = await rawGet(app, `/?admin=${encodeURIComponent(k)}`, NAVIGATE);
+      assert.equal(raw.status, 200, k);
+      assert.equal(raw.cookie, undefined, k);
     }
   });
 
-  it('keeps a browser in across a restart; a new key locks it out', async () => {
-    const cookie = await enter(app);
-    const again = await startServer(config());
+  it('makes the admin link\'s browser the admin, and a player', async () => {
+    assert.equal(app.adminLink, `${app.url}/?admin=${ADMIN}`);
+    const raw = await rawGet(app, `/disc?admin=${ADMIN}`, NAVIGATE);
+    assert.equal(raw.status, 303);
+    assert.equal(raw.location, '/disc');
+    const cookies = raw.headers['set-cookie'] as string[];
+    assert.equal(cookies.length, 2);
+    assert.equal(cookies[0], `${ACCESS_COOKIE}=${accessToken(KEY)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}`);
+    assert.equal(cookies[1], `${ADMIN_COOKIE}=${adminToken(ADMIN)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}`);
+    assert.equal(adminToken(ADMIN), createHmac('sha256', ADMIN).update('mvp-admin-v1').digest('base64url'));
+    const cookie = await enterAdmin(app);
+    const body = (await (await fetch(`${app.url}/config.json`, { headers: { Cookie: cookie } })).json()) as Record<string, unknown>;
+    assert.equal(body.admin, true);
+    assert.match(String(body.adminToken), /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(body.disc, '/api/disc/image');
+    // The admin cookie alone is a player too.
+    const adminOnly = cookie.split('; ').find((c) => c.startsWith(`${ADMIN_COOKIE}=`))!;
+    assert.equal((await fetch(`${app.url}/api/disc/image`, { method: 'HEAD', headers: { Cookie: adminOnly } })).status, 200);
+    // Page loads renew both cookies.
+    const again = await rawGet(app, '/', { ...NAVIGATE, Cookie: cookie });
+    assert.equal((again.headers['set-cookie'] as string[]).length, 2);
+    // A server without an admin key has no admin.
+    const plain = await startServer(config());
     try {
-      assert.equal((await fetch(`${again.url}/config.json`, { headers: { Cookie: cookie } })).status, 200);
+      assert.equal(plain.adminLink, '');
+      const r = await rawGet(plain, `/?admin=${ADMIN}`, NAVIGATE);
+      assert.equal(r.status, 200);
+      assert.equal(r.cookie, undefined);
+      const b = (await (await fetch(`${plain.url}/config.json`, { headers: { Cookie: cookie } })).json()) as Record<string, unknown>;
+      assert.equal(b.admin, undefined);
+    } finally {
+      await plain.close();
+    }
+  });
+
+  it('keeps browsers in across a restart; new keys take that away', async () => {
+    const cookie = await enterAdmin(app);
+    const disc = async (a: App, c: string) => ((await (await fetch(`${a.url}/config.json`, { headers: { Cookie: c } })).json()) as Record<string, unknown>);
+    const again = await startServer(config({ adminKey: ADMIN }));
+    try {
+      const b = await disc(again, cookie);
+      assert.equal(b.disc, '/api/disc/image');
+      assert.equal(b.admin, true);
     } finally {
       await again.close();
     }
-    const changed = await startServer(config({ accessKey: 'a-new-key-for-the-site-42' }));
+    const changed = await startServer(config({ accessKey: 'a-new-key-for-the-site-42', adminKey: 'a-new-admin-key-for-the-site' }));
     try {
-      assert.equal((await fetch(`${changed.url}/config.json`, { headers: { Cookie: cookie } })).status, 401);
-      assert.equal((await rawGet(changed, `/?key=${KEY}`, NAVIGATE)).status, 403);  // the old link too
+      assert.deepEqual(await disc(changed, cookie), {});
+      assert.equal((await rawGet(changed, `/?key=${KEY}`, NAVIGATE)).cookie, undefined);  // the old link too
       const fresh = await enter(changed);
       assert.notEqual(fresh, cookie);
-      assert.equal((await fetch(`${changed.url}/config.json`, { headers: { Cookie: fresh } })).status, 200);
+      assert.equal((await disc(changed, fresh)).disc, '/api/disc/image');
     } finally {
       await changed.close();
     }
   });
 
-  it('answers /healthz and /robots.txt without access', async () => {
+  it('answers /healthz and /robots.txt', async () => {
     let r = await fetch(`${app.url}/healthz`);
     assert.equal(r.status, 200);
     assert.equal(await r.text(), 'ok');
@@ -190,7 +234,7 @@ describe('private link', () => {
     assert.equal(r.status, 200);
     assert.equal(await r.text(), 'User-agent: *\nDisallow: /\n');
     assert.equal(r.headers.get('x-robots-tag'), 'noindex, nofollow');
-    // The private link works on them too (the check tools use /healthz?key=...: a page that starts nothing).
+    // The links work on them too (the check tools use /healthz?key=...: a page that starts nothing).
     const raw = await rawGet(app, `/healthz?key=${KEY}`, NAVIGATE);
     assert.equal(raw.status, 303);
     assert.equal(raw.location, '/healthz');
@@ -409,9 +453,10 @@ describe('lobby and signaling', () => {
   const wsUrl = () => app.url.replace('http:', 'ws:') + '/ws';
   const open = () => Peer.open(wsUrl(), { Cookie: cookie, Origin: app.url });
 
-  it('refuses sockets without access or from another origin', async () => {
-    await assert.rejects(Peer.open(wsUrl(), { Origin: app.url }), /401/);
-    await assert.rejects(Peer.open(wsUrl(), { Cookie: `${ACCESS_COOKIE}=${accessToken('another-key-0123456789')}`, Origin: app.url }), /401/);
+  it('takes sockets from the pages of this site only, with or without a cookie', async () => {
+    const anyone = await Peer.open(wsUrl(), { Origin: app.url });  // the site is open: anyone may play online
+    await anyone.next('welcome');
+    anyone.ws.close();
     await assert.rejects(Peer.open(wsUrl(), { Cookie: cookie, Origin: 'https://evil.example' }), /401/);
     await assert.rejects(Peer.open(wsUrl(), { Cookie: cookie }), /401/);
   });

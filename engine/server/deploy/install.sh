@@ -5,13 +5,15 @@
 #   ./deploy/install.sh mvp.example.com
 #
 # - DOMAIN must already resolve to this VPS (Caddy gets its certificate for it).
-# - There is no password: the site is reached through its private link,
-#   https://DOMAIN/?key=<key>, which the script prints at the end (and the
-#   server prints at every start: journalctl -u mvp-server). The key is made
-#   here once, in /etc/mvp/access-key; a browser that opened the link stays in
-#   for 400 days. To replace the link (e.g. a leaked one), put a new key of 16
-#   or more letters and digits in that file and restart mvp-server: every
-#   browser then needs the new link (docs/engine/NETPLAY.md).
+# - There is no password: the site is open to anyone. Two links, which the
+#   script prints at the end (and the server prints at every start:
+#   journalctl -u mvp-server), give a browser more: the player link,
+#   https://DOMAIN/?key=<key>, lets it play with the server's disc; the admin
+#   link, https://DOMAIN/?admin=<key>, is the owner's (the Server disc page and
+#   the save states). The keys are made here once, in /etc/mvp/access-key and
+#   /etc/mvp/admin-key; a browser that opened a link keeps it for 400 days. To
+#   replace a link (e.g. a leaked one), put a new key of 16 or more letters and
+#   digits in its file and restart mvp-server (docs/engine/NETPLAY.md).
 # - The disc image is not part of the package: copy it to /srv/mvp/disc/ and
 #   set "disc" in /etc/mvp/server.json (the script does this when
 #   /srv/mvp/disc/GV4E69.ciso or GV4E69.iso exists).
@@ -55,11 +57,12 @@ mv /opt/mvp/site.new /opt/mvp/site
 mv /opt/mvp/server.new /opt/mvp/server
 chown -R root:root /opt/mvp/site /opt/mvp/server
 
-echo "== secrets (the TURN secret and the key of the private link)"
+echo "== secrets (the TURN secret and the keys of the player and admin links)"
 [ -s /etc/mvp/turn-secret ] || head -c 32 /dev/urandom | base64 | tr -d '/+=' > /etc/mvp/turn-secret
 [ -s /etc/mvp/access-key ] || head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > /etc/mvp/access-key
-chown root:mvp /etc/mvp/turn-secret /etc/mvp/access-key
-chmod 0640 /etc/mvp/turn-secret /etc/mvp/access-key
+[ -s /etc/mvp/admin-key ] || head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > /etc/mvp/admin-key
+chown root:mvp /etc/mvp/turn-secret /etc/mvp/access-key /etc/mvp/admin-key
+chmod 0640 /etc/mvp/turn-secret /etc/mvp/access-key /etc/mvp/admin-key
 
 echo "== configuration"
 DISC=""
@@ -92,5 +95,7 @@ fi
 sleep 2
 curl -fsS http://127.0.0.1:8080/healthz && echo " <- mvp-server"
 echo "== done"
-echo "   private link: https://$DOMAIN/?key=$(cat /etc/mvp/access-key)"
-echo "   Open it once in each browser that plays here. Anyone with this link can play and download the disc."
+echo "   admin link: https://$DOMAIN/?admin=$(cat /etc/mvp/admin-key)"
+echo "   Yours only: open it once in each of your browsers (the Server disc page, your save states)."
+echo "   player link: https://$DOMAIN/?key=$(cat /etc/mvp/access-key)"
+echo "   It lets a browser play with the server's disc; anyone with it can download the disc."

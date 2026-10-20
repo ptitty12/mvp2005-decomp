@@ -2,18 +2,22 @@
 // (MVP_SERVER_CONFIG) and environment variables; secrets come only from the
 // environment (or files named by it), never from the repository:
 //
-//   MVP_ACCESS_KEY / MVP_ACCESS_KEY_FILE    the key of the private link https://site/?key=<key>
-//                                           (required; src/access.ts). MVP_ACCESS_KEY wins. With
+//   MVP_ACCESS_KEY / MVP_ACCESS_KEY_FILE    the key of the player link https://site/?key=<key>,
+//                                           which lets a browser use the server's disc (required;
+//                                           src/access.ts). MVP_ACCESS_KEY wins. With
 //                                           MVP_ACCESS_KEY_CREATE=1 a missing file is created with
 //                                           a random key, owner-only: the Docker deployment
+//   MVP_ADMIN_KEY / MVP_ADMIN_KEY_FILE      the key of the admin link https://site/?admin=<key>:
+//                                           the Server disc page and the save states (optional:
+//                                           without it they are off); _CREATE=1 as above
 //   MVP_TURN_SECRET / MVP_TURN_SECRET_FILE  coturn's static-auth-secret (optional; with
 //                                           MVP_TURN_SECRET_CREATE=1 a missing file is
 //                                           created with a random secret: the Docker deployment)
 //
 // The Docker deployment (deploy/, docs/engine/DEPLOY_DOKPLOY.md) sets everything
 // through the environment: MVP_DISC_DIR (the uploaded disc), MVP_PACKS_DIR (the roster
-// packs the pages offer in a dropdown), MVP_TURN_MODE (the
-// ICE servers handed to the pages) and the secret files above.
+// packs the pages offer in a dropdown), MVP_STATES_DIR (the admin's save states),
+// MVP_TURN_MODE (the ICE servers handed to the pages) and the secret files above.
 //
 // docs/engine/NETPLAY.md ("Deploying on a VPS") has a complete example.
 import { randomBytes } from 'node:crypto';
@@ -55,16 +59,30 @@ export interface ServerConfig {
   packsDir: string;
   /** The largest pack zip accepted, in bytes (a pack is at most 64 MiB: docs/MODDING.md §2). */
   maxPackBytes: number;
+  /**
+   * The admin's save states (src/state_store.ts): saved from the game page or uploaded on the Server
+   * disc page, kept gzipped, served only to the admin; empty: none. Needs the admin key.
+   */
+  statesDir: string;
+  /** The largest save state accepted, in bytes before compression (a state is about 50 MB). */
+  maxStateBytes: number;
   /** The disc uploads must be (GV4E69 rev 0; tests use a synthetic one). Not configurable from outside. */
   expectDisc: ExpectedDisc;
   /**
-   * The key of the private link (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE), at least 16 URL-safe characters:
-   * a browser that opened https://site/?key=<key> has access (src/access.ts). A new key locks out every browser.
+   * The key of the player link (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE), at least 16 URL-safe characters:
+   * a browser that opened https://site/?key=<key> may use the server's disc (src/access.ts); lobby
+   * invites carry it. A new key takes that from every browser.
    */
   accessKey: string;
+  /**
+   * The key of the admin link (MVP_ADMIN_KEY or MVP_ADMIN_KEY_FILE), as the access key; empty: no
+   * admin, so no Server disc page and no save states. A browser that opened https://site/?admin=<key>
+   * is the admin, and a player too.
+   */
+  adminKey: string;
   /** Set the cookie's Secure flag (true behind TLS). */
   secureCookies: boolean;
-  /** "https://mvp.example.com": invite links, the private link and the allowed Origin. Empty: the request's Host. */
+  /** "https://mvp.example.com": invite links, the player and admin links, and the allowed Origin. Empty: the request's Host. */
   publicUrl: string;
   /** stun: URLs ("{host}" as for TURN). */
   stun: string[];
@@ -81,7 +99,10 @@ export const defaults: Omit<ServerConfig, 'accessKey' | 'site'> = {
   maxDiscBytes: 1536 << 20,
   packsDir: '',
   maxPackBytes: 80 << 20,
+  statesDir: '',
+  maxStateBytes: 128 << 20,
   expectDisc: RETAIL_DISC,
+  adminKey: '',
   secureCookies: false,
   publicUrl: '',
   stun: [],
@@ -120,7 +141,7 @@ function createSecretFile(file: string, mode: number): void {
   renameSync(tmp, file);
 }
 
-/** The key of the private link: MVP_ACCESS_KEY, else the file MVP_ACCESS_KEY_FILE names (created with _CREATE=1). */
+/** The key of the player link: MVP_ACCESS_KEY, else the file MVP_ACCESS_KEY_FILE names (created with _CREATE=1). */
 function accessKey(env: NodeJS.ProcessEnv): string {
   const create = env.MVP_ACCESS_KEY_CREATE === '1' || env.MVP_ACCESS_KEY_CREATE === 'true';
   if (!env.MVP_ACCESS_KEY && env.MVP_ACCESS_KEY_FILE && create) createSecretFile(env.MVP_ACCESS_KEY_FILE, 0o600);
@@ -135,6 +156,20 @@ function accessKey(env: NodeJS.ProcessEnv): string {
   if (!/^[A-Za-z0-9._~-]+$/.test(key)) {
     throw new Error('the access key (MVP_ACCESS_KEY or MVP_ACCESS_KEY_FILE) may hold only letters, digits and . _ ~ - (it goes into a link)');
   }
+  return key;
+}
+
+/** The key of the admin link: MVP_ADMIN_KEY, else the file MVP_ADMIN_KEY_FILE names (created with _CREATE=1); '' for none. */
+function adminKey(env: NodeJS.ProcessEnv, access: string): string {
+  const create = env.MVP_ADMIN_KEY_CREATE === '1' || env.MVP_ADMIN_KEY_CREATE === 'true';
+  if (!env.MVP_ADMIN_KEY && env.MVP_ADMIN_KEY_FILE && create) createSecretFile(env.MVP_ADMIN_KEY_FILE, 0o600);
+  const key = secret(env, 'MVP_ADMIN_KEY');
+  if (!key) return '';
+  if (key.length < 16) throw new Error('the admin key (MVP_ADMIN_KEY or MVP_ADMIN_KEY_FILE) must be at least 16 characters');
+  if (!/^[A-Za-z0-9._~-]+$/.test(key)) {
+    throw new Error('the admin key (MVP_ADMIN_KEY or MVP_ADMIN_KEY_FILE) may hold only letters, digits and . _ ~ - (it goes into a link)');
+  }
+  if (key === access) throw new Error('the admin key must differ from the access key');
   return key;
 }
 
@@ -186,6 +221,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const packsDir = pick('packsDir', 'MVP_PACKS_DIR', String, defaults.packsDir);
   const maxPackBytes = pick('maxPackBytes', 'MVP_PACK_MAX_BYTES', Number, defaults.maxPackBytes);
   if (!(Number.isSafeInteger(maxPackBytes) && maxPackBytes > 0)) throw new Error('MVP_PACK_MAX_BYTES must be a positive number of bytes');
+  const statesDir = pick('statesDir', 'MVP_STATES_DIR', String, defaults.statesDir);
+  const maxStateBytes = pick('maxStateBytes', 'MVP_STATE_MAX_BYTES', Number, defaults.maxStateBytes);
+  if (!(Number.isSafeInteger(maxStateBytes) && maxStateBytes > 0)) throw new Error('MVP_STATE_MAX_BYTES must be a positive number of bytes');
   return {
     host: pick('host', 'MVP_HOST', String, defaults.host),
     port: pick('port', 'MVP_PORT', Number, defaults.port),
@@ -195,8 +233,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxDiscBytes,
     packsDir: packsDir ? resolve(packsDir) : '',
     maxPackBytes,
+    statesDir: statesDir ? resolve(statesDir) : '',
+    maxStateBytes,
     expectDisc: RETAIL_DISC,
     accessKey: key,
+    adminKey: adminKey(env, key),
     secureCookies: pick('secureCookies', 'MVP_SECURE_COOKIES', bool, defaults.secureCookies),
     publicUrl: pick('publicUrl', 'MVP_PUBLIC_URL', String, defaults.publicUrl),
     stun,
