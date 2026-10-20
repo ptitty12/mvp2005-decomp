@@ -224,10 +224,10 @@ export class ChallengeScene {
       const cy = Math.max(-110, Math.min(110, -c.y * hh));
       this.ballAt.setAttribute('transform', `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`);
       this.ballAt.style.display = '';
-      // A ball: how far its edge missed the zone. A strike whose centre was outside: it touched.
-      const outside = Math.abs(c.x) > 1 || Math.abs(c.y) > 1;
-      if (c.truth === 'ball') this.off.textContent = c.off < 0.1 ? 'Missed by less than 0.1 in' : `Missed by ${c.off.toFixed(1)} in`;
-      else this.off.textContent = outside ? 'Touched the zone' : '';
+      // A ball only: how far its edge missed the zone (owner, 2026-10-20: the tag only ever says
+      // "Missed by x in"). Hundredths below a tenth, so it never reads 0.0.
+      const off = c.off < 0.1 ? Math.max(0.01, c.off).toFixed(2) : c.off.toFixed(1);
+      this.off.textContent = c.truth === 'ball' ? `Missed by ${off} in` : '';
       this.off.hidden = !this.off.textContent;
     } else {
       this.title.textContent = 'Review complete';

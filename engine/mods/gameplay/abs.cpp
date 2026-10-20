@@ -440,7 +440,7 @@ class AbsMod final : public Mod {
     char ui[320];
     std::snprintf(ui, sizeof ui,
                   "{\"abs\":\"challenge\",\"team\":\"%s\",\"call\":\"%s\",\"truth\":\"%s\",\"x\":%.3f,\"y\":%.3f,"
-                  "\"w\":%.2f,\"h\":%.2f,\"r\":%.2f,\"off\":%.1f,\"left\":%u,",
+                  "\"w\":%.2f,\"h\":%.2f,\"r\":%.2f,\"off\":%.3f,\"left\":%u,",
                   team ? "away" : "home", s.last_call ? "strike" : "ball", s.last_truth ? "strike" : "ball", px, py,
                   zone.half_w, zone.half_h, kAbsBallRadiusIn, pitch.off_in, left);
     h.publish(std::string(ui) + "\"by\":\"" + by + "\",\"club\":\"" + team_name(h, s.umpire, team) + "\"}");
