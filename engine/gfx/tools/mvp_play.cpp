@@ -671,9 +671,24 @@ void state_load(StateFiles& s) {
   const std::string mods_then = str(header->get("mod_settings"));
   const mods::Json* packs = header->get("packs");
   const std::string packs_then = str(packs ? packs->get("result_hash") : nullptr);
-  if (mods_then != s.mod_settings)
+  // The same mods (ids and versions: the "mod.<id>=<version>" entries); their settings may
+  // differ, as on the page (e.g. another umpire miss rate from the state on).
+  auto mod_ids = [](const std::string& canonical) {
+    std::string ids;
+    for (std::size_t at = 0; at < canonical.size();) {
+      std::size_t end = canonical.find(';', at);
+      if (end == std::string::npos) end = canonical.size();
+      const std::string entry = canonical.substr(at, end - at);
+      const std::size_t eq = entry.find('=');
+      if (eq != std::string::npos && entry.find('.', 4) >= eq) ids += entry + ";";  // "mod.abs=1", not "mod.abs.miss=8"
+      at = end + 1;
+    }
+    return ids;
+  };
+  if (mod_ids(mods_then) != mod_ids(s.mod_settings))
     throw StopRun{"--state-load: saved with the gameplay mods \"" + mods_then + "\"; this run has \"" + s.mod_settings +
-                  "\" (give the same --mod)"};
+                  "\" (give the same --mod ids)"};
+  if (mods_then != s.mod_settings) std::printf("state: the mods' settings differ from the saving run's: %s\n", s.mod_settings.c_str());
   if (packs_then != s.pack_result_hash)
     throw StopRun{"--state-load: saved with other roster packs (result " + (packs_then.empty() ? "none" : packs_then) +
                   "; this run " + (s.pack_result_hash.empty() ? "none" : s.pack_result_hash) + ")"};

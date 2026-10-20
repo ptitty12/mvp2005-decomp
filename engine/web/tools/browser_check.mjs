@@ -32,7 +32,8 @@
 //   --shots    VI fields at which to screenshot the canvas (approximately: the
 //              page reports progress twice a second)
 //   --keys     live keyboard input: press KEY (a KeyboardEvent key name, e.g.
-//              Enter, x, ArrowDown) for 150 ms (--hold MS) once the run reaches field F
+//              Enter, x, ArrowDown; KEY+KEY holds several together, e.g. q+e+Space for the
+//              ABS challenge) for 150 ms (--hold MS) once the run reaches field F
 //   --js-flags V8 flags for Chrome/Edge/Chromium (experiments, e.g. --no-wasm-tier-up)
 //   --tag      added to the output file names (summary-BROWSER-TAG.json, ...)
 //   --server-disc  the mock deployment (serve.mjs --disc): the page finds the
@@ -552,9 +553,10 @@ async function runOnce(context, run) {
     }
     while (keyIndex < keys.length && field >= keys[keyIndex].field) {
       const { key } = keys[keyIndex++];
-      await page.keyboard.down(key);
+      const chord = key.split('+');  // KEY+KEY: held together (e.g. q+e+Space, the ABS challenge's L+R+Z)
+      for (const k of chord) await page.keyboard.down(k);
       await page.waitForTimeout(holdMs);
-      await page.keyboard.up(key);
+      for (const k of chord.reverse()) await page.keyboard.up(k);
       summary.keysPressed.push({ key, field });
       console.log(`pressed ${key} at field ${field}`);
     }
