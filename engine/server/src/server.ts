@@ -12,7 +12,7 @@
 //                                            ("/api/disc/image") with "discHash", "discSize" and
 //                                            "discManifest" (P1), or "discPreparing" while the image is
 //                                            being hashed; the admin also "admin", "adminToken",
-//                                            "discPage" and "states"
+//                                            "discPage", "states" and "card"
 //   GET/HEAD /api/disc/image                 the owner's disc image (src/files.ts): players
 //   GET  /api/disc/manifest                  the image's piece hashes, for the players' one-time download
 //                                            into their own browser storage (src/disc_hash.ts): players
@@ -25,6 +25,8 @@
 //                                            src/state_store.ts), with a states directory
 //   POST /api/states/<name>, DELETE ...      store (the body) or remove a state: the admin, from its pages
 //   GET  /states/<name>.mvpstate             one of them for the game page's ?state=<name>: the admin
+//   GET/HEAD /api/card, PUT /api/card        the admin's memory card (gzipped, src/card_store.ts), with a
+//                                            states directory: the admin; PUT from its pages
 //   GET  /api/rooms                          open rooms (src/lobby.ts)
 //   WS   /ws                                 lobby and WebRTC signaling (this site's pages only)
 //   GET  anything else                       the engine site (static files)
@@ -54,6 +56,7 @@ import { DiscStore, type Answer } from './disc_store.js';
 import { serveDisc, serveStatic } from './files.js';
 import { PackStore } from './pack_store.js';
 import { StateStore } from './state_store.js';
+import { CardStore } from './card_store.js';
 import { Lobby } from './lobby.js';
 import { iceServers } from './turn.js';
 
@@ -175,6 +178,8 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
   // The admin's save states: only with a states directory and an admin to see them.
   const states = cfg.statesDir && cfg.adminKey ? await StateStore.open({ dir: cfg.statesDir, maxBytes: cfg.maxStateBytes, log }) : null;
   if (cfg.statesDir && !cfg.adminKey) log('save states are off: they need an admin key (MVP_ADMIN_KEY or MVP_ADMIN_KEY_FILE)');
+  // The admin's memory card: beside the states.
+  const card = states && cfg.statesDir ? new CardStore(cfg.statesDir, log) : null;
   /**
    * The image the disc route serves, its URL and version: an uploaded one, else the configured file.
    * `sidecar`: where its manifest is kept between restarts (uploads only).
@@ -366,6 +371,50 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
     sendJson(res, body === null ? tooLarge : await states!.save(name, body));
   };
 
+  /**
+   * The admin's memory card (src/card_store.ts), for the admin only (the caller checked):
+   *   GET/HEAD  /api/card   the card (gzipped, Content-Encoding: gzip) and its ETag; 404 before the first write
+   *   PUT       /api/card   store the body (a card, gzipped or not) if the server's is still the one
+   *                         If-Match names (If-None-Match: * when there is none): {etag}, else 412 {error, etag}
+   * PUT comes from the admin's pages (the CSRF token).
+   */
+  const handleCard = async (req: IncomingMessage, res: ServerResponse, method: string): Promise<void> => {
+    if (method === 'GET' || method === 'HEAD') {
+      const got = await card!.read();
+      if (!got) {
+        sendJson(res, { status: 404, body: { error: 'No memory card on the server yet.' } });
+        return;
+      }
+      res
+        .writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Encoding': 'gzip',
+          'Content-Length': String(got.data.length),
+          'Cache-Control': 'private, no-store',
+          ETag: got.etag,
+        })
+        .end(method === 'HEAD' ? undefined : got.data);
+      return;
+    }
+    if (method !== 'PUT') {
+      res.writeHead(405, { Allow: 'GET, HEAD, PUT' }).end();
+      return;
+    }
+    if (!fromDiscPage(req)) {
+      sendJson(res, { status: 403, body: { error: 'This request must come from a page of this site, opened by its admin.' } });
+      return;
+    }
+    const tooLarge = { status: 413, body: { error: 'Not a memory card: too large.' } };
+    if (Number(req.headers['content-length'] ?? 0) > CardStore.maxBody) {
+      res.setHeader('Connection', 'close');
+      sendJson(res, tooLarge);
+      return;
+    }
+    const body = await readBodyBytes(req, CardStore.maxBody);
+    const header = (h: string | string[] | undefined) => (typeof h === 'string' ? h.trim() : undefined);
+    sendJson(res, body === null ? tooLarge : await card!.write(body, header(req.headers['if-match']), header(req.headers['if-none-match'])));
+  };
+
   const handleUpload = async (req: IncomingMessage, res: ServerResponse, method: string, path: string, url: URL): Promise<void> => {
     if (!fromDiscPage(req)) {
       sendJson(res, { status: 403, body: { error: 'This request must come from the Server disc page of this site.' } });
@@ -475,6 +524,11 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
       else await handleStates(req, res, method, path);
       return;
     }
+    if (card && path === '/api/card') {
+      if (!owner) noAccess();
+      else await handleCard(req, res, method);
+      return;
+    }
     if (method !== 'GET' && method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
       return;
@@ -500,6 +554,7 @@ export async function startServer(cfg: ServerConfig, opts: StartOptions = {}): P
         body.adminToken = discToken(parseCookies(req.headers.cookie).get(ADMIN_COOKIE)!);
         if (store || packs || states) body.discPage = '/disc';
         if (states) body.states = '/api/states';
+        if (card) body.card = '/api/card';
       }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' }).end(JSON.stringify(body));
       return;
