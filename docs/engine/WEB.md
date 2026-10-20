@@ -455,6 +455,23 @@ Everything below is run by agents; the owner never runs commands.
   stores them gzipped and serves them with `Content-Encoding: gzip`
   (`engine/server/src/state_store.ts`); only the admin can list, read or write them.
   `browser_check.mjs --real-server ... --admin --server-states DIR` tests this.
+- **The memory card** (2026-10-20; `src/card.ts`, engine `mvp_card_*`,
+  `runtime/memcard.h`). Slot A holds a 1019-block card, the EXI flash card the
+  SDK's CARD library drives (not HLE: the game's own SDK code runs on it), so the
+  game saves profiles, seasons and settings from its own menus. The page gives
+  the engine this browser's card (IndexedDB `mvp-card`) before boot, or none for
+  a new card the engine formats as the game would. The Worker sends the card back
+  (`'card'`) once the game's writes have settled for 60 fields, and at the end of
+  a run. The Memory card panel downloads it and takes a card file back before the
+  game starts. No card goes in for an online game, or for a test run (`script=`,
+  `fields=`, `frames=`) unless `card=1`; `card=0` takes it out. **The admin's card
+  on the server** (`/config.json` says `card`; `engine/server/src/card_store.ts`):
+  the admin's browser starts from the server's card (or its own, when it has saves
+  the server lacks on the same version) and PUTs each settled card, gzipped, with
+  If-Match on the version it came from. When another browser has saved since, the
+  server answers 412 and this browser keeps its card to itself and says so. Save
+  states hold the card's transfer state, not its contents (state file v2). The
+  browser summary's `card` (inserted, writes, sent) shows it.
 - **The translation cache** (`src/module-cache.ts`, engine `wasm/module_cache.*`).
   After the first frame the Worker serializes the translator's output (the wasm
   binary and the tables the runtime fills from it, about 52 MB) and writes it to

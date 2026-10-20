@@ -577,6 +577,10 @@ Numbered for E0b (boot spike) and E4 (determinism). "Verify" says what to check.
   card image. The HLE must not consume `rand` (RN4); document that this changes the
   libc stream relative to retail, which is fine as long as both peers use the engine.
   The card worker thread (TH5) and its 1 ms polling sleeps must be scheduled by R5.
+  (2026-10-20: the engine emulates the card itself, not CARD HLE, so the SDK's
+  `rand` calls (RN4) happen as on retail when a card is in. Online games have no
+  card, the "empty" case. Offline, a run with a card differs from one without from
+  the first mount on; test runs have none unless asked: `docs/engine/WEB.md`.)
 - **R10. VM.** HLE `VMInit`, `VMAlloc`, `VMStoreAllPages`, `VMSetLogStatsCallback`:
   map 0x7E000000..0x7E7FFFFF (8 MB) as plain RAM; no DSI handling. Keep
   `fn_80400E8C`'s accepted ranges (0x7E000000..0x7FFFFFFF) valid.

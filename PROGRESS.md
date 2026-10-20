@@ -528,3 +528,11 @@
   - **Not done:** the game's own memory card (the engine has none yet, so in-game saves are not possible); offered as its own task.
   - Checked: server 50/50, web shell, Chrome against the real server (admin, the ABS state with the MLB 2026 pack, F2 to the slot, a fresh browser from the slot).
   | Owner: redeploy; open the admin link from the mvp service's Logs tab (line `mvp-server: admin link:`) once in each of your browsers; upload the ABS states on the Server disc page (Save states card) from C:\Users\Patrick Taylor\decompile_mvp_04-states\build\states.
+- 2026-10-20 | claude-side-gfx | engine: the game's memory card (owner: "virtual gamecard memeory here, go"; "let me (the admin) have a memory card/slot on server") | Branch engine/memcard:
+  - **Slot A has a card:** a 1019-block flash card the game's own SDK code drives (`runtime/memcard.h`; DECISIONS 2026-10-20). The game mounts it, asks for a User Profile at boot, saves one (Profile_PROF1.dat, 2 blocks) and lists it again on the next boot. A new card is formatted as the game would.
+  - **In the browser:** every browser keeps its card (IndexedDB); the Worker hands it to the page once the game's writes settle. A Memory card panel downloads it and takes a card file back. No card in online games or test runs (`card=1` for a test that wants one).
+  - **The admin's card on the server** (`/api/card`, in the states folder): the admin's browser starts from it and sends each settled card back; a stale tab cannot overwrite a newer card (412, it says so).
+  - **Save-state files v2** carry the card's transfer state, not its contents; v1 files still load.
+  - Checked: native card unit tests and full suite 49/50 (+1 skip), emscripten 42/43 (+1 skip), server 53/53, web shell 95/95. Chrome on the real server: the admin saved a profile, the server's card is byte-identical to the native run's; a fresh browser started from it and reached Load Profile with PROF1, its guest line equal to native's at frame 2050; a player's card survived a reload.
+  - Note: C: had only 680 MB free during this session; deleting 6 GB of this session's old graphics captures freed some (6.8 GB free after).
+  | Owner: redeploy. Then in the game, answer Yes to the User Profile question and create a profile: it is saved on the card in your browser and, in your admin browser, on the server.

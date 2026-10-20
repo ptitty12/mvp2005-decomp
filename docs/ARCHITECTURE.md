@@ -131,7 +131,7 @@ what binds.
   | DVD | Virtual disc reads, completed at deterministic virtual times |
   | PAD / SI | The input layer (local pad or netplay lockstep) |
   | VI | Frame boundary and pacing (59.94 Hz NTSC) |
-  | CARD | Virtual memory card in browser storage |
+  | CARD | Not replaced: the SDK's CARD code drives an emulated flash card in slot A (`runtime/memcard.h`), kept in browser storage |
   | AI / AX / DSP / AR / ARQ | Audio and ARAM, see §7 |
   | GX | Setup calls go through; the command stream goes to the renderer (§6) |
   | OS (threads, alarms, interrupts, heap/arena) | The runtime's scheduler and clock |

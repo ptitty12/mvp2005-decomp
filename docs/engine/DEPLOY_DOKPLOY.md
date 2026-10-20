@@ -194,10 +194,23 @@ file from your computer under a name (for example the ABS states in
 every game you play alone, with or without gameplay mods; not in an online game.
 Nobody else can see or open them.
 
+## 11. Your memory card
+
+The game saves profiles, seasons and settings on its memory card in slot A, from
+its own menus. Every browser keeps its own card. Yours (the browser that opened
+the admin link) is also kept on the server, so your saves follow you to your
+laptop or a new browser: the game starts from the server's card, and each time
+the game saves, the card goes back to the server.
+
+If a tab that has been open for a while saves after another browser has saved,
+the server keeps the newer card and that tab says so; reload it to play on the
+server's card. The **Memory card** panel on the game page downloads the card
+and takes a card file back. Online games have no memory card.
+
 ## Later
 
 - **Update:** click **Deploy** again. It rebuilds from `main`. The links, the disc,
-  the packs and your save states stay. Both players reload the page afterwards. Right after the first
+  the packs, your save states and your memory card stay. Both players reload the page afterwards. Right after the first
   deploy of this version the page may say "The server is preparing the game data"
   for a few seconds while the server checks the disc once. Players' browsers keep
   their copy and download again only if you upload a different disc.
@@ -208,11 +221,11 @@ Nobody else can see or open them.
   link) in section 3 and deploy. The old link stops working in every browser; open
   or send the new one.
 - **Removing everything:** deleting the app in Dokploy with its volumes also
-  deletes the links' keys, the uploaded disc, the roster packs and your save states.
+  deletes the links' keys, the uploaded disc, the roster packs, your save states and your memory card.
 
 ## Where the disc is kept
 
-The disc you uploaded, the packs, your save states, the keys of the links and the relay's secret are stored in the
+The disc you uploaded, the packs, your save states, your memory card, the keys of the links and the relay's secret are stored in the
 app's volume, `mvp-data` (Docker names it after the app: the app's name, then
 `_mvp-data`). It is not part of the code Dokploy downloads from GitHub, and
 Dokploy deploys the app under the same name every time, so every deploy uses the
