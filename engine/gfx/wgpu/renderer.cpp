@@ -3,6 +3,7 @@
 #include "gfx/wgpu/gpu_timer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -943,12 +944,31 @@ void Renderer::draw(const DrawCall& d) {
   }
   pending_.state = d.state;
   // Vertices, packed to the pipeline's layout.
+  //
+  // Q8: above 1x, a 2D vertex (orthographic: w is exactly 1) goes to a whole
+  // console pixel, as Dolphin's vertex rounding does. A pixel is drawn when its
+  // center is inside, so at 1x an edge at y = 55.44 covers row 55 (center 55.5)
+  // and the row is filled; at 3x the row's top third (55.17) stays out while the
+  // scissor, in whole pixels, still lets later draws write there. The pitching
+  // view's mini-map showed a line of the field's dirt that way, over its black
+  // backing quad. ceil(v - 0.5) is the edge, in whole pixels, of the pixels a
+  // horizontal or vertical edge at v covers at 1x (a center exactly on it counts
+  // for a top or left edge, as the rasterizer's rule has it), so such a 2D edge
+  // covers the console pixels it covers at 1x, whole, at every scale. 1x is
+  // drawn as is.
+  const bool snap = scale_ > 1;
+  constexpr float kHalfW = kEfbWidth / 2.0f, kHalfH = kEfbHeight / 2.0f;
   const std::size_t voff = vdata_.size();
   vdata_.resize(voff + d.verts.size() * stride);
   std::uint8_t* out = vdata_.data() + voff;
   const std::uint32_t attrs = pl.attrs;
   for (const OutVertex& v : d.verts) {
     std::memcpy(out, v.pos, 16);
+    if (snap && v.pos[3] == 1.0f) {
+      const float xy[2] = {std::ceil((v.pos[0] + 1.0f) * kHalfW - 0.5f) / kHalfW - 1.0f,
+                           1.0f - std::ceil((1.0f - v.pos[1]) * kHalfH - 0.5f) / kHalfH};
+      std::memcpy(out, xy, 8);
+    }
     out += 16;
     if (attrs & 1u) {
       std::memcpy(out, v.color[0], 16);

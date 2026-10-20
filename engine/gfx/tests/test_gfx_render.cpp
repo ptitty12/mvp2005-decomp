@@ -473,6 +473,36 @@ TEST_CASE("internal resolution: 2x and 3x frames and copies show the 1x picture 
   CHECK(gpu().errors() == 0);
 }
 
+// Q8: a 2D quad whose edges lie between pixel centers (the pitching view's
+// mini-map: a black backing quad from y = 55.44 under a scissor from row 55)
+// covers whole console pixels at 2x and 3x, the ones it covers at 1x. Before,
+// the top third of row 55 stayed out of the quad at 3x and showed what later
+// draws put there: a thin line.
+TEST_CASE("internal resolution: 2D edges between pixel centers cover whole console pixels (Q8)") {
+  for (u32 scale : {1u, 2u, 3u}) {
+    CAPTURE(scale);
+    Scene sc(scale);
+    Stream s = base();
+    copy_xfb(s, 0x0000FFFF);  // clear to blue
+    // At 1x: columns 101-199 (centers 101.5-199.5), rows 55-100 (centers 55.5-100.5).
+    quad(s, 100.6f, 55.44f, 200.44f, 101.376f, 0x00FF00FF);
+    copy_xfb(s, 0x000000FF, false);
+    s.run(sc.p);
+    const Renderer::Frame* f = sc.r.xfb(0x80000);
+    REQUIRE(f != nullptr);
+    auto img = sc.r.read_frame(*f);
+    const u32 w = 640 * scale, last = scale - 1;
+    auto at = [&](u32 x, u32 y) { return px(img, w, x, y); };
+    CHECK(near(at(101 * scale, 55 * scale), 0, 255, 0));            // the first pixel's top-left corner
+    CHECK(near(at(199 * scale + last, 100 * scale + last), 0, 255, 0));  // the last pixel's bottom-right corner
+    CHECK(near(at(100 * scale + last, 60 * scale), 0, 0, 255));     // column 100: none of it
+    CHECK(near(at(200 * scale, 60 * scale), 0, 0, 255));            // column 200: none of it
+    CHECK(near(at(150 * scale, 54 * scale + last), 0, 0, 255));     // row 54: none of it
+    CHECK(near(at(150 * scale, 101 * scale), 0, 0, 255));           // row 101: none of it
+  }
+  CHECK(gpu().errors() == 0);
+}
+
 // Q7: the game copies a block of the EFB to a texture and draws it back in every
 // frame (its top-left 128 x 128 save and restore). A change of scale replaces
 // every EFB-copy texture; the draws that sample the copy must see the new copy at
