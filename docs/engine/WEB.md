@@ -1,8 +1,8 @@
 # The browser build (E2, E2c)
 
 How the engine runs in a browser: the page gets the disc image (the player picks
-their own, or, on the owner's private deployment, the browser downloads the
-owner's image from behind the server's private link once and keeps it: P1), translates
+their own, or, on the owner's deployment with its player link, the browser downloads the
+owner's image from the server once and keeps it: P1), translates
 the game to WebAssembly inside the browser
 (or loads the translation it cached on an earlier visit), draws the frames on a
 canvas through WebGPU, plays the sound through an AudioWorklet, and reads the
@@ -381,7 +381,7 @@ Everything below is run by agents; the owner never runs commands.
   uploaded another image) downloads again and removes the old copy first. The
   identity check (GV4E69 rev 0, the DOL's SHA-1) still runs on every start. The
   lobby (E5) opens only once the copy is complete. On a download error the page
-  says what to do (free space and a normal window, open the private link again,
+  says what to do (free space and a normal window, open the player link again,
   reload to resume) and offers to play with the image read from the server as before.
 - **The disc from the server, read over the network** (the fallback, and servers
   without `discHash`; `src/disc.ts`, engine `wasm/web_disc.*`,
@@ -389,7 +389,7 @@ Everything below is run by agents; the owner never runs commands.
   `{"disc": "<url>"}`; the URL is on the same origin (anything else is refused)
   and answers HEAD with the size and a ranged GET with 206, both with
   `Cache-Control: private, no-store`; API calls from a browser without access
-  answer 401 (the page then says to open the private link again). The Worker checks
+  answer 401 (the page then says to open the player link again). The Worker checks
   the image with a HEAD and a
   one-byte ranged GET (a server ignoring Range would send 1.4 GB per read), then
   the engine reads it by synchronous Range XHRs (a guest DVD read completes
@@ -422,7 +422,7 @@ Everything below is run by agents; the owner never runs commands.
   **Server packs** (the deployment): when `/config.json` names `"packs"` (the server's
   `MVP_PACKS_DIR`, `engine/server/src/pack_store.ts`), the panel adds a **Packs on this
   server** list from `GET /api/packs`. Choosing one downloads its zip from
-  `/api/packs/<file>` behind the private link (an ETag lets the browser revalidate instead of
+  `/api/packs/<file>` (an ETag lets the browser revalidate instead of
   downloading again) and adds it exactly as a picked zip, so the checks, the order and the
   netplay set hash are the same. The page remembers the server packs a player chose (in
   this browser's `localStorage`) and adds them again on the next visit if the server
@@ -433,17 +433,28 @@ Everything below is run by agents; the owner never runs commands.
   F2 saves the game where it is and F4 goes back to the last state saved or
   loaded (also the toolbar's Save state / Load state, and the Save states panel:
   load a `.mvpstate` file, download the saved one). The engine saves and loads at
-  the next frame poll in live play (the poll gate, as a review does), in the
-  single-threaded engine and offline only; a load also restores the renderer's GX
-  state, starts a fresh mixer and restarts the mods' timeline (its snapshots
-  belonged to the run before). The last state is kept in this browser
-  (IndexedDB `mvp-states`), so F4 works after a reload once the same game runs.
+  the next frame poll in live play (the poll gate, as a review does), offline only,
+  in either engine (2026-10-20: the threaded one through its render thread, whose
+  GX state is exported and imported by ring records, `render_view_export` /
+  `render_view_import`; a load first does what a guest write over all of memory
+  does, `render_memory_replaced`); a load also restores the renderer's GX state,
+  starts a fresh mixer and restarts the mods' timeline (its snapshots belonged to
+  the run before). The last state is kept in this browser (IndexedDB
+  `mvp-states`), so F4 works after a reload once the same game runs.
   `?state=NAME` starts from `/states/NAME.mvpstate` on the same site: the page
   reads its header first, takes its gameplay mods (unless `mod=` is given: the
   same mods, other settings allowed) and its roster packs from the server's list,
-  starts the single-threaded engine, and the Worker loads it at the first frame
-  poll, after checking that the mounted packs' result hash is the state's. A file
-  is about 50 MB (MEM1, ARAM, the VM region); it never leaves the machine.
+  and the Worker loads it at the first frame poll, after checking that the mounted
+  packs' result hash is the state's. A file is about 50 MB (MEM1, ARAM, the VM
+  region). **The admin's states on the server** (2026-10-20; owner request,
+  DECISIONS): when `/config.json` says `admin` with `states`, the panel's **On the
+  server** part lists them (Load into the running game; Start from it = `?state=`),
+  every F2 also copies the save to the admin's slot there (`quick`, gzipped with
+  `CompressionStream` before the POST), F4 in a browser without a save of its own
+  takes that slot, and **Save to the server** keeps one under a name. The server
+  stores them gzipped and serves them with `Content-Encoding: gzip`
+  (`engine/server/src/state_store.ts`); only the admin can list, read or write them.
+  `browser_check.mjs --real-server ... --admin --server-states DIR` tests this.
 - **The translation cache** (`src/module-cache.ts`, engine `wasm/module_cache.*`).
   After the first frame the Worker serializes the translator's output (the wasm
   binary and the tables the runtime fills from it, about 52 MB) and writes it to

@@ -2,7 +2,7 @@
 
 How two players on different networks play each other: each runs the game in
 their own browser, the two engines exchange controller inputs in lockstep over
-a WebRTC data channel, and the owner's VPS serves the site behind a private link,
+a WebRTC data channel, and the owner's VPS serves the site (open; the disc behind a player link),
 runs the lobby and signaling, and relays traffic for players whose networks
 need it. Design: `docs/ARCHITECTURE.md` §8. Working log and evidence:
 `docs/engine/E5_LOG.md`.
@@ -21,7 +21,7 @@ need it. Design: `docs/ARCHITECTURE.md` §8. Working log and evidence:
 Only controller inputs, acknowledgements and state hashes cross the network.
 Nothing game-derived does: each browser reads its own disc (or, on the owner's
 private deployment only, the owner's image, downloaded once from the disc
-route behind the private link into that player's own browser storage: P1,
+route behind the player link into that player's own browser storage: P1,
 `docs/engine/WEB.md`), translates the game itself, and keeps any diagnostic dump
 local. On the deployment a page opens the lobby only once its copy of the disc is
 complete, so a player still downloading never makes the other one wait past the
@@ -259,7 +259,7 @@ required). Types: `engine/server/src/lobby_protocol.d.ts` (shared with the page)
 |---|---|
 | server -> page | `{t:"welcome", v:1, iceServers:[{urls:[...]}, {urls:[...], username, credential}]}` |
 | page -> server | `{t:"create", name?, delay?}`: a new room, the creator is player 1 (Q5: `delay` 0 is Auto, measured by both pages) |
-| page -> server | `{t:"join", room}`: join as player 2 (the invite link is `/?room=<id>&key=<key>`: §5, "The private link") |
+| page -> server | `{t:"join", room}`: join as player 2 (the invite link is `/?room=<id>&key=<key>`: §5, "Access") |
 | server -> page | `{t:"room", room, player, invite, delay, peer}` |
 | server -> page | `{t:"peer", present}`: the other player joined or left the lobby |
 | both | `{t:"signal", data}`: offer, answer or ICE candidate, relayed to the other player |
@@ -279,18 +279,22 @@ TypeScript on Node 24 (D3), one dependency (`ws`), pinned in `package-lock.json`
 
 | Route | |
 |---|---|
-| any `/...?key=<key>` | the private link (below): 303 to the same address without the key, with the access cookie |
-| `GET /healthz` | `ok`, open (monitoring) |
-| `GET /robots.txt` | `User-agent: *` / `Disallow: /`, open |
-| `GET /config.json` | `{"disc":"/api/disc/image"}` when a disc image is configured, else `{}`; with a disc also `discHash` (the image hash), `discSize` and `discManifest`, or `discPreparing` while the server hashes the image (P1); `discPage` with uploads |
-| `GET`/`HEAD /api/disc/image` | the owner's image: `Accept-Ranges: bytes`, single ranges (206, or 416), `Cache-Control: private, no-store` |
-| `GET /api/disc/manifest` | the image's 8 MiB pieces' SHA-256 and the image hash (SHA-256 over those digests), for the pages' one-time download (`src/disc_hash.ts`); 503 while hashing, `private, no-store` |
+| any `/...?key=<key>` | the player link (below): 303 to the same address without the key, with the access cookie |
+| any `/...?admin=<key>` | the admin link (below): the same, with the admin cookie as well |
+| `GET /healthz` | `ok` (monitoring) |
+| `GET /robots.txt` | `User-agent: *` / `Disallow: /` |
+| `GET /config.json` | what this browser may use: `packs`; for a player also `{"disc":"/api/disc/image"}` when a disc image is configured, with `discHash` (the image hash), `discSize` and `discManifest`, or `discPreparing` while the server hashes the image (P1); for the admin also `admin`, `adminToken` (its CSRF token), `discPage` and `states` |
+| `GET`/`HEAD /api/disc/image` | players: the owner's image: `Accept-Ranges: bytes`, single ranges (206, or 416), `Cache-Control: private, no-store` |
+| `GET /api/disc/manifest` | players: the image's 8 MiB pieces' SHA-256 and the image hash (SHA-256 over those digests), for the pages' one-time download (`src/disc_hash.ts`); 503 while hashing, `private, no-store` |
+| `GET /api/packs`, `/api/packs/<file>` | the roster packs (anyone); `POST`/`DELETE` the admin's |
+| `GET /api/states`, `/api/states/<name>`, `/states/<name>.mvpstate` | the admin's save states (`src/state_store.ts`: stored gzipped, served with `Content-Encoding: gzip`); `POST`/`DELETE /api/states/<name>` the admin's, with its token |
+| `GET /disc`, `/api/disc`, `/api/disc/uploads` | the admin's Server disc page and its upload |
 | `GET /api/rooms` | open rooms |
-| `/ws` | lobby and signaling (above) |
+| `/ws` | lobby and signaling (above): from this site's pages (Origin) |
 | anything else | the engine site (static, `Cache-Control: private, no-cache` + ETag) |
 
-Without access (below), a page load gets the private-server page (403) and anything
-else gets 401. Every response has `X-Content-Type-Options`, `Referrer-Policy: no-referrer`
+A route this browser may not use answers 401 `{"error":"no access"}` (the Server
+disc page: 404). Every response has `X-Content-Type-Options`, `Referrer-Policy: no-referrer`
 (invite links never leak through referrers), `X-Frame-Options: DENY`,
 `X-Robots-Tag: noindex, nofollow` and (P2)
 `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`
@@ -302,21 +306,32 @@ outside the repository: `MVP_TURN_SECRET`/`MVP_TURN_SECRET_FILE` and the access 
 Everything else: `MVP_SERVER_CONFIG` (JSON, `deploy/server.json.example`) or
 `MVP_*` variables (`src/config.ts`).
 
-### The private link
+### Access: an open site, the player link and the admin link
 
-There is no password and no login page (owner, 2026-10-17; this replaces E5b's
-first-run password setup). The site has one private link,
-`https://<site>/?key=<key>`: a browser that opened it once has access for 400 days,
-and nobody types anything (`src/access.ts`).
+There is no password and no login page (owner, 2026-10-17). Since 2026-10-20 the
+site is open (owner: "just anyone who goes to the site should be able to access";
+DECISIONS): anyone gets the page, plays with a disc image of their own, uses the
+lobby and the roster packs. Two links, each opened once (400 days, nobody types
+anything: `src/access.ts`), give a browser more:
 
-**The key.** `MVP_ACCESS_KEY`, else the file `MVP_ACCESS_KEY_FILE` names. With
+- the player link, `https://<site>/?key=<key>`: the server's own disc image. It
+  stays behind a link because serving the whole retail disc to anyone with the
+  address would be distributing it (DECISIONS 2026-10-17). Browsers that opened the
+  private link before keep it;
+- the admin link, `https://<site>/?admin=<admin key>`: the owner. The Server disc
+  page and the save states; the admin is a player too.
+
+**The keys.** `MVP_ACCESS_KEY`, else the file `MVP_ACCESS_KEY_FILE` names. With
 `MVP_ACCESS_KEY_CREATE=1` a missing file is created atomically with 32 random bytes
 (base64url, mode 0600: only the server reads it); the Docker deployment does this in
 its volume. At least 16 characters, only `A-Z a-z 0-9 . _ ~ -` (it goes into a link).
 No key, or an empty key file, stops the server with a message naming both variables.
-The server prints the link at every start (`mvp-server: private link: ...`; without a
-`publicUrl` the host is written `<this site's address>`), and the Server disc page
-shows it with a Copy button.
+The admin key is `MVP_ADMIN_KEY` / `MVP_ADMIN_KEY_FILE` (`_CREATE=1` the same way),
+optional: without it there is no admin, so no Server disc page and no save states; it
+must differ from the access key. The server prints both links at every start
+(`mvp-server: admin link: ...`, `mvp-server: player link: ...`; without a `publicUrl`
+the host is written `<this site's address>`), and the Server disc page shows the
+player link with a Copy button.
 
 **Access.**
 
@@ -324,26 +339,33 @@ shows it with a Copy button.
   303 to the same path and query without the key (`/?room=ab&key=K` goes to
   `/?room=ab`), `Cache-Control: no-store`, and the cookie `mvp_access` =
   base64url(HMAC-SHA256(key, "mvp-access-v1")): `Path=/; HttpOnly; SameSite=Lax`,
-  `Max-Age` 400 days, `Secure` with `secureCookies`. A wrong key counts as no access.
-- The cookie is stateless: it survives restarts and redeploys, and a new key changes
-  it, which locks out every browser at once (the way to retire a leaked link). Every
-  page load (a GET navigation) sends it again, so a browser in use keeps access.
-- Without the cookie, a page load gets 403 and a small self-contained page ("This is
-  a private server. Open the private link you were sent.": no script, its one style
-  pinned by hash in its CSP); anything else gets 401 `{"error":"no access"}`, and a
-  WebSocket upgrade 401. `/healthz` and `/robots.txt` stay open.
+  `Max-Age` 400 days, `Secure` with `secureCookies`. An `admin` parameter that
+  matches the admin key gets the same 303 with that cookie and `mvp_admin` =
+  base64url(HMAC-SHA256(admin key, "mvp-admin-v1")). A wrong key gives nothing (and
+  takes nothing away).
+- The cookies are stateless: they survive restarts and redeploys, and a new key
+  changes its cookie, which takes that access from every browser at once (the way to
+  retire a leaked link). Every page load (a GET navigation) sends them again, so a
+  browser in use keeps them.
+- Without them the site works as for anyone; the disc's routes, the admin's routes
+  and the save states answer 401 `{"error":"no access"}` (the Server disc page 404).
+  A WebSocket upgrade needs only an allowed Origin (this site's pages).
 - Lobby invite links carry the key (`/?room=<id>&key=<key>`), so an invite also lets
   the other player's browser in. The redirect keeps `room`, and the page joins the
   game as before (`engine/web/src/netplay.ts` reads `?room=` on load).
-- The Server disc page's CSRF token is an HMAC of the access cookie, under a key
-  derived from the access key, so an open page keeps uploading across a restart.
+- The admin's CSRF token (the Server disc page's meta tag; the game page gets it in
+  `/config.json`) is an HMAC of the admin cookie, under a key derived from the admin
+  key, so an open page keeps uploading across a restart. Writes (uploads, packs,
+  states) need it, the admin cookie, and a same-origin request.
 
-**Residual risk.** The link is a bearer secret: whoever has it can play and download
-the disc until the key changes. It travels over HTTPS only (Traefik or Caddy); the
-redirect takes it out of the address bar and history, and `no-referrer` keeps it out
-of referrers. The host name is in the public certificate-transparency logs, so
-scanners will find the site, but without the key they see only the private-server
-page (a generated key has 256 bits).
+**Residual risk.** Each link is a bearer secret: whoever has the player link can
+play with and download the disc, and whoever has the admin link can change the disc
+and the packs and read the save states, until its key changes. They travel over
+HTTPS only (Traefik or Caddy); the redirect takes them out of the address bar and
+history, and `no-referrer` keeps them out of referrers. The host name is in the
+public certificate-transparency logs, so scanners will find the site: they get the
+open game page (and could use the lobby and its TURN relay), but neither the disc nor
+anything of the admin's (a generated key has 256 bits).
 
 **Replacing the link.** Docker: set `ACCESS_KEY` in Dokploy and deploy
 (`docs/engine/DEPLOY_DOKPLOY.md`). VPS install: a new key in `/etc/mvp/access-key`,
@@ -354,11 +376,11 @@ hands each page credentials derived from the shared secret (username
 `<expiry>:mvp`, password base64 HMAC-SHA1), valid for 24 hours. No accounts are
 stored, and leaked credentials expire.
 
-Tests: `npm test` in `engine/server` (43 tests: the private link and its
-configuration, the static site, the disc route, the lobby, signaling and TURN
-credentials; `test/disc.test.ts` for the disc upload, the image hash and the Docker
-settings; `test/packs.test.ts` for the roster packs), also run by ctest as
-`server_node_tests`.
+Tests: `npm test` in `engine/server` (50 tests: the open site, the player and admin
+links and their configuration, the static site, the disc route, the lobby, signaling
+and TURN credentials; `test/disc.test.ts` for the disc upload, the image hash and the
+Docker settings; `test/packs.test.ts` for the roster packs; `test/states.test.ts` for
+the save states), also run by ctest as `server_node_tests`.
 
 ## 6. Deploying on a VPS
 
@@ -366,9 +388,11 @@ settings; `test/packs.test.ts` for the roster packs), also run by ctest as
 (services `mvp` and `coturn`, volume `mvp-data`); the owner's UI-only guide is
 `docs/engine/DEPLOY_DOKPLOY.md`. There the disc image is uploaded on the
 Server disc page (`/disc`: chunked, resumable, GV4E69 rev 0 checked server-side by
-the DOL's SHA-1, atomic replace), the TURN secret and the access key are generated
-on the first start (`/data/turn/secret`, `/data/access-key`; the private link is in
-the `mvp` service's log), and `ACCESS_KEY` replaces the link without a shell. The
+the DOL's SHA-1, atomic replace), the TURN secret and the access and admin keys are
+generated on the first start (`/data/turn/secret`, `/data/access-key`,
+`/data/admin-key`; both links are in the `mvp` service's log), the admin's save
+states are in `/data/states`, and `ACCESS_KEY` / `ADMIN_KEY` replace the links
+without a shell. The
 install script below is the older SSH path.
 
 **Package.** `node engine/server/tools/package.mjs` (after building `mvp-web` and
@@ -388,15 +412,15 @@ ports: 80/tcp and 443/tcp (Caddy, HTTPS), 3478/udp and 3478/tcp (TURN), 49160-49
 2. `./deploy/install.sh <domain>` as root. It installs Caddy and coturn
    (distribution packages) and Node.js 24.18.0 (the official build, checksum
    verified), creates the `mvp` user and `/opt/mvp/{site,server}`, writes
-   `/etc/mvp/{turn-secret,access-key,server.json,server.env}` (mode 0640, root:mvp;
-   the two secrets are made once), `/etc/caddy/Caddyfile`, `/etc/turnserver.conf`
+   `/etc/mvp/{turn-secret,access-key,admin-key,server.json,server.env}` (mode 0640,
+   root:mvp; the three secrets are made once), `/etc/caddy/Caddyfile`, `/etc/turnserver.conf`
    and the `mvp-server` systemd unit (whose `StateDirectory` is `/var/lib/mvp`),
    opens the ports with ufw when present, and starts everything. It ends by printing
-   the private link. Running it again updates the engine and keeps the secrets, so
-   the link stays the same.
-3. **The private link.** The agent gives the owner the link from the script's last
-   lines (the server also logs it at every start: `journalctl -u mvp-server`). The
-   owner opens it once in each browser that plays.
+   the admin and player links. Running it again updates the engine and keeps the
+   secrets, so the links stay the same.
+3. **The links.** The agent gives the owner the links from the script's last lines
+   (the server also logs them at every start: `journalctl -u mvp-server`). The owner
+   opens the admin link once in each of their browsers.
 4. For the private deployment, copy the owner's disc image to
    `/srv/mvp/disc/GV4E69.ciso` and run `./deploy/install.sh <domain>` again (it adds
    the image to `server.json`).

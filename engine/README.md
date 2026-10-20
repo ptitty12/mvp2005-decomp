@@ -28,7 +28,8 @@ measurements:
 Three rules matter most here:
 
 - **Nothing derived from the disc is ever committed or published.** (The owner's
-  private deployment, reached only through its private link, may serve the owner's own disc image.) That covers
+  deployment may serve the owner's own disc image to players with its player link, and the owner's own save
+  states to the owner alone.) That covers
   translated code, extracted files and memory dumps. The player's browser
   produces them from the player's own disc; development builds produce them
   under `build/`.

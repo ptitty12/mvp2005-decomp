@@ -177,7 +177,8 @@ never runs commands.
 The full rules are in [`CLAUDE.md`](CLAUDE.md). The most important:
 
 - Never commit or publish game data, or anything derived from the disc (the owner's
-  private deployment, reached only through its private link, may serve the owner's own disc image):
+  deployment may serve the owner's own disc image to players with its player link, and the owner's own
+  save states to the owner alone):
   - assets;
   - translated game code;
   - memory dumps, screenshots and recordings.

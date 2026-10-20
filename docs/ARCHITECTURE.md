@@ -62,10 +62,12 @@ what binds.
   keeps them in its own storage (OPFS). Development builds do the same in `build/`.
 - **The VPS serves only:**
   - the engine (our code);
-  - on the owner's private deployment only (owner, 2026-10-14), the owner's disc image,
-    behind a private link, to the owner and invited players who own the game. The page then
-    loads the disc from there instead of the file picker. The picker remains for any other
-    setup;
+  - on the owner's deployment only (owner, 2026-10-14), the owner's disc image, behind the
+    player link, to the owner and invited players who own the game. The page then loads the
+    disc from there instead of the file picker. The site itself is open (owner, 2026-10-20):
+    anyone else picks their own image;
+  - on the owner's deployment only (owner, 2026-10-20), the owner's own save states, to the
+    owner alone (the admin link), stored gzipped on the owner's server;
   - the lobby, signaling and TURN relay;
   - mod packs that contain authored content or deltas, never copies of retail files.
 - The engine checks the disc's identity (GV4E69 rev 0) by hash before it runs anything.

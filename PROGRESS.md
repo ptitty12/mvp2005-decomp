@@ -520,3 +520,11 @@
   - **The pass:** page CSS, the present filters, fullscreen at start and mid-game (threaded and single-threaded), and native 1x-vs-3x captures of menus, Fenway play and both ABS states, checked with a 3x-only line detector. Nothing else is the renderer's. Distant foul poles show as thin yellow hairlines at 2x/3x (they are thinner than a pixel; at 1x they drop out). That is correct, not a seam.
   - Checked: the new test_gfx_render case (fails without the fix), msvc renderer and play tests 12/12, Q7's scale-change check, Chrome fullscreen.
   | Owner: redeploy once it is on main.
+- 2026-10-20 | claude-side-gfx | site and engine: an open site, an admin link, save states on the server (owner request) | Branch engine/gfx-pass:
+  - **Open site:** anyone gets the game page and plays with their own disc image; no private-server page. The server's disc stays behind the old link, now the **player link** (browsers that opened it keep it; invites carry it), so the whole retail disc is never public (DECISIONS 2026-10-20).
+  - **Admin link** (`?admin=`, made on the first start, printed in the mvp service's log): the owner's only. The Server disc page and the save states.
+  - **Save states on the server, admin only:** stored gzipped (about 15 MB each). F2 copies every save to the admin's slot, F4 in a browser without its own takes it, "Save to the server" keeps one by name, the game page's panel and the Server disc page list them (Load, Start from it, Remove, upload a .mvpstate). `?state=NAME` works on the real server now.
+  - **F2/F4 in the threaded engine** (the deployed site's default): exact against native (the guest line at frame 5000 after a threaded save and load).
+  - **Not done:** the game's own memory card (the engine has none yet, so in-game saves are not possible); offered as its own task.
+  - Checked: server 50/50, web shell, Chrome against the real server (admin, the ABS state with the MLB 2026 pack, F2 to the slot, a fresh browser from the slot).
+  | Owner: redeploy; open the admin link from the mvp service's Logs tab (line `mvp-server: admin link:`) once in each of your browsers; upload the ABS states on the Server disc page (Save states card) from C:\Users\Patrick Taylor\decompile_mvp_04-states\build\states.

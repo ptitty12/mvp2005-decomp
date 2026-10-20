@@ -20,7 +20,8 @@
 //    "packs": {"set_hash": ..., "result_hash": ..., "ids": [...]},
 //    "label": "..."}
 // A state is game-derived (MEM1 and ARAM hold the disc's data): it stays on the
-// machine that made it, and is never committed or hosted (ARCHITECTURE §3).
+// machine that made it and is never committed; the one exception is the owner's
+// own states on the owner's server, for the owner alone (ARCHITECTURE §3).
 #pragma once
 
 #include <cstdint>

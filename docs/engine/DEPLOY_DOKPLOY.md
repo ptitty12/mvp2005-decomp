@@ -4,8 +4,8 @@ How to put the game site on your VPS using only Dokploy's web pages. You don't
 need SSH and you don't type any commands. The repository and the Docker image
 hold no game data. You upload your disc image through the site once, after it
 is running. It stays in the app's private storage on your server through every
-later deploy (section "Where the disc is kept"). Players never upload or pick a
-disc.
+later deploy (section "Where the disc is kept"). Players with your player link
+never upload or pick a disc.
 
 Technical details for agents are in `deploy/docker-compose.yml`, `deploy/Dockerfile`
 and `docs/engine/NETPLAY.md`.
@@ -60,7 +60,8 @@ Other settings, only if you need them:
 |---|---|
 | `TURN_HOST=<VPS IP address>` | Your domain goes through a proxy, such as Cloudflare's orange cloud. |
 | `TURN_MODE=stun` or `off` | You want no relay (`stun`), or no STUN and no relay (`off`). The default is `relay`. |
-| `ACCESS_KEY=<16 or more letters and digits>` | You want a new private link (section 6), for example because the old one leaked. Deploy after setting it: every browser then needs the new link. Leave it set; removing it brings the old link back. |
+| `ACCESS_KEY=<16 or more letters and digits>` | You want a new player link (section 6), for example because the old one leaked. Deploy after setting it: every browser then needs the new link to play with your disc. Leave it set; removing it brings the old link back. |
+| `ADMIN_KEY=<16 or more letters and digits>` | You want a new admin link (section 6). Deploy after setting it, then open the new admin link in your browsers. Leave it set; removing it brings the old link back. |
 
 Click **Save**.
 
@@ -81,25 +82,33 @@ On the **General** tab, click **Deploy**. Watch the **Deployments** tab: the fir
 deploy is done when the log ends without errors and both services (`mvp` and
 `coturn`) are running. Later deploys, from the same button, are much faster.
 
-## 6. Get your private link
+## 6. Get your admin link
 
-There is no password. The site has a private link instead, and the server makes
-it on the first start.
+There is no password, and the site is open: anyone who opens your domain gets the
+game page and can play with a disc image of their own. Two links, which the server
+makes on the first start, give a browser more:
+
+- **Your admin link** (`?admin=...`): yours only. The Server disc page (sections 7
+  and 8) and your save states (section 10). It also lets that browser play with your
+  disc.
+- **The player link** (`?key=...`): it lets a browser play with your disc instead of
+  picking its own (section 9).
 
 1. Open the app's **Logs** tab and choose the service **mvp**. Find the line that
-   starts with `mvp-server: private link:`. It looks like
-   `https://<this site's address>/?key=Xy3...`.
+   starts with `mvp-server: admin link:`. It looks like
+   `https://<this site's address>/?admin=Xy3...`.
 2. Put your domain in place of `<this site's address>`, for example
-   `https://mvp.yourdomain.com/?key=Xy3...`, and open that in your browser.
+   `https://mvp.yourdomain.com/?admin=Xy3...`, and open that in your browser.
 
-The browser now stays in for 400 days, and every visit starts that count again.
-The address bar shows just your domain; nobody types anything. Open the link once
-in each browser you play in.
+The browser keeps it for 400 days, and every visit starts that count again. The
+address bar shows just your domain; nobody types anything. Open the admin link once
+in each browser you use. Don't send it to anyone: whoever opens it can change the
+disc and the packs, and see your save states.
 
-Keep the link private: anyone with it can play and download the disc. Without it
-the site shows only "This is a private server". The link stays the same through
-every deploy. Once you are in, the Server disc page (section 7) shows the full
-link with a **Copy** button. To replace it, see `ACCESS_KEY` in section 3.
+Both links stay the same through every deploy. The server's disc stays behind the
+player link, because anyone with the address could otherwise download the whole
+game. Browsers that opened the old private link before this version keep playing
+with your disc. To replace a link, see `ACCESS_KEY` and `ADMIN_KEY` in section 3.
 
 ## 7. Upload the disc
 
@@ -116,7 +125,8 @@ link with a **Copy** button. To replace it, see `ACCESS_KEY` in section 3.
    If the upload stops (lost connection, closed page), choose the same file and
    click **Upload** again. It continues where it stopped.
 4. When it says **Done**, the server has the disc, and you never upload it again.
-   The game page never shows a file picker or an upload button to players.
+   The game page never shows a file picker or an upload button to players with
+   your player link (or your admin link).
 
 ## 8. Add roster packs (optional)
 
@@ -134,13 +144,16 @@ list on the game page instead of bringing the file.
    refuses to connect otherwise and says why.
 
 Uploading a new version of a pack replaces the old one; **Remove** takes a pack off
-the list. Packs are kept in the same volume as the disc, behind the same private link.
+the list. Packs are kept in the same volume as the disc. Anyone on the site can choose
+them; only you can upload or remove them.
 
 ## 9. Play with your brother
 
-Send your brother the private link (copy it on the Server disc page). He opens it
-once in his browser and is in from then on. An invite link (below) works too: it
-carries the same key, so it also lets a new browser in.
+If your brother already opened the old private link, nothing changes for him.
+Otherwise send him the player link (copy it on the Server disc page): he opens it
+once in his browser, and it plays with your disc from then on. An invite link
+(below) works too: it carries the same key. Without it he can still play with a disc
+image of his own.
 
 The first time a browser opens the game page, it downloads the game data from
 your server once, about 1.4 GB, with a progress bar ("Downloading the game data
@@ -160,24 +173,46 @@ incognito window it cannot keep the game data; the page then says so and offers
 to play while reading the disc from the server, which pauses while the game
 loads.
 
+## 10. Your save states
+
+In your browser (the one that opened the admin link), the game page's **Save
+states** panel has a section **On the server**:
+
+- **F2** saves where the game is, in this browser, and copies it to **your slot** on
+  the server. **F4** goes back to it; in a browser without a save of its own (your
+  laptop, a new browser), F4 takes the one in your slot.
+- **Save to the server**, with a name typed next to it, keeps a save under that
+  name.
+- The list shows your states on the server: **Load** puts one into the running game
+  (it needs the same roster packs and gameplay mods); **Start from it** reloads the
+  page and sets those up first. A link like `https://<your domain>/?state=<name>`
+  does the same.
+
+The Server disc page has the same list, with **Remove**, and uploads a `.mvpstate`
+file from your computer under a name (for example the ABS states in
+`C:\Users\Patrick Taylor\decompile_mvp_04-states\build\states`). Save states work in
+every game you play alone, with or without gameplay mods; not in an online game.
+Nobody else can see or open them.
+
 ## Later
 
-- **Update:** click **Deploy** again. It rebuilds from `main`. The private link
-  and the disc stay. Both players reload the page afterwards. Right after the first
+- **Update:** click **Deploy** again. It rebuilds from `main`. The links, the disc,
+  the packs and your save states stay. Both players reload the page afterwards. Right after the first
   deploy of this version the page may say "The server is preparing the game data"
   for a few seconds while the server checks the disc once. Players' browsers keep
   their copy and download again only if you upload a different disc.
 - **Online game doesn't connect:** check the firewall ports (section 4), set
   `TURN_EXTERNAL_IP`, and if the domain is proxied, set `TURN_HOST`. Then deploy
   again.
-- **The link leaked:** set `ACCESS_KEY` (section 3) and deploy. The old link
-  stops working in every browser; send the new one to whoever should play.
+- **A link leaked:** set `ACCESS_KEY` (the player link) or `ADMIN_KEY` (the admin
+  link) in section 3 and deploy. The old link stops working in every browser; open
+  or send the new one.
 - **Removing everything:** deleting the app in Dokploy with its volumes also
-  deletes the private link's key, the uploaded disc and the roster packs.
+  deletes the links' keys, the uploaded disc, the roster packs and your save states.
 
 ## Where the disc is kept
 
-The disc you uploaded, the key of the private link and the relay's secret are stored in the
+The disc you uploaded, the packs, your save states, the keys of the links and the relay's secret are stored in the
 app's volume, `mvp-data` (Docker names it after the app: the app's name, then
 `_mvp-data`). It is not part of the code Dokploy downloads from GitHub, and
 Dokploy deploys the app under the same name every time, so every deploy uses the
