@@ -193,6 +193,10 @@ const states = new States((msg, transfer = []) => send(msg, transfer), (text, er
   load: document.getElementById('state-load') as HTMLButtonElement | null,
   file: document.getElementById('state-file') as HTMLInputElement | null,
   download: document.getElementById('state-download') as HTMLButtonElement | null,
+  serverBox: document.getElementById('states-server'),
+  serverList: document.getElementById('states-server-list'),
+  serverName: document.getElementById('state-name') as HTMLInputElement | null,
+  serverSave: document.getElementById('state-server-save') as HTMLButtonElement | null,
 });
 let startState: { data: ArrayBuffer; header: StateHeader } | null = null;  // ?state=
 let setup: GameSetup | null = null;  // the game's mods and packs, for save states
@@ -856,6 +860,8 @@ async function init(): Promise<void> {
     $<HTMLAnchorElement>('server-disc-link').href = found.discPage;
     $<HTMLElement>('operator').hidden = false;
   }
+  // The server's admin: its save states on the server (states.ts).
+  if (found.kind !== 'error' && found.admin) states.setServer(found.admin);
   // ?state=NAME: a save state to start from; its gameplay mods and roster packs are set up first.
   const stateName = params.get('state');
   if (stateName) {
@@ -951,7 +957,7 @@ async function keepDisc(offer: DiscOffer, streamed: DiscSource): Promise<DiscSou
     const text: Record<DownloadError['kind'], string> = {
       quota: `This browser cannot keep the game data (${mb}): ${err.message}. Free some disk space, and use a normal ` +
              'window (not a private or incognito one), then reload the page.',
-      access: 'This browser has no access to the server any more. Open the private link again, then reload the page.',
+      access: 'This browser may not use the disc on this server any more. Open the player link again, then reload the page.',
       changed: 'The game disc on the server was replaced during the download. Reload the page to download the new one.',
       network: `The game data could not be downloaded (${err.message}). Reload the page: the download continues where it stopped.`,
       corrupt: `The downloaded game data did not match the server's checksums (${err.message}). Reload the page to try again.`,

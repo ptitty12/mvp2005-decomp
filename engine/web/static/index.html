@@ -84,10 +84,17 @@
           <summary>Save states <span class="note">F2 save, F4 back</span></summary>
           <div class="panel-body">
             <p class="note">F2 saves the game where it is. F4 goes back to the last state saved or loaded, as often
-              as you like; this browser keeps it. Save states need the single-threaded engine (always on with a
-              gameplay mod) and work offline only.</p>
+              as you like; this browser keeps it. Save states work offline only (not in an online game).</p>
             <p><label class="picker">Load a state file <input type="file" id="state-file" accept=".mvpstate" disabled></label>
               <button type="button" id="state-download" disabled>Download the saved state</button></p>
+            <div id="states-server" hidden>
+              <p class="note">On the server, for you only (this browser is the server's admin). F2 also copies each
+                save to your slot there ("quick"), and F4 in a browser without a save of its own comes back to it.</p>
+              <ul id="states-server-list" class="states-list"></ul>
+              <p class="states-row"><input type="text" id="state-name" placeholder="name, e.g. braves-dodgers-9th"
+                  spellcheck="false" aria-label="Name for the state on the server" disabled>
+                <button type="button" id="state-server-save" disabled>Save to the server</button></p>
+            </div>
             <p id="states-status" class="note" role="status"></p>
           </div>
         </details>

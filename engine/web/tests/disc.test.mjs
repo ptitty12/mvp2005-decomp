@@ -123,3 +123,17 @@ test('the roster packs the server offers: same-origin only, with or without a di
   assert.equal(await packs(cfg({ packs: 42 })), null);
   assert.equal(await packs(fakeFetch({})), null);
 });
+
+test('the admin: its CSRF token and its save states, same-origin only, with or without a disc', async () => {
+  const cfg = (v) => fakeFetch({ 'https://mvp.example.test/config.json': () => json(v) });
+  const admin = async (f) => (await findServerDisc(BASE, f)).admin ?? null;
+  const want = { token: 't0k', states: 'https://mvp.example.test/api/states' };
+  assert.deepEqual(await admin(cfg({ disc: '/api/disc/image', admin: true, adminToken: 't0k', states: '/api/states' })), want);
+  assert.deepEqual(await admin(cfg({ discPage: '/disc', admin: true, adminToken: 't0k', states: '/api/states' })), want);
+  assert.deepEqual(await admin(cfg({ admin: true, adminToken: 't0k' })), { token: 't0k' });
+  assert.deepEqual(await admin(cfg({ admin: true, adminToken: 't0k', states: 'https://elsewhere.test/api/states' })), { token: 't0k' });
+  assert.equal(await admin(cfg({ admin: true })), null);
+  assert.equal(await admin(cfg({ adminToken: 't0k', states: '/api/states' })), null);  // not the admin
+  assert.equal(await admin(cfg({ admin: 'yes', adminToken: 't0k' })), null);
+  assert.equal(await admin(fakeFetch({})), null);
+});

@@ -41,13 +41,17 @@
 //              the mock's API wants the access cookie (expect the no-access error);
 //              --latency, --rate: a slow server
 //   --real-server  E5's server (engine/server, built: dist/src/main.js) instead of
-//              the mock, with a throwaway access key (the check opens the private
+//              the mock, with a throwaway access key (the check opens the player
 //              link) and the disc configured
 //   --packs-dir with --real-server: the server's packs directory (MVP_PACKS_DIR): the
 //              zips in it are the packs the page offers in its dropdown
 //   --disc-dir with --real-server: the server's disc directory (MVP_DISC_DIR, as the
 //              Docker deployment: DIR/GV4E69.img is the uploaded image) instead of
 //              MVP_DISC_IMAGE
+//   --admin    with --real-server: a throwaway admin key too, and the check opens the admin
+//              link instead of the player link (the browser is the server's admin)
+//   --server-states DIR  with --real-server and --admin: the admin's save states on the server
+//              (MVP_STATES_DIR); ?state=NAME (--params) loads one of them
 //   --throttle Chrome's network conditions (CDP) on the page and its Workers: a round
 //              trip of RTT_MS and MBIT Mbit/s each way, e.g. 60,100 (Chromium browsers)
 //   --site     the site directory to serve (default build/engine/emscripten/web/site)
@@ -161,6 +165,8 @@ const castSize = opt('--cast-size', '') ? opt('--cast-size', '').split('x').map(
 // process's tasks) from field F for MS ms, written to OUT/trace-LABEL.json (summarize: trace_summary.mjs).
 const traceAt = opt('--trace', '') ? opt('--trace', '').split(':').map(Number) : null;
 const discDir = opt('--disc-dir', '');
+const asAdmin = flag('--admin');
+const serverStates = opt('--server-states', '');
 const throttle = opt('--throttle', '') ? opt('--throttle', '').split(',').map(Number) : null;
 const ioLog = flag('--io-log');
 const clearDisc = flag('--clear-disc');
@@ -215,12 +221,15 @@ mkdirSync(out, { recursive: true });
 // --site DIR: another build's site (e.g. a profiling build with function names).
 const site = resolve(opt('--site', join(repo, 'build', 'engine', 'emscripten', 'web', 'site')));
 const accessKey = randomBytes(18).toString('base64url');
+const adminKey = randomBytes(18).toString('base64url');
 let server;
 if (realServer) {
   server = spawn(process.execPath, [realServer], {
     env: { ...process.env, MVP_ACCESS_KEY: accessKey, MVP_SITE: site, MVP_PORT: '0', MVP_HOST: '127.0.0.1',
            ...(discDir ? { MVP_DISC_DIR: resolve(discDir) } : { MVP_DISC_IMAGE: disc }),
-           ...(packsDir ? { MVP_PACKS_DIR: resolve(packsDir) } : {}) },
+           ...(packsDir ? { MVP_PACKS_DIR: resolve(packsDir) } : {}),
+           ...(asAdmin ? { MVP_ADMIN_KEY: adminKey } : {}),
+           ...(serverStates ? { MVP_STATES_DIR: resolve(serverStates) } : {}) },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
 } else {
@@ -357,11 +366,11 @@ async function runOnce(context, run) {
   for (const [k, v] of new URLSearchParams(discParams)) q.set(k, v);
   for (const [k, v] of new URLSearchParams(pageParams)) q.set(k, v);
   if (storeOff) q.set('store', '0');
-  // Open the private link, as a player would (on a page that starts nothing: the server answers with the
-  // cookie and goes on to /healthz), and empty the browser's caches before the game page loads.
+  // Open the player link (or the admin link), as a player would (on a page that starts nothing: the server
+  // answers with the cookie and goes on to /healthz), and empty the browser's caches before the game page loads.
   if (realServer && run === 1) {
-    await page.goto(`${base}healthz?key=${accessKey}`);
-    if (page.url() !== `${base}healthz`) throw new Error(`the private link went to ${page.url()}`);
+    await page.goto(asAdmin ? `${base}healthz?admin=${adminKey}` : `${base}healthz?key=${accessKey}`);
+    if (page.url() !== `${base}healthz`) throw new Error(`the ${asAdmin ? 'admin' : 'player'} link went to ${page.url()}`);
   }
   if (run === 1 && (clearCache || clearDisc)) {
     if (!realServer) await page.goto(`${base}style.css`);

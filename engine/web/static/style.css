@@ -441,6 +441,14 @@ pre:empty { display: none; }
 .packs-issues:empty { display: none; }
 .packs-issues .warn { color: var(--muted); }
 
+/* ---- Save states on the server, the admin's (states.ts) ---- */
+.states-list { margin: 8px 0; padding-left: 1.4rem; }
+.states-list li { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; margin: 0.25rem 0; }
+.states-list button { padding: 1px 8px; font-size: 13px; }
+.states-list a { font-size: 13px; }
+.states-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.states-row input[type="text"] { flex: 1 1 12rem; min-width: 0; font: 13px var(--mono); }
+
 /* ---- Q5: the statistics over the game (netstats.ts) ---- */
 .overlay { position: absolute; top: 8px; left: 8px; max-width: calc(100% - 16px); padding: 6px 8px;
   background: rgba(0, 0, 0, 0.78); border-top: 2px solid rgba(255, 255, 255, 0.2); color: #f2f4f8;
