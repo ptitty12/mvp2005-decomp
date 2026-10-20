@@ -76,6 +76,7 @@ std::vector<u8> write_state_file(const std::string& header, const SaveState& s, 
   w(s.frame_polls);
   w(std::vector<u8>(mods.begin(), mods.end()));
   w(std::vector<u8>(views.begin(), views.end()));
+  s.hw->write_card_state(w);  // version 2
   w.bytes(kEnd, sizeof kEnd);
   return std::move(w.out());
 }
@@ -88,9 +89,9 @@ std::optional<std::string> state_file_header(std::span<const u8> bytes, std::str
     if (std::memcmp(magic, kMagic, sizeof magic) != 0) throw StateError("not a save state");
     std::uint32_t version = 0;
     r(version);
-    if (version != kStateFileVersion)
-      throw StateError("a save state of version " + std::to_string(version) + "; this engine reads version " +
-                       std::to_string(kStateFileVersion));
+    if (version < kStateFileOldestVersion || version > kStateFileVersion)
+      throw StateError("a save state of version " + std::to_string(version) + "; this engine reads versions " +
+                       std::to_string(kStateFileOldestVersion) + " to " + std::to_string(kStateFileVersion));
     std::uint64_t n = 0;
     r(n);
     if (n > kMaxHeader) throw StateError("save state: a header longer than any engine writes");
@@ -108,7 +109,10 @@ bool read_state_file(std::span<const u8> bytes, const Hardware& hw, const InputQ
   if (!header) return false;
   try {
     StateReader r(bytes);
-    r.take(sizeof kMagic + 4 + 8 + header->size());
+    r.take(sizeof kMagic);
+    std::uint32_t version = 0;
+    r(version);
+    r.take(8 + header->size());
     cpu_fields(r, s.machine.cpu);
     r(s.machine.mem1);
     r(s.machine.extra_ram);
@@ -133,6 +137,8 @@ bool read_state_file(std::span<const u8> bytes, const Hardware& hw, const InputQ
     r(s.frame_polls);
     r(mods);
     r(views);
+    if (version >= 2) s.hw->read_card_state(r);
+    else s.hw->reset_card_state();  // its machine had no card
     char end[4];
     r.bytes(end, sizeof end);
     if (std::memcmp(end, kEnd, sizeof end) != 0 || r.left() != 0) throw StateError("save state: damaged (no end mark)");

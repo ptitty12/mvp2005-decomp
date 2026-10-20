@@ -50,7 +50,7 @@ export interface StateStoreOptions {
 const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SUFFIX = '.mvpstate.gz';
 const MAGIC = 'MVPSTATE';
-const VERSION = 1;
+const VERSIONS = [1, 2];  // 2: with the memory card's part (engine/runtime/state_file.h)
 const HEADER_MAX = 1 << 20;
 
 interface Header {
@@ -64,7 +64,7 @@ interface Header {
 export function readStateHeader(b: Buffer): Header | string {
   if (b.length < 20 || b.toString('latin1', 0, 8) !== MAGIC) return 'not a save state';
   const version = b.readUInt32LE(8);
-  if (version !== VERSION) return `a save state of version ${version}; this server takes version ${VERSION}`;
+  if (!VERSIONS.includes(version)) return `a save state of version ${version}; this server takes versions ${VERSIONS.join(' and ')}`;
   const n = Number(b.readBigUInt64LE(12));
   if (n > HEADER_MAX) return 'a damaged save state (header)';
   if (b.length < 20 + n) return 'a damaged save state (cut short)';

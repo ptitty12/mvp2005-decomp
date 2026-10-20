@@ -6,12 +6,16 @@
 //   the beam position follows the clock;
 // - PI: the interrupt cause from the device states, and the mask;
 // - EXI: immediate and DMA transfers complete at once; channel 0 device 1 is the
-//   IPL chip's RTC and SRAM (fixed values, R12); every other device is absent;
+//   IPL chip's RTC and SRAM (fixed values, R12); channel 0 device 0 is the memory
+//   card in slot A when the host inserted one (insert_card, runtime/memcard.h),
+//   else absent like every other device;
 // - DSP: reset and halt bits, the ARAM DMA (with 16 MiB of ARAM), the AI DMA
 //   (a block every len x 32 bytes of 32 or 48 kHz stereo, AIDINT at each block
 //   start), and the DSP side of the mailbox protocol, without running DSP code:
-//   the IPL init microcode's answer, the boot ROM's task loader, and the AX
-//   microcode's frame handshake (each command list is answered with a yield
+//   the IPL init microcode's answer, the boot ROM's task loader, the task
+//   manager's switches to the CARD unlock microcode and back (its two mails,
+//   then done), and the AX microcode's frame handshake (each command list is
+//   answered with a yield
 //   after a fixed time; the voices advance through runtime/ax.h, R8; the mix
 //   is computed by an optional read-only observer, engine/audio, E3b);
 // - DI: the DVD drive reads the disc image (vfs::Source); a command completes
@@ -33,12 +37,14 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "ppc/cpu.h"
 #include "runtime/ax.h"
 #include "runtime/gx_fifo.h"
+#include "runtime/memcard.h"
 
 namespace mvp::vfs {
 class Source;
@@ -170,6 +176,13 @@ class Hardware : public ppc::Io {
   std::uint64_t wgp_resets_dropping() const { return wgp_dropped_; }
   const std::array<u8, 64>& sram() const { return sram_; }
 
+  // The memory card in slot A (runtime/memcard.h): inserted by the host before
+  // the machine starts (offline only: an online game has none on either side).
+  // Its contents are the player's storage; the host keeps them when writes()
+  // moves (card()->image()).
+  void insert_card(std::vector<u8> image) { card_.emplace(std::move(image)); }
+  const MemoryCard* card() const { return card_ ? &*card_ : nullptr; }
+
   // ---- time and interrupts (E0b items 9 and 10) ----
   // Time is the guest time base (40.5 MHz), driven by the runtime's virtual clock.
   // Moves the devices to time `tb` (VI display interrupts so far).
@@ -216,6 +229,12 @@ class Hardware : public ppc::Io {
   // class that the guest can see belongs in state_fields() too.
   void write_state(StateWriter& w) const;
   void read_state(StateReader& r);
+  // Save-state files, version 2: what a card adds (its transfer state and the
+  // DSP's card task), after the rest. A version 1 file had no card: read_card_state
+  // is not called, and the card is as at power-on (locked, idle).
+  void write_card_state(StateWriter& w) const;
+  void read_card_state(StateReader& r);
+  void reset_card_state();
 
   static const char* block_name(u32 addr);
 
@@ -263,7 +282,7 @@ class Hardware : public ppc::Io {
 
   // DSP mailbox HLE. Mails to the CPU wait in time order; one is in the mailbox
   // at a time.
-  enum class DspState { Off, IplInit, RomReady, Loading, Running };
+  enum class DspState { Off, IplInit, RomReady, Loading, Running, Switching, CardTask };
   struct DspMail {
     std::uint64_t tb;
     u32 mail;
@@ -274,6 +293,12 @@ class Hardware : public ppc::Io {
   void dsp_deliver();
   DspState dsp_state_ = DspState::Off;
   u32 dsp_boots_ = 0, dsp_load_n_ = 0;
+  // The task manager's switch (0xCDD10001, then __DSP_exec_task's ten mails), and
+  // the CARD unlock task (runtime/memcard.h): 0 waiting for 0xFF000000, 1 for the
+  // parameters' address, 2 done.
+  std::array<u32, 10> dsp_switch_{};
+  bool dsp_card_task_ = false;
+  u32 dsp_card_step_ = 0;
   bool dsp_cmdlist_next_ = false;
   std::vector<DspMail> dsp_out_;
   std::uint64_t dsp_frames_ = 0;
@@ -364,6 +389,7 @@ class Hardware : public ppc::Io {
   u32 ar_mm_ = 0, ar_ar_ = 0, ar_cnt_ = 0;
   bool dsp_booting_ = false;  // reset and halted since the last reset: the IPL init ucode runs on unhalt
   std::vector<u8> aram_;
+  std::optional<MemoryCard> card_;
 };
 
 // Thrown when the run must stop: an unanswered poll, an access outside the

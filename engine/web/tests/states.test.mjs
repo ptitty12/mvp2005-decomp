@@ -28,7 +28,8 @@ test('a state file\'s header: mods, packs, poll', () => {
 
 test('not a state, another version, a damaged header', () => {
   assert.equal(readHeader(file({}, { magic: 'NOTSTATE' })), 'not a save state');
-  assert.match(readHeader(file({}, { version: 2 })), /version 2; this page reads version 1/);
+  assert.equal(typeof readHeader(file({}, { version: 2 })), 'object');  // version 2: with the card's part
+  assert.match(readHeader(file({}, { version: 3 })), /version 3; this page reads versions 1 and 2/);
   assert.equal(readHeader(new ArrayBuffer(10)), 'not a save state (too short)');
   const cut = file({ label: 'x' }, { body: 0 }).slice(0, 25);
   assert.equal(readHeader(cut), 'a damaged save state (header)');

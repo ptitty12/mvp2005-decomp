@@ -45,7 +45,8 @@ describe('save-state files', () => {
     assert.equal(typeof h, 'object');
     assert.equal((h as { label: string }).label, 'Top 9th');
     assert.match(readStateHeader(Buffer.from('not a state at all, really')) as string, /not a save state/);
-    assert.match(readStateHeader(state({}, 10, 2)) as string, /version 2/);
+    assert.equal(typeof readStateHeader(state({}, 10, 2)), 'object');  // version 2: with the card's part
+    assert.match(readStateHeader(state({}, 10, 3)) as string, /version 3/);
     assert.match(readStateHeader(state().subarray(0, 40)) as string, /cut short/);
   });
 });
@@ -161,8 +162,8 @@ describe('save states on the server', () => {
     let r = await send(app, o, 'POST', '/api/states/x', Buffer.from('plain text, not a state'));
     assert.equal(r.status, 400);
     assert.match(((await r.json()) as { error: string }).error, /Not a save state/);
-    r = await send(app, o, 'POST', '/api/states/x', state({}, 10, 2));
-    assert.match(((await r.json()) as { error: string }).error, /version 2/);
+    r = await send(app, o, 'POST', '/api/states/x', state({}, 10, 3));
+    assert.match(((await r.json()) as { error: string }).error, /version 3/);
     r = await send(app, o, 'POST', '/api/states/x', Buffer.from([0x1f, 0x8b, 1, 2, 3]));
     assert.equal(r.status, 400);
     assert.equal((await send(app, o, 'POST', '/api/states/x', state({}, 200_000))).status, 413);

@@ -32,7 +32,7 @@ export interface StateHeader {
 }
 
 const MAGIC = 'MVPSTATE';
-const VERSION = 1;
+const VERSIONS = [1, 2];  // 2: with the memory card's part (runtime/state_file.h)
 
 /** The header of a save-state file, or an error message. */
 export function readHeader(data: ArrayBuffer): StateHeader | string {
@@ -41,7 +41,7 @@ export function readHeader(data: ArrayBuffer): StateHeader | string {
   if (String.fromCharCode(...b.subarray(0, 8)) !== MAGIC) return 'not a save state';
   const v = new DataView(data);
   const version = v.getUint32(8, true);
-  if (version !== VERSION) return `a save state of version ${version}; this page reads version ${VERSION}`;
+  if (!VERSIONS.includes(version)) return `a save state of version ${version}; this page reads versions ${VERSIONS.join(' and ')}`;
   const n = Number(v.getBigUint64(12, true));
   if (n > 1 << 20 || 20 + n > data.byteLength) return 'a damaged save state (header)';
   try {

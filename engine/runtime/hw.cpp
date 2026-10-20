@@ -132,6 +132,39 @@ void Hardware::write_state(StateWriter& w) const {
   const_cast<Hardware*>(this)->state_fields(w);  // the writer only reads the fields
 }
 
+// A card's part (version 2 files): whether the machine had one, its transfer
+// state, and the DSP's card task. Never its contents (the player's storage):
+// a load keeps the card the machine has now.
+void Hardware::write_card_state(StateWriter& w) const {
+  auto& self = const_cast<Hardware&>(*this);  // the writer only reads the fields
+  w(static_cast<u8>(card_ ? 1 : 0));
+  if (card_) self.card_->state_fields(w);
+  w(self.dsp_switch_);
+  w(self.dsp_card_task_);
+  w(self.dsp_card_step_);
+}
+
+void Hardware::read_card_state(StateReader& r) {
+  u8 had = 0;
+  r(had);
+  if (had) {  // its transfer state, for the card this machine has (read and dropped if it has none)
+    MemoryCard scratch({});
+    (card_ ? *card_ : scratch).state_fields(r);
+  } else if (card_) {
+    card_->power_on();
+  }
+  r(dsp_switch_);
+  r(dsp_card_task_);
+  r(dsp_card_step_);
+}
+
+void Hardware::reset_card_state() {
+  if (card_) card_->power_on();
+  dsp_switch_ = {};
+  dsp_card_task_ = false;
+  dsp_card_step_ = 0;
+}
+
 void Hardware::read_state(StateReader& r) {
   const std::size_t regs = regs_.size(), aram = aram_.size();
   state_fields(r);
@@ -159,8 +192,10 @@ constexpr u8 kDriveInfo[32] = {0x00, 0x02, 0x00, 0x06, 0x20, 0x02, 0x04, 0x02};
 // EXI CSR bits.
 constexpr u32 kExiIntW1C = 0x2 | 0x8 | 0x800;  // EXIINT, TCINT, EXTINT
 constexpr u32 kExiTcint = 0x8;
+constexpr u32 kExiExiint = 0x2;
+constexpr u32 kExiExt = 0x1000;  // a device in the slot (channels 0 and 1): the memory card
 // DSP control register bits.
-constexpr u16 kDspRes = 0x0001, kDspHalt = 0x0004, kDspAidint = 0x0008, kDspArint = 0x0020, kDspDspint = 0x0080;
+constexpr u16 kDspRes = 0x0001, kDspPiint = 0x0002, kDspHalt = 0x0004, kDspAidint = 0x0008, kDspArint = 0x0020, kDspDspint = 0x0080;
 constexpr u16 kDspW1C = kDspAidint | kDspArint | kDspDspint;
 
 }  // namespace
@@ -261,6 +296,7 @@ void Hardware::exi_transfer(int ch) {
   ExiChannel& e = exi_[ch];
   int dev = exi_device(ch);
   bool ipl = ch == 0 && dev == 1;
+  MemoryCard* card = ch == 0 && dev == 0 && card_ ? &*card_ : nullptr;
   u32 rw = (e.cr >> 2) & 3;  // 0 read, 1 write, 2 read-write
   if (e.cr & 2) {  // DMA
     u32 pa = e.mar & 0x01FFFFE0u;
@@ -269,18 +305,21 @@ void Hardware::exi_transfer(int ch) {
       if (gfx_) gfx_->gp_write_through(pa, std::min(e.len, mem1_size_ - pa));  // Q1: memory written without the cache
     }
     for (u32 k = 0; k < e.len && pa + k < mem1_size_; ++k) {
-      if (rw == 0) mem1_[pa + k] = ipl ? ipl_read_byte(e) : 0;
+      if (rw == 0) mem1_[pa + k] = ipl ? ipl_read_byte(e) : card ? card->read_byte() : 0;
       else if (ipl) ipl_write_byte(e, mem1_[pa + k]);
+      else if (card) card->write_byte(mem1_[pa + k]);
     }
   } else {  // immediate: TLEN+1 bytes, most significant first
     u32 n = ((e.cr >> 4) & 3) + 1;
     if (rw == 1 || rw == 2) {
-      for (u32 k = 0; k < n; ++k)
+      for (u32 k = 0; k < n; ++k) {
         if (ipl) ipl_write_byte(e, static_cast<u8>(e.data >> (24 - 8 * k)));
+        else if (card) card->write_byte(static_cast<u8>(e.data >> (24 - 8 * k)));
+      }
     }
     if (rw == 0 || rw == 2) {
       u32 d = 0;
-      for (u32 k = 0; k < n; ++k) d |= u32(ipl ? ipl_read_byte(e) : 0) << (24 - 8 * k);
+      for (u32 k = 0; k < n; ++k) d |= u32(ipl ? ipl_read_byte(e) : card ? card->read_byte() : 0) << (24 - 8 * k);
       e.data = d;
     }
   }
@@ -293,12 +332,17 @@ void Hardware::exi_write(int ch, u32 r, u32 v) {
   switch (r) {
     case 0x00: {
       u32 old_dev = (e.csr >> 7) & 7;
-      e.csr = (e.csr & kExiIntW1C & ~v) | (v & ~kExiIntW1C & ~0x1000u);  // EXT is read-only (no card)
+      e.csr = (e.csr & kExiIntW1C & ~v) | (v & ~kExiIntW1C & ~kExiExt);  // EXT is read-only (the slot's device)
       if (((e.csr >> 7) & 7) != old_dev) {  // chip select changed: a new command starts
         e.have_cmd = false;
         e.cmd = 0;
         e.cmd_bytes = 0;
         e.offset = 0;
+        if (ch == 0 && card_) {  // the memory card (device 0): its command ends or starts
+          const bool was = (old_dev & 1) != 0, is = ((e.csr >> 7) & 1) != 0;
+          if (was && !is && card_->deselect(now())) kick();  // a program or an erase: its interrupt at busy_until()
+          if (is && !was) card_->select();
+        }
       }
       break;
     }
@@ -615,7 +659,8 @@ void Hardware::dsp_write16(u32 off, u16 v) {
     }
     case 0x0A: {
       u16 old = dsp_cr_;
-      dsp_cr_ = static_cast<u16>((dsp_cr_ & kDspW1C & ~v) | (v & ~kDspW1C & ~kDspRes));
+      // RES and PIINT (__DSPAssertInt: interrupt the DSP; the modeled microcodes need not see it) do not stay set.
+      dsp_cr_ = static_cast<u16>((dsp_cr_ & kDspW1C & ~v) | (v & ~kDspW1C & ~kDspRes & ~kDspPiint));
       if (v & kDspRes) {  // reset completes at once; the DSP is halted and rebooting
         dsp_booting_ = true;
         dsp_mail_to_cpu_ = 0;
@@ -730,6 +775,53 @@ void Hardware::dsp_receive(u32 mail) {
         return;
       }
       if (mail == 0xCDD10003u) return;  // resume the same task: wait for the next list
+      if (mail == 0xCDD10001u) {  // the task manager switches to another task: __DSP_exec_task's ten mails follow
+        dsp_state_ = DspState::Switching;
+        dsp_load_n_ = 0;
+        return;
+      }
+      break;
+    case DspState::Switching:
+      // The current task's DRAM save (3), the next task's IRAM (source, length, address), and its init vector
+      // (then 3 zeros) or its resume vector and DRAM (3). Two tasks are modeled: AX and the CARD unlock task
+      // (0x160 bytes of IRAM; DSPAddTask'd by __CARDUnlock), which runs between two AX frames.
+      dsp_switch_[dsp_load_n_] = mail;
+      if (++dsp_load_n_ < 10) return;
+      if (!dsp_card_task_) {
+        if (dsp_switch_[4] != 0x160u) {
+          std::snprintf(b, sizeof b, "DSP: a switch to a task of 0x%X bytes of IRAM is not modeled (pc 0x%08X)",
+                        dsp_switch_[4], cpu_->pc);
+          throw StopRun{b};
+        }
+        dsp_card_task_ = true;
+        dsp_card_step_ = 0;
+        dsp_state_ = DspState::CardTask;
+        dsp_post(kDspTaskStartTb, 0xDCD10000u, true);  // the CARD task is initialized
+      } else {
+        dsp_card_task_ = false;
+        dsp_state_ = DspState::Running;
+        dsp_cmdlist_next_ = false;
+        dsp_post(kDspTaskStartTb, 0xDCD10001u, true);  // AX resumed
+      }
+      return;
+    case DspState::CardTask:
+      // InitCallback's two mails: 0xFF000000, then the CARDDecParam's address. The microcode would compute the
+      // answer to the card's challenge into its output; nothing checks it but the card, and this card takes any
+      // answer (runtime/memcard.h), so the output is left as it is. Then the task is done.
+      if (dsp_card_step_ == 0 && mail == 0xFF000000u) {
+        dsp_card_step_ = 1;
+        return;
+      }
+      if (dsp_card_step_ == 1) {
+        dsp_card_step_ = 2;
+        dsp_post(kDspTaskStartTb, 0xDCD10003u, true);
+        return;
+      }
+      if (dsp_card_step_ == 2 && mail == 0xCDD10001u) {  // back to AX
+        dsp_state_ = DspState::Switching;
+        dsp_load_n_ = 0;
+        return;
+      }
       break;
     default:
       break;
@@ -780,6 +872,7 @@ void Hardware::advance(std::uint64_t tb) {
   if (tb < now_tb_) return;
   now_tb_ = tb;
   if (di_done_tb_ <= tb) di_complete();
+  if (card_ && card_->busy_until() <= tb && card_->finish_busy()) exi_[0].csr |= kExiExiint;  // the program or erase ended
   while (aid_end_tb_ <= tb) aid_start_block(aid_end_tb_);
   dsp_deliver();
   for (;;) {
@@ -810,6 +903,7 @@ std::uint64_t Hardware::next_event_tb() const {
   std::uint64_t next = frame_start_tb_ + kFrameTb;
   if (!vi_events_.empty() && vi_events_.front().first < next) next = vi_events_.front().first;
   next = std::min({next, di_done_tb_, ai_next_change_tb(), aid_end_tb_});
+  if (card_) next = std::min(next, card_->busy_until());
   if (!dsp_out_.empty() && !(dsp_mail_to_cpu_ & 0x80000000u)) next = std::min(next, dsp_out_.front().tb);
   return next;
 }
@@ -882,7 +976,7 @@ u32 Hardware::read(u32 addr, int size) {
       int ch = static_cast<int>((addr - kExiBase) / kExiStride);
       u32 r = (addr - kExiBase) % kExiStride & ~3u;
       const ExiChannel& e = exi_[ch];
-      word = r == 0 ? e.csr : r == 4 ? e.mar : r == 8 ? e.len : r == 12 ? e.cr : e.data;
+      word = r == 0 ? e.csr | (ch == 0 && card_ ? kExiExt : 0u) : r == 4 ? e.mar : r == 8 ? e.len : r == 12 ? e.cr : e.data;
     } else if (addr >= kDiBase && addr < kDiBase + 0x28u) {
       word = di_read((addr - kDiBase) & ~3u);
     } else if ((addr & ~3u) == kAiBase + 0x0u) {

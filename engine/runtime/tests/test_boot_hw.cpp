@@ -1,9 +1,12 @@
 // Data-free tests for the boot environment and the hardware models: a synthetic
 // disc for the low-memory layout; EXI (RTC, SRAM over imm and DMA), the DSP init
-// handshake and the ARAM DMA driven through their registers as the SDK does.
+// handshake and the ARAM DMA driven through their registers as the SDK does; the
+// memory card in slot A (its unlock, reads, programs and erases; a new card's format).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
 
 #include "common/bytes.h"
@@ -160,6 +163,245 @@ TEST_CASE("EXI: the IPL chip's SRAM and RTC") {
   // TCINT is write-one-to-clear.
   g.w(0xCC006800, 0x8);
   CHECK((g.r(0xCC006800) & 0x8) == 0);
+}
+
+namespace {
+
+// The SDK's side of the card (src/dolphin/card): its unlock arithmetic (CARDUnlock.c), its checksum and
+// VerifyID's serial check (tu_8041C2D8.c), to check the card against what the game computes.
+u32 sdk_exnor_1st(u32 data, u32 rshift) {
+  u32 work = data;
+  for (u32 i = 0; i < rshift; i++) {
+    u32 wk = ~(work ^ (work >> 7) ^ (work >> 15) ^ (work >> 23));
+    work = (work >> 1) | ((wk << 30) & 0x40000000u);
+  }
+  return work;
+}
+u32 sdk_exnor(u32 data, u32 lshift) {
+  u32 work = data;
+  for (u32 i = 0; i < lshift; i++) {
+    u32 wk = ~(work ^ (work << 7) ^ (work << 15) ^ (work << 23));
+    work = (work << 1) | ((wk >> 30) & 0x00000002u);
+  }
+  return work;
+}
+u32 sdk_bitrev(u32 data) {
+  u32 wk = 0, k = 0, j = 1;
+  for (u32 i = 0; i < 32; i++) {
+    if (i > 15) {
+      if (i == 31) wk |= ((data & (1u << 31)) >> 31) & 1u;
+      else {
+        wk |= (data & (1u << i)) >> j;
+        j += 2;
+      }
+    } else {
+      wk |= (data & (1u << i)) << (31 - i - k);
+      k++;
+    }
+  }
+  return wk;
+}
+u32 sdk_next(u32 s, u32 shift) {
+  u32 wk = sdk_exnor(s, shift);
+  u32 wk1 = ~(wk ^ (wk << 7) ^ (wk << 15) ^ (wk << 23));
+  return wk | ((wk1 >> 31) & 1u);
+}
+void sdk_checksum(const u8* p, u32 length, u16* sum, u16* inv) {
+  *sum = *inv = 0;
+  for (u32 k = 0; k + 1 < length; k += 2) {
+    u16 w = static_cast<u16>(p[k] << 8 | p[k + 1]);
+    *sum = static_cast<u16>(*sum + w);
+    *inv = static_cast<u16>(*inv + static_cast<u16>(~w));
+  }
+  if (*sum == 0xFFFF) *sum = 0;
+  if (*inv == 0xFFFF) *inv = 0;
+}
+
+// The card on channel 0, through the EXI registers as EXIImmEx does it (chunks of up to 4 bytes).
+struct CardRig : Rig {
+  void send(std::initializer_list<u8> bytes) {
+    std::vector<u8> b(bytes);
+    for (std::size_t k = 0; k < b.size(); k += 4) {
+      u32 n = static_cast<u32>(std::min<std::size_t>(4, b.size() - k)), d = 0;
+      for (u32 i = 0; i < n; ++i) d |= u32(b[k + i]) << (24 - 8 * i);
+      exi_imm(d, n, 1);
+    }
+  }
+  std::vector<u8> receive(u32 len) {
+    std::vector<u8> out;
+    while (out.size() < len) {
+      u32 n = std::min<u32>(4, len - static_cast<u32>(out.size()));
+      exi_imm(0, n, 0);
+      u32 d = r(0xCC006810);
+      for (u32 i = 0; i < n; ++i) out.push_back(static_cast<u8>(d >> (24 - 8 * i)));
+    }
+    return out;
+  }
+  u8 status() {
+    exi_select(0);
+    send({0x83, 0x00});
+    u8 s = receive(1)[0];
+    exi_deselect();
+    return s;
+  }
+  // ReadArrayUnlock: the command, the latency's dummy bytes (4), then `rlen` bytes read.
+  std::vector<u8> unlock_read(u32 data, u32 rlen, int mode) {
+    data &= 0xFFFFF000u;
+    exi_select(0);
+    if (mode == 0)
+      send({0x52, static_cast<u8>((data >> 29) & 3), static_cast<u8>(data >> 21), static_cast<u8>((data >> 19) & 3),
+            static_cast<u8>((data >> 12) & 0x7F)});
+    else
+      send({0x52, static_cast<u8>(data >> 24), static_cast<u8>(data >> 16), 0, 0});
+    send({0, 0, 0, 0});
+    auto out = receive(rlen);
+    exi_deselect();
+    return out;
+  }
+};
+
+}  // namespace
+
+TEST_CASE("EXI: the memory card in slot A (runtime/memcard.h)") {
+  CardRig g;
+  // Without a card: no EXT (the test above). With one:
+  g.hw.insert_card(MemoryCard::formatted(0, 0, 0x0123456789ABCDEFull));
+  CHECK((g.r(0xCC006800) & 0x1000) != 0);  // EXT: a card in slot A
+  CHECK((g.r(0xCC006814) & 0x1000) == 0);  // channel 1 (slot B): empty
+  // EXIGetID: 0x0000, then the ID (64 Mbit, 8 KiB sectors: IsCard and the EA layer take it).
+  g.exi_select(0);
+  g.send({0x00, 0x00});
+  auto id = g.receive(4);
+  g.exi_deselect();
+  CHECK(be32(id.data()) == 0x00000040u);
+  // __CARDReadVendorID: not 0xEC.. (fast mode's 512-byte pages).
+  g.exi_select(0);
+  g.send({0x85, 0x00});
+  auto vendor = g.receive(2);
+  g.exi_deselect();
+  CHECK(vendor[0] == 0xC2);
+  // Locked at power-on: DoMount runs __CARDUnlock.
+  CHECK((g.status() & 0x40) == 0);
+
+  // __CARDUnlock: the SDK recovers the flash ID (zeros) from the second read, whatever its random value and
+  // dummy lengths.
+  for (u32 rnd : {0x123u, 0x7FFFu, 0u}) {
+    CardRig c;
+    c.hw.insert_card(MemoryCard::formatted(0, 0, 1));
+    const u32 init_val = (0x7FEC8000u | rnd) & 0xFFFFF000u;
+    const u32 dummy1 = 4 + rnd % 29, dummy2 = 4 + (rnd >> 3) % 29;
+    c.unlock_read(init_val, dummy1, 0);
+    u32 wk = sdk_exnor_1st(init_val, dummy1 * 8 + 1);
+    u32 wk1 = ~(wk ^ (wk >> 7) ^ (wk >> 15) ^ (wk >> 23));
+    u32 scramble = sdk_bitrev(wk | ((wk1 << 31) & 0x80000000u));
+    auto rbuf = c.unlock_read(0, 20 + dummy2, 1);
+    u32 words[3];
+    for (int k = 0; k < 3; ++k) {
+      words[k] = be32(rbuf.data() + 4 * k) ^ scramble;
+      scramble = sdk_next(scramble, 32);
+    }
+    CHECK(words[0] == 0);
+    CHECK(words[1] == 0);
+    CHECK(words[2] == 0);
+    CHECK((c.status() & 0x40) == 0);
+    c.unlock_read(0x12340000u, dummy1, 1);  // DoneCallback's two reads
+    c.unlock_read(0x56780000u, dummy2, 1);
+    CHECK((c.status() & 0x40) != 0);  // unlocked
+  }
+
+  // Unlocked: reads, a page program and a sector erase, each ending with the EXI interrupt when it is on.
+  CardRig c;
+  const auto img = MemoryCard::formatted(0, 0, 1);
+  c.hw.insert_card(img);
+  c.unlock_read(0x7FEC8000u, 4, 0);
+  for (int k = 0; k < 3; ++k) c.unlock_read(0, 24, 1);
+  REQUIRE((c.status() & 0x40) != 0);
+  auto read = [&](u32 addr, u32 len) {
+    c.exi_select(0);
+    c.send({0x52, static_cast<u8>((addr >> 17) & 0x7F), static_cast<u8>(addr >> 9), static_cast<u8>((addr >> 7) & 3),
+            static_cast<u8>(addr & 0x7F)});
+    c.send({0, 0, 0, 0});
+    auto out = c.receive(len);
+    c.exi_deselect();
+    return out;
+  };
+  auto head = read(0, 0x200);
+  CHECK(std::memcmp(head.data(), img.data(), 0x200) == 0);
+  c.exi_select(0);
+  c.send({0x81, 0x01});  // __CARDEnableInterrupt
+  c.exi_deselect();
+  c.w(0xCC006800, 0x1);  // EXIINTMASK
+  const u32 page = 5 * 0x2000 + 0x80;
+  c.exi_select(0);
+  c.send({0xF2, static_cast<u8>((page >> 17) & 0x7F), static_cast<u8>(page >> 9), static_cast<u8>((page >> 7) & 3),
+          static_cast<u8>(page & 0x7F)});
+  for (u32 k = 0; k < 128; k += 4)
+    c.send({static_cast<u8>(k), static_cast<u8>(k + 1), static_cast<u8>(k + 2), static_cast<u8>(k + 3)});
+  c.w(0xCC006800, 0x1);  // deselect: the program starts
+  CHECK((c.r(0xCC006800) & 0x2) == 0);
+  CHECK(c.hw.next_event_tb() <= MemoryCard::kProgramTb);
+  c.hw.advance(MemoryCard::kProgramTb);
+  CHECK((c.r(0xCC006800) & 0x2) != 0);  // EXIINT
+  CHECK((c.hw.pi_cause() & 0x10) != 0);
+  c.w(0xCC006800, 0x3);  // clear it (write one), mask stays
+  CHECK((c.r(0xCC006800) & 0x2) == 0);
+  auto back = read(page, 128);
+  for (u32 k = 0; k < 128; ++k) CHECK(back[k] == k);
+  CHECK(c.hw.card()->writes() == 1);
+  c.exi_select(0);
+  c.send({0xF1, static_cast<u8>((page >> 17) & 0x7F), static_cast<u8>(page >> 9)});
+  c.w(0xCC006800, 0x1);
+  c.hw.advance(MemoryCard::kProgramTb + MemoryCard::kEraseTb);
+  CHECK((c.r(0xCC006800) & 0x2) != 0);
+  back = read(page - 0x80, 0x200);
+  for (u8 b : back) CHECK(b == 0xFF);
+  CHECK(c.hw.card()->writes() == 2);
+}
+
+TEST_CASE("a new memory card is formatted as the game formats one, and passes its checks") {
+  const std::uint64_t time = 0x0000002F12345678ull;
+  const auto img = MemoryCard::formatted(0x11223344u, 0, time);
+  REQUIRE(img.size() == MemoryCard::kSize);
+  // VerifyID: device 0, 64 Mbit, the checksums, the serial against the flash ID (zeros) from the format time.
+  const u8* id = img.data();
+  CHECK(be16(id + 0x20) == 0);
+  CHECK(be16(id + 0x22) == 64);
+  CHECK(be16(id + 0x24) == 0);
+  u16 sum, inv;
+  sdk_checksum(id, 0x1FC, &sum, &inv);
+  CHECK(be16(id + 0x1FC) == sum);
+  CHECK(be16(id + 0x1FE) == inv);
+  std::int64_t rand = 0;
+  for (int k = 0; k < 8; ++k) rand = static_cast<std::int64_t>((static_cast<std::uint64_t>(rand) << 8) | id[12 + k]);
+  CHECK(static_cast<std::uint64_t>(rand) == time);
+  for (int i = 0; i < 12; i++) {
+    rand = static_cast<std::int64_t>(static_cast<std::uint64_t>(rand) * 1103515245u + 12345u) >> 16;
+    CHECK(id[i] == static_cast<u8>(rand + 0));
+    rand = (static_cast<std::int64_t>(static_cast<std::uint64_t>(rand) * 1103515245u + 12345u) >> 16) & 0x7FFF;
+  }
+  CHECK(be32(id + 20) == 0x11223344u);
+  // VerifyDir: both directories empty, their checksums right, check codes 0 and 1.
+  for (u32 i = 0; i < 2; ++i) {
+    const u8* dir = img.data() + (1 + i) * 0x2000;
+    sdk_checksum(dir, 0x2000 - 4, &sum, &inv);
+    CHECK(be16(dir + 0x1FFC) == sum);
+    CHECK(be16(dir + 0x1FFE) == inv);
+    CHECK(be16(dir + 0x1FFA) == i);
+    CHECK(dir[0] == 0xFF);  // no file
+  }
+  // VerifyFAT: the checksums, and 1019 free blocks counted and recorded.
+  for (u32 i = 0; i < 2; ++i) {
+    const u8* fat = img.data() + (3 + i) * 0x2000;
+    sdk_checksum(fat + 4, 0x2000 - 4, &sum, &inv);
+    CHECK(be16(fat + 0) == sum);
+    CHECK(be16(fat + 2) == inv);
+    CHECK(be16(fat + 4) == i);
+    u32 free = 0;
+    for (u32 b = 5; b < 1024; ++b) free += be16(fat + 2 * b) == 0;
+    CHECK(free == 1019);
+    CHECK(be16(fat + 6) == 1019);
+  }
+  CHECK(img[5 * 0x2000] == 0xFF);  // the files' blocks: erased
 }
 
 TEST_CASE("DSP: the init handshake of __OSInitAudioSystem and the ARAM DMA") {

@@ -11,7 +11,10 @@
 // JSON object, below), then the parts in a fixed order: the CPU, MEM1, the
 // other RAM regions, the virtual clock, the yield state, the hardware
 // (Hardware::write_state), the input queue, the frame-poll count, the gameplay
-// mods' state block and the renderer's GX state (both may be empty), "END!".
+// mods' state block and the renderer's GX state (both may be empty), since
+// version 2 the memory card's part (Hardware::write_card_state: its transfer
+// state, never its contents), "END!". Version 1 files are read too: their
+// machine had no card, so a card here is as at power-on.
 //
 // The header is the tool's: what a loader must set up before boot and what the
 // state shows. mvp-play and the browser write
@@ -34,7 +37,8 @@
 
 namespace mvp::rt {
 
-inline constexpr std::uint32_t kStateFileVersion = 1;
+inline constexpr std::uint32_t kStateFileVersion = 2;
+inline constexpr std::uint32_t kStateFileOldestVersion = 1;  // the oldest version read
 
 std::vector<u8> write_state_file(const std::string& header, const SaveState& s, std::span<const u8> mods,
                                  std::span<const u8> views);

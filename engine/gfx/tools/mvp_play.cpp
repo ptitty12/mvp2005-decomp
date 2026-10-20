@@ -85,6 +85,10 @@
 //                     poll, load it; give the same --pack and --mod as the saving run.
 //                     The script's frames stay absolute (the state's poll and on)
 //   Save-state files are game-derived: keep them under build/ or a scratch folder.
+//   --card FILE       a memory card in slot A (runtime/memcard.h): the file's 8 MiB, or a
+//                     new card formatted as the game formats one when there is no file;
+//                     written back once the game's writes have settled (60 fields) and
+//                     at the end. Without it the slot is empty, as before. Game-derived.
 //
 // Determinism: the renderer and the mixer only read guest state, audio and
 // window events never reach the guest (playback throttles the host, not the
@@ -333,6 +337,30 @@ struct Play : GfxObserver {
   // Frame pacing (window mode): host time between presents.
   std::vector<double> present_ms;
   std::uint64_t pacing_from = 0;  // --pacing-from
+  // --card: the memory card's file (in `hw`), written back once the game's writes settle (60 VI fields without
+  // another).
+  std::string card_path;
+  std::uint64_t card_saved = 0, card_seen = 0, card_seen_field = 0;
+  void save_card(std::uint64_t field, bool now) {
+    const rt::MemoryCard* c = hw ? hw->card() : nullptr;
+    if (!c || card_path.empty()) return;
+    if (c->writes() != card_seen) {
+      card_seen = c->writes();
+      card_seen_field = field;
+    }
+    if (card_seen == card_saved || (!now && field < card_seen_field + 60)) return;
+    const std::string tmp = card_path + ".tmp";
+    if (!write_file(tmp, c->image().data(), c->image().size())) {
+      std::fprintf(stderr, "mvp-play: cannot write %s\n", tmp.c_str());
+      return;
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, card_path, ec);
+    if (ec) std::fprintf(stderr, "mvp-play: cannot replace %s: %s\n", card_path.c_str(), ec.message().c_str());
+    else std::printf("card: wrote %s at field %llu (%llu writes)\n", card_path.c_str(),
+                     static_cast<unsigned long long>(field), static_cast<unsigned long long>(card_seen));
+    card_saved = card_seen;
+  }
   double wait_s = 0, present_s = 0;  // host time waiting for the schedule, and in window events + present
   // --pace (window): each VI field is shown at its own time, 1001/60000 s apart
   // (59.94 Hz), measured from the first field shown; a field that is late runs
@@ -502,6 +530,7 @@ struct Play : GfxObserver {
 
   void vi_field(std::uint64_t field, std::uint32_t xfb) override {
     fields = field;
+    save_card(field, false);
     if (gp_memory) gp_memory->field();
     perf(field);
     if (threads_at.count(field)) dump_threads(field);
@@ -1018,6 +1047,7 @@ int main(int argc, char** argv) {
       g_states.save_path = v.substr(colon + 1);
     }
     else if (a == "--state-label") g_states.label = next();
+    else if (a == "--card") play.card_path = next();
     else if (a == "--state-load") g_states.load_path = next();
     else if (a == "--capture-review-every")
       play.review_capture_every = std::max<std::uint64_t>(1, std::strtoull(next().c_str(), nullptr, 10));
@@ -1028,7 +1058,7 @@ int main(int argc, char** argv) {
                    "[--draw-log FILE] [--draw-log-from N] [--draw-log-to N] [--dump-textures DIR --dump-field N [--dump-to M]] "
                    "[--perf-every N] [--profile N] [--host-profile N] [--profile-from F] [--trace-entry HEX,... [--trace-file F] [--trace-from N] "
                    "[--trace-to N] [--trace-peek HEX,...]] [--audio-wav FILE] [--no-audio] [--audio-latency MS] [--pack PATH]... [--mod ID[:K=V,...]]... [--mod-seed N] [--capture-review DIR [--capture-review-every N]] [--rewind-test F:N] "
-                   "[--state-save F:FILE [--state-label TEXT]] [--state-load FILE]\n");
+                   "[--state-save F:FILE [--state-label TEXT]] [--state-load FILE] [--card FILE]\n");
       return 2;
     }
   }
@@ -1123,6 +1153,20 @@ int main(int argc, char** argv) {
   setup_boot_environment(m, in->disc);
   Hardware hw(&m.cpu(), m.mem1(), Machine::kMem1Size);
   hw.set_disc(in->disc.image.get());
+  if (!play.card_path.empty()) {  // --card: the file's card, or a new one
+    auto file = read_file(play.card_path);
+    const bool have = file.has_value();
+    std::vector<std::uint8_t> img = have ? std::move(*file) : std::vector<std::uint8_t>{};
+    if (!have || img.size() != rt::MemoryCard::kSize) {
+      const auto& s = hw.sram();  // the counter bias and the language this console formats with
+      const std::uint32_t bias = std::uint32_t(s[0x0C]) << 24 | std::uint32_t(s[0x0D]) << 16 | std::uint32_t(s[0x0E]) << 8 | s[0x0F];
+      img = rt::MemoryCard::formatted(bias, s[0x12], std::uint64_t(rt::HardwareConfig{}.rtc_seconds) * 40500000ull);
+      if (have) std::printf("card: %s is not an 8 MiB card; a new one replaces it\n", play.card_path.c_str());
+    }
+    hw.insert_card(std::move(img));
+    play.hw = &hw;
+    std::printf("card: %s in slot A (%s)\n", play.card_path.c_str(), have ? "loaded" : "new, formatted");
+  }
   ClockConfig clock;
   if (cpi_milli) clock.cpi_milli = cpi_milli;
   std::printf("clock: %.3f cycles per instruction\n", clock.cpi_milli / 1000.0);
@@ -1291,6 +1335,7 @@ int main(int argc, char** argv) {
     why = std::string("guest fault: ") + f.what();
     rc = 1;
   }
+  play.save_card(play.fields, true);
   const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   if (profile_top > 0) profiler.finish(in->symbols, profile_top);
   if (host_profile_top > 0) host_profiler.finish(host_profile_top);
