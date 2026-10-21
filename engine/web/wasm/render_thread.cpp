@@ -108,6 +108,8 @@ enum : u32 {
   kShadowEnd,   // Q6: {addr, len}: the guest writes there next; copies there end
   kViewExport,  // save states: the GX processor's state into Shared::view_out
   kViewImport,  // save states: {pointer, length} (Ref): the GX processor's state (the emulation waits until it is done)
+  kViewSave,    // V2, gameplay mods' timeline: u32 slot: the GX processor's state saved with that snapshot slot
+  kViewLoad,    // V2: u32 slot: ... and restored from it (textures and the GP's snapshots start over)
 };
 
 constexpr u32 kRingBytes = 16u << 20;
@@ -599,6 +601,18 @@ void handle(const gfx::RenderRing::Record& r) {
       S->side.gp_end_shadow(v.a, v.b);
       return;
     }
+    case kViewSave: {  // V2
+      u32 slot;
+      std::memcpy(&slot, r.data, sizeof slot);
+      S->side.save_view(static_cast<int>(slot));
+      return;
+    }
+    case kViewLoad: {  // V2
+      u32 slot;
+      std::memcpy(&slot, r.data, sizeof slot);
+      S->side.load_view(static_cast<int>(slot));
+      return;
+    }
     case kViewExport: {
       std::vector<u8> v = S->side.export_view();
       std::lock_guard<std::mutex> lock(S->mu);
@@ -1035,6 +1049,21 @@ void render_view_import(const std::uint8_t* data, std::size_t len) {
   ++S->gp_gen;  // as the render side's GpMemory::field() in import_view
   put(kViewImport, Ref{data, static_cast<u32>(len)});
   finish_all();  // the bytes are the caller's
+}
+
+// V2: the gameplay mods' timeline (mods/gameplay/timeline.h). The render thread saves
+// and restores its GX state at these points of the stream, exactly where the inline
+// renderer does (RenderSide::save_view / load_view), so nothing waits.
+void render_view_save(int slot) {
+  if (disabled()) return;
+  put(kViewSave, static_cast<u32>(slot));
+}
+
+void render_view_load(int slot) {
+  if (disabled()) return;
+  ++S->gp_gen;  // as the render side's GpMemory::field() in load_view
+  put(kViewLoad, static_cast<u32>(slot));
+  publish_and_kick();
 }
 
 void render_memory_replaced() {

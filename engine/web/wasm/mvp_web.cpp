@@ -31,7 +31,8 @@
 // Gameplay mods (hook API v1, docs/mods/ABS_CHALLENGE.md): mvp_mod_enable("abs:k=v,...")
 // and mvp_mod_seed before mvp_boot; mvp_mod_status() for the page (the timeline's
 // phase and the mods' log lines); mvp_mod_intro(ms), the page's announcement before
-// each review. They need the single-threaded engine.
+// each review. V2: in either engine (the render thread saves and restores its GX
+// state with the timeline's snapshots: render_view_save / render_view_load).
 // P1 times the drive model's reads on the host ("io" in mvp_status;
 // mvp_io_log_enable / mvp_io_log for a per-read log).
 // P2: the threaded build (mvp-web-mt, MVP_WEB_THREADS) runs the GX processor
@@ -323,7 +324,7 @@ struct Engine {
   double intro_ms = 0, intro_until = 0;
 
   // Save-state files (runtime/state_file.h): the page's save (F2) and load (F4),
-  // carried out at the next frame poll in live play (single-threaded engine only).
+  // carried out at the next frame poll in live play (either engine; V2: mods too).
   enum class StateOp { None, Save, Load };
   StateOp state_op = StateOp::None;
   bool state_due = false;               // the run stopped at a frame poll for it
@@ -418,13 +419,30 @@ void Observer::vi_field(std::uint64_t field, std::uint32_t xfb) {
 }
 
 // What a review does to the page's engine (mods/gameplay/timeline.h).
+// V2: in the threaded engine too: the render thread saves and restores its GX state in
+// stream order, and a restore first lets it finish reading memory as it was.
 struct WebTimelineTool : mods::Timeline::Tool {
   void present(bool on, mods::Phase phase) override {
     g.hold = !on;
     if (g.hw && g.mixer) g.hw->set_ax_observer(phase == mods::Phase::Live ? g.mixer.get() : nullptr);  // silent replay
   }
-  void save_views(int slot) override { g.rs.save_view(slot); }
-  void load_views(int slot) override { g.rs.load_view(slot); }
+  void save_views(int slot) override {
+#ifdef MVP_WEB_THREADS
+    if (g.threaded) return web::render_view_save(slot);
+#endif
+    g.rs.save_view(slot);
+  }
+  void replacing_memory() override {
+#ifdef MVP_WEB_THREADS
+    if (g.threaded) web::render_memory_replaced();
+#endif
+  }
+  void load_views(int slot) override {
+#ifdef MVP_WEB_THREADS
+    if (g.threaded) return web::render_view_load(slot);
+#endif
+    g.rs.load_view(slot);
+  }
 };
 WebTimelineTool g_timeline_tool;
 
@@ -783,10 +801,6 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   g_frame_hook = &frame_hook;
   g_dc_flush_hook = g_gp_view ? &dc_flush_hook : nullptr;
   if (g.mods.any_enabled()) {
-    if (g.threaded) {
-      g.error = "gameplay mods need the single-threaded engine";
-      return 0;
-    }
     auto to_page = [](const std::string& s) {
       if (g.mod_log.size() < 256) g.mod_log.push_back(s);
     };
@@ -1195,10 +1209,16 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
 // Threaded (P2): the render thread shows it once it has drawn the batch; 1 once
 // it has shown a frame.
 EMSCRIPTEN_KEEPALIVE int mvp_present() {
-  if (g.hold) return 0;  // a review runs without presenting: the canvas keeps the last frame
 #ifdef MVP_WEB_THREADS
-  if (g.threaded) return web::render_present(g_frame_polls) ? 1 : 0;
+  if (g.threaded) {
+    if (g.hold) {  // V2: a review runs without presenting: the batch ends, the canvas keeps the last frame
+      web::render_batch_end();
+      return 0;
+    }
+    return web::render_present(g_frame_polls) ? 1 : 0;
+  }
 #endif
+  if (g.hold) return 0;  // a review runs without presenting: the canvas keeps the last frame
   const double t0 = now_ms();
   const bool shown = g.rs.present(g_frame_polls, t0);
   host_slow_spin(now_ms() - t0);

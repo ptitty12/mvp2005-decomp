@@ -43,6 +43,9 @@ class Timeline {
     // renderer's GX state; caches to drop).
     virtual void save_views(int slot) = 0;
     virtual void load_views(int slot) = 0;
+    // Guest memory is about to be replaced by a restore (before load_views): a
+    // renderer on another thread finishes reading memory as it was (V2).
+    virtual void replacing_memory() {}
   };
 
   Timeline(rt::Machine& m, rt::YieldingHooks& hooks, rt::Hardware& hw, rt::InputQueue& input,

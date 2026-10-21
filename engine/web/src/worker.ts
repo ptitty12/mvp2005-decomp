@@ -396,7 +396,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
 
   let t = performance.now();
   post({ type: 'progress', text: 'Loading the engine', step: 0, steps: 0 });
-  M = await loadEngine(options.threads !== false && !options.mods?.length, {  // mods: single-threaded
+  M = await loadEngine(options.threads !== false, {  // V2: gameplay mods run in the threaded engine too
     print: (text) => post({ type: 'log', text, error: false }),
     printErr: (text) => post({ type: 'log', text, error: true }),
   });

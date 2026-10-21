@@ -105,6 +105,11 @@ void render_gp_write_through(std::uint32_t addr, std::uint32_t len);
 std::vector<std::uint8_t> render_view_export();
 void render_view_import(const std::uint8_t* data, std::size_t len);
 void render_memory_replaced();
+// V2: gameplay mods' snapshots (mods/gameplay/timeline.h): the GX processor's state saved
+// with a slot and restored from it, in stream order (a restore also needs
+// render_memory_replaced() before guest memory is replaced).
+void render_view_save(int slot);
+void render_view_load(int slot);
 
 // For mvp_status and the tools (snapshots the render thread took at its last present).
 std::string render_trace_take();

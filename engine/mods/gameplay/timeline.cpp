@@ -78,6 +78,7 @@ void Timeline::save(int slot) {
 
 void Timeline::load(int slot) {
   const auto t0 = std::chrono::steady_clock::now();
+  tool_.replacing_memory();
   rt::load_state(slot_[slot], m_, hooks_, hw_, &input_);
   if (!mods_.load_state(slot_mods_[slot])) throw rt::StopRun{"timeline: the mods' state does not fit the snapshot"};
   tool_.load_views(slot);
