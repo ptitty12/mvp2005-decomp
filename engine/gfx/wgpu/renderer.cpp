@@ -25,11 +25,6 @@ namespace mvp::gfx {
 
 namespace {
 
-constexpr std::uint32_t kUniformSlot = 512;              // DrawUniforms (416 bytes), 256-aligned
-constexpr std::uint64_t kVertexCapacity = 16u << 20;     // per batch (V6; per pass before)
-constexpr std::uint64_t kIndexCapacity = 8u << 20;       // per batch (2 Mi indices)
-constexpr std::uint64_t kUniformCapacity = 2u << 20;     // per batch (4,096 draws, clears and copies)
-
 std::uint64_t mix64(std::uint64_t h) {
   h ^= h >> 33;
   h *= 0xFF51AFD7ED558CCDull;
@@ -483,9 +478,24 @@ void Renderer::begin_batch() {
   encoder_ = gpu_.device().CreateCommandEncoder();
   batch_open_ = true;
   ++batch_serial_;
-  vdata_.clear();
-  udata_.clear();
-  idata_.clear();
+  if (!keep_frame_) {
+    vdata_.clear();
+    udata_.clear();
+    idata_.clear();
+    vup_ = iup_ = uup_ = 0;
+  }
+}
+
+void Renderer::make_room(std::size_t vbytes, std::size_t ibytes, std::size_t ubytes) {
+  if (!batch_open_ && !keep_frame_) return;  // they start over with the next batch
+  if (vdata_.size() + vbytes <= kVertexCapacity && idata_.size() * 4 + ibytes <= kIndexCapacity &&
+      udata_.size() + ubytes <= kUniformCapacity)
+    return;
+  flush();
+  if (keep_frame_) {  // V3: the frame's data is not all in the buffers any more
+    keep_frame_ = false;
+    rec_[rec_cur_].valid = false;
+  }
 }
 
 void Renderer::begin_pass() {
@@ -560,13 +570,16 @@ void Renderer::end_pass() {
 void Renderer::flush() {
   end_pass();
   if (!batch_open_) return;
-  // The batch's draws sampled the bytes at these offsets: written before its submit.
-  if (!vdata_.empty()) gpu_.queue().WriteBuffer(vbuf_, 0, vdata_.data(), vdata_.size());
-  if (!idata_.empty()) gpu_.queue().WriteBuffer(ibuf_, 0, idata_.data(), idata_.size() * 4);
-  if (!udata_.empty()) gpu_.queue().WriteBuffer(ubuf_, 0, udata_.data(), udata_.size());
-  stats_.vertex_bytes += vdata_.size();
-  stats_.index_bytes += idata_.size() * 4;
-  if (recording_) rec_pass_end();  // V3: uploaded; the record keeps the bytes
+  // The batch's draws read the bytes at these offsets: written before its submit (what
+  // the batch added; V6).
+  if (vdata_.size() > vup_) gpu_.queue().WriteBuffer(vbuf_, vup_, vdata_.data() + vup_, vdata_.size() - vup_);
+  if (idata_.size() > iup_) gpu_.queue().WriteBuffer(ibuf_, iup_ * 4, idata_.data() + iup_, (idata_.size() - iup_) * 4);
+  if (udata_.size() > uup_) gpu_.queue().WriteBuffer(ubuf_, uup_, udata_.data() + uup_, udata_.size() - uup_);
+  stats_.vertex_bytes += vdata_.size() - vup_;
+  stats_.index_bytes += (idata_.size() - iup_) * 4;
+  vup_ = vdata_.size();
+  iup_ = idata_.size();
+  uup_ = udata_.size();
   wgpu::CommandBuffer cb = encoder_.Finish();
   gpu_.queue().Submit(1, &cb);
   encoder_ = nullptr;
@@ -976,9 +989,7 @@ void Renderer::draw(const DrawCall& d) {
     ++stats_.skipped;
     return;
   }
-  if (batch_open_ && (vdata_.size() + vmax > kVertexCapacity || idata_.size() * 4 + ibytes > kIndexCapacity ||
-                      udata_.size() + kUniformSlot > kUniformCapacity))
-    flush();
+  make_room(vmax, ibytes, kUniformSlot);
 
   // The same pixel state as the previous draw, in the same pass and texture
   // epoch: its pipeline, textures and constants (nothing they come from changed).
@@ -1052,15 +1063,6 @@ void Renderer::draw(const DrawCall& d) {
   const Pipeline& pl = *last_.pipe;
 
   begin_pass();
-  if (recording_ && rec_[rec_cur_].batch_serial != batch_serial_) {  // V3: a new batch in the frame record
-    Record& r = rec_[rec_cur_];
-    if (r.npasses == r.passes.size()) r.passes.emplace_back();
-    RecPass& rp = r.passes[r.npasses];
-    rp.draws.clear();
-    rp.filled = false;
-    ++r.npasses;
-    r.batch_serial = batch_serial_;
-  }
   last_.state = d.state;
   last_.topology = c.topology;
   last_.pass = pass_serial_;
@@ -1144,7 +1146,7 @@ void Renderer::clear_efb(const EfbCopy& c) {
   if (x1 <= x0 || y1 <= y0) return;
   // V6: a draw in the open pass (its own pass and submit before): the draws before it
   // land first and the draws after it see it, as with a pass of its own.
-  if (batch_open_ && udata_.size() + kUniformSlot > kUniformCapacity) flush();
+  make_room(0, 0, kUniformSlot);
   begin_pass();
   emit_pending();
   const std::uint32_t uoff = push_slot(data, sizeof data);
@@ -1158,7 +1160,7 @@ void Renderer::clear_efb(const EfbCopy& c) {
   bound_scissor_[0] = bound_scissor_[1] = bound_scissor_[2] = bound_scissor_[3] = ~0u;
   if (recording_) {  // V3
     const std::uint32_t rect[4] = {x0 * scale_, y0 * scale_, (x1 - x0) * scale_, (y1 - y0) * scale_};
-    rec_clear(m, data, rect);
+    rec_clear(m, uoff, rect);
   }
 }
 
@@ -1198,7 +1200,7 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
                             c.half_scale ? 1 : 0, c.pixel_format == 3 ? 1 : 0,
                             static_cast<std::int32_t>(c.tex_format), c.intensity ? 1 : 0, 0, 0};
   // V6: a pass of the batch (its own submit before), after the EFB's pass.
-  if (batch_open_ && udata_.size() + kUniformSlot > kUniformCapacity) flush();
+  make_room(0, 0, kUniformSlot);
   end_pass();
   begin_batch();
   const std::uint32_t uoff = push_slot(params, sizeof params);
@@ -1232,7 +1234,7 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
   pass.End();
   if (recording_) {  // V3
     e->rec = rec_[rec_cur_].id;
-    rec_copy(e->view, e->pw, e->ph, params);
+    rec_copy(e->view, e->pw, e->ph, uoff);
   }
 }
 

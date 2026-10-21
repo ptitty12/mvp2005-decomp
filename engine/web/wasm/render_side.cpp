@@ -267,6 +267,8 @@ std::string RenderSide::status_json() const {
                   static_cast<unsigned long long>(is.replayed));
     s += b;
     s.pop_back();  // the histograms, in the same object
+    // V6: vertex bytes the replays uploaded (moved draws), of the replayed frames' vertex bytes.
+    s += ",\"upload_bytes\":" + std::to_string(is.upload_bytes) + ",\"frame_bytes\":" + std::to_string(is.frame_bytes);
     s += ",\"shift_hist\":[";
     for (std::uint64_t v : is.shift_hist) s += std::to_string(v) + ",";
     s.back() = ']';

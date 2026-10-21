@@ -11,6 +11,9 @@
 // flush() uploads the batch's vertices, indices and constants (one write each,
 // at offsets that grow through the batch) and submits it (V6: a submit per pass,
 // clear and copy before; Chrome's GPU process spent ~2 ms a field on that).
+// While a frame is recorded for an in-between picture, the offsets grow through
+// the whole frame, so the replay finds its indices, constants and unmoved
+// vertices in the live buffers.
 //
 // Internal resolution (Q1): the EFB, its copies to the XFB and to textures can
 // be kept at 2x or 3x the console's pixels in each direction. Everything the
@@ -159,6 +162,8 @@ class Renderer : public Backend {
     std::uint64_t still = 0;       // not needed: nothing moved (the in-between would be the frame)
     std::uint64_t other = 0;       // not made: another scale, too large, nothing drawn
     std::uint64_t shown = 0;       // pictures handed out by between()
+    std::uint64_t upload_bytes = 0;  // V6: vertex bytes the replays uploaded (draws with a vertex moved)
+    std::uint64_t frame_bytes = 0;   // V6: ... of the replayed frames' vertex bytes
     std::uint64_t retextured = 0;  // textures re-decoded after the frame had sampled them (shown with their last contents)
     std::uint64_t early_copies = 0;  // EFB copies sampled in a frame before it redid them (shown with their last contents)
     std::uint64_t reordered = 0;   // draws paired by nearest position instead of order
@@ -199,6 +204,13 @@ class Renderer : public Backend {
   struct CfgHash {
     std::size_t operator()(const PipelineConfig& c) const;
   };
+
+  // The live vertex, index and constant buffers (V6: per batch, or per recorded frame;
+  // per pass before).
+  static constexpr std::uint32_t kUniformSlot = 512;           // DrawUniforms (416 bytes), 256-aligned
+  static constexpr std::uint64_t kVertexCapacity = 16u << 20;
+  static constexpr std::uint64_t kIndexCapacity = 8u << 20;    // 2 Mi indices
+  static constexpr std::uint64_t kUniformCapacity = 2u << 20;  // 4,096 draws, clears and copies
 
   void begin_batch();  // V6: the command encoder that the next passes, clears and copies go into
   void begin_pass();
@@ -246,6 +258,13 @@ class Renderer : public Backend {
   std::uint64_t pass_serial_ = 0;
   std::vector<std::uint8_t> vdata_, udata_;
   std::vector<std::uint32_t> idata_;
+  // V6: how much of them flush() has uploaded (they start over with each batch, or with
+  // each frame while keep_frame_: a recorded frame's data stays where its draws read it).
+  std::size_t vup_ = 0, iup_ = 0, uup_ = 0;
+  bool keep_frame_ = false;
+  // V6: room for this much more in the buffers; else submits and starts them over (a
+  // recorded frame whose data does not fit gets no in-between).
+  void make_room(std::size_t vbytes, std::size_t ibytes, std::size_t ubytes);
   // V6: which uploads must wait for a submit. Each draw that resolves its textures
   // gets a serial (sample_serial_) that marks every texture it samples; flush()
   // sets submitted_ to the last draw whose commands it submitted (not a draw still
@@ -316,7 +335,7 @@ class Renderer : public Backend {
   std::uint64_t epoch_ = 1;
 
   // Clears and EFB-to-texture conversion. V6: their constants are slots of the
-  // batch's constants, bound by dynamic offset (the replay binds its own buffers).
+  // batch's constants, bound by dynamic offset (the replay binds them too).
   wgpu::RenderPipeline clear_pipes_[8];
   wgpu::BindGroupLayout bgl_clear_;
   wgpu::BindGroup clear_group_;      // the constants buffer
@@ -341,36 +360,30 @@ class Renderer : public Backend {
   Stats stats_;
 
   // ---- V3: in-between frames (interp.cpp) ----
-  // One encoded draw of a recorded batch, as emit_pending() encoded it.
+  // One encoded draw of a recorded frame, as emit_pending() encoded it (offsets in the
+  // frame's live buffers: V6).
   struct RecDraw {
     const Pipeline* pipe;
-    std::uint32_t bind, uoff, first_index, index_count, base;
+    std::uint32_t bind, uoff, first_index, index_count, base, vertices;
     std::uint32_t scissor[4];
   };
-  // A recorded batch (V6; a pass before): what flush() uploaded and the draws it encoded.
-  struct RecPass {
-    std::vector<std::uint8_t> v, u;
-    std::vector<std::uint32_t> i;
-    std::vector<RecDraw> draws;
-    bool filled = false;
-  };
-  // A DrawCall's vertices in a recorded batch: `count` vertices of `stride` bytes at
-  // byte `voff` of batch `pass`; their clip-space positions before the 2D snap at
+  // A DrawCall's vertices in a recorded frame: `count` vertices of `stride` bytes at
+  // byte `voff` of Record::v; their clip-space positions before the 2D snap at
   // Record::pos[4 * pos ...].
   struct RecRange {
     std::uint64_t ident;
-    std::uint32_t pass, voff, count, stride, pos;
+    std::uint32_t voff, count, stride, pos;
     std::uint32_t n3;  // vertices in front of the camera that are not 2D (w is not exactly 1)
   };
   struct RecClear {
     int m;
-    float data[8];
+    std::uint32_t uoff;     // V6: its constants in the frame's live constants
     std::uint32_t rect[4];  // EFB pixels at the scale: x, y, width, height
   };
   struct RecCopy {
     wgpu::TextureView live;  // the copy's texture at the time (draws that sample it bind this view)
     std::uint32_t pw, ph;
-    std::int32_t params[8];  // the conversion's
+    std::uint32_t uoff;      // V6: the conversion's parameters in the frame's live constants
   };
   struct RecBind {
     wgpu::BindGroup group;
@@ -378,8 +391,8 @@ class Renderer : public Backend {
     std::array<wgpu::Sampler, 8> samplers;
   };
   enum class RecKind : std::uint8_t { Pass, Clear, Copy };
-  // Pass: draws [begin, end) of batch `index` (V6: a batch's draws, between its clears and
-  // copies); Clear, Copy: clears[index], copies[index].
+  // Pass: Record::draws [begin, end) (V6: the draws between two clears or copies); Clear,
+  // Copy: clears[index], copies[index].
   struct RecOp {
     RecKind kind;
     std::uint32_t index;
@@ -393,15 +406,14 @@ class Renderer : public Backend {
     std::uint32_t scale = 1;
     std::uint32_t xfb[4] = {};        // the XFB copy's EFB rectangle (console pixels)
     std::vector<RecOp> ops;
-    std::vector<RecPass> passes;      // batches: [0, npasses) in use; the rest keep their buffers
-    std::size_t npasses = 0;
+    std::vector<std::uint8_t> v;      // V6: the frame's vertex bytes, as uploaded (the live buffer's [0, size))
+    std::vector<RecDraw> draws;
     std::vector<RecClear> clears;
     std::vector<RecCopy> copies;
     std::vector<RecBind> binds;
     std::unordered_map<const void*, std::uint32_t> bind_index;
     std::vector<RecRange> ranges;
     std::vector<float> pos;
-    std::uint64_t batch_serial = 0;   // the live batch being recorded into passes[npasses - 1]
   };
   void rec_begin(const EfbCopy& c);   // at an XFB copy, before its clear
   // At an XFB copy of the EFB rectangle (x0, y0, w, h): ends the record, makes the in-between.
@@ -409,10 +421,9 @@ class Renderer : public Backend {
   void rec_drop();
   std::uint32_t rec_bind(const BindEntry& be);
   void rec_range(const DrawCall& d, std::size_t voff, std::uint32_t stride);
-  void rec_pass_end();                // flush() of a recorded batch: its data moves into the record
-  void rec_draw();                    // emit_pending() of a recorded batch
-  void rec_clear(int m, const float* data, const std::uint32_t* rect);
-  void rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph, const std::int32_t* params);
+  void rec_draw();                    // emit_pending() of a recorded frame
+  void rec_clear(int m, std::uint32_t uoff, const std::uint32_t* rect);
+  void rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph, std::uint32_t uoff);
   bool interp_make(Record& cur, Record& prev);  // matching and the replay; false: not made
   void interp_targets();              // the private EFB at the current scale
   const wgpu::BindGroup& interp_bind(const RecBind& b);
@@ -443,9 +454,10 @@ class Renderer : public Backend {
   std::map<const void*, PrivCopy> priv_copies_;
   std::unordered_map<const void*, wgpu::TextureView> subst_;  // this replay: live copy view -> private view
   std::map<std::array<const void*, 16>, BindEntry> ibind_;    // substitute bind groups
-  wgpu::Buffer ivbuf_, iibuf_, iubuf_, iclear_buf_, iconv_buf_;
-  std::uint64_t ivcap_ = 0, iicap_ = 0, iucap_ = 0, iclear_cap_ = 0, iconv_cap_ = 0;
-  wgpu::BindGroup iuniform_group_;
+  // V6: the moved draws' vertices (the frame's layout); the conversion's group on the private EFB.
+  wgpu::Buffer ivbuf_;
+  std::uint64_t ivcap_ = 0;
+  wgpu::BindGroup iconvert_group_;
   std::uint64_t replays_ = 0;
   struct Between {
     Frame frame;
@@ -470,6 +482,7 @@ class Renderer : public Backend {
   std::vector<Slot> slots_;
   std::vector<std::uint32_t> pnext_, cnext_, match_, far_;
   std::vector<std::uint8_t> taken_;
+  std::vector<std::uint8_t> moved_;  // V6: per recorded draw: a vertex at a halfway position
 };
 
 }  // namespace mvp::gfx
