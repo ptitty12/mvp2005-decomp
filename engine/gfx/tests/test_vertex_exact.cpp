@@ -12,6 +12,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -106,27 +107,36 @@ void fill_array(std::vector<std::uint8_t>& mem, Rng& r, std::uint32_t at, std::u
   }
 }
 
+// Two floats the same: the same bits, or both NaN. (Which NaN an operation with
+// two NaN operands passes on depends on the order the compiler puts commutative
+// operands in, which C++ leaves to it; every other value is compared bit for bit.)
+bool same_float(float x, float y) { return fbits(x) == fbits(y) || (x != x && y != y); }
+std::uint64_t g_nan_payloads = 0;
+
 std::size_t compare(const std::vector<DrawCall>& a, const std::vector<DrawCall>& b, const char* what) {
   REQUIRE(a.size() == b.size());
   std::size_t bad = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {
     REQUIRE(a[k].verts.size() == b[k].verts.size());
     CHECK(a[k].index == b[k].index);
-    if (std::memcmp(a[k].verts.data(), b[k].verts.data(), a[k].verts.size() * sizeof(OutVertex)) != 0) {
-      if (bad < 3) {
-        for (std::size_t v = 0; v < a[k].verts.size(); ++v) {
-          const float* fa = &a[k].verts[v].pos[0];
-          const float* fb = &b[k].verts[v].pos[0];
-          for (int f = 0; f < 36; ++f)
-            if (fbits(fa[f]) != fbits(fb[f])) {
-              std::printf("%s: draw %zu vertex %zu float %d: fast %08x (%g) ref %08x (%g)\n", what, k, v, f,
-                          fbits(fa[f]), static_cast<double>(fa[f]), fbits(fb[f]), static_cast<double>(fb[f]));
-              break;
-            }
+    if (std::memcmp(a[k].verts.data(), b[k].verts.data(), a[k].verts.size() * sizeof(OutVertex)) == 0) continue;
+    bool differ = false;
+    for (std::size_t v = 0; v < a[k].verts.size(); ++v) {
+      const float* fa = &a[k].verts[v].pos[0];
+      const float* fb = &b[k].verts[v].pos[0];
+      for (int f = 0; f < 36; ++f) {
+        if (fbits(fa[f]) == fbits(fb[f])) continue;
+        if (same_float(fa[f], fb[f])) {
+          ++g_nan_payloads;
+          continue;
         }
+        if (bad < 3 && !differ)
+          std::printf("%s: draw %zu vertex %zu float %d: fast %08x (%g) ref %08x (%g)\n", what, k, v, f, fbits(fa[f]),
+                      static_cast<double>(fa[f]), fbits(fb[f]), static_cast<double>(fb[f]));
+        differ = true;
       }
-      ++bad;
     }
+    if (differ) ++bad;
   }
   return bad;
 }
@@ -204,6 +214,19 @@ void run_trial(std::uint64_t seed, bool use_gp, std::uint64_t& draws, std::uint6
     p.cp(static_cast<std::uint8_t>(cp::kArrayBase + a), base[a]);
     p.cp(static_cast<std::uint8_t>(cp::kArrayStride + a), stride[a]);
   }
+  // Indexed XF loads (arrays 12, 13: position and normal matrices) from tame floats.
+  const std::uint32_t kXfArr = 0xD0000;
+  for (std::uint32_t k = 0; k < 0x4000; k += 4) {
+    const std::uint32_t w = fbits(r.xf_float());
+    mem[kXfArr + k] = static_cast<std::uint8_t>(w >> 24);
+    mem[kXfArr + k + 1] = static_cast<std::uint8_t>(w >> 16);
+    mem[kXfArr + k + 2] = static_cast<std::uint8_t>(w >> 8);
+    mem[kXfArr + k + 3] = static_cast<std::uint8_t>(w);
+  }
+  for (int a = 12; a < 14; ++a) {
+    p.cp(static_cast<std::uint8_t>(cp::kArrayBase + a), kXfArr);
+    p.cp(static_cast<std::uint8_t>(cp::kArrayStride + a), 48);
+  }
   auto randomize_format = [&](int fmt) {
     // VCD: each attribute none/direct/index8/index16; VAT values random, formats mostly valid.
     std::uint32_t lo = r.next() & 0x1FFFF, hi = r.next() & 0xFFFF;
@@ -270,7 +293,16 @@ void run_trial(std::uint64_t seed, bool use_gp, std::uint64_t& draws, std::uint6
   for (int n = 0; n < prims; ++n) {
     const int fmt = static_cast<int>(r.below(8));
     // Between primitives: XF matrix writes (the transform's caches), register and format changes.
-    switch (r.below(12)) {
+    switch (r.below(14)) {
+      case 12: case 13: {  // an indexed XF load: a matrix (or a part, or a range across matrices) from memory
+        const bool nrm = r.below(13) == 12 ? false : r.chance(40);
+        const std::uint32_t addr = nrm ? xf::kNrmMtx + r.below(0x60) : r.below(0x100);
+        const std::uint32_t cnt = 1 + r.below(16), index = r.below(256);
+        std::vector<std::uint8_t> c{static_cast<std::uint8_t>(nrm ? 0x28 : 0x20)};
+        Stream::put32(c, index << 16 | (cnt - 1) << 12 | addr);
+        p.run(c);
+        break;
+      }
       case 0: {
         std::vector<std::uint32_t> w;
         const std::uint32_t at = r.below(0x100), cnt = 1 + r.below(16);
@@ -358,7 +390,9 @@ void run_trial(std::uint64_t seed, bool use_gp, std::uint64_t& draws, std::uint6
   CHECK(loader_bad == 0);
   draws += p.fast_cap.raw.size();
   for (const auto& d : p.fast_cap.raw) verts += d.verts.size();
-  CHECK(compare(p.fast_cap.raw, p.ref_cap.raw, use_gp ? "gp" : "direct") == 0);
+  const std::size_t bad = compare(p.fast_cap.raw, p.ref_cap.raw, use_gp ? "gp" : "direct");
+  if (bad) std::printf("  (seed %llu)\n", static_cast<unsigned long long>(seed));
+  CHECK(bad == 0);
 }
 
 }  // namespace
@@ -366,8 +400,13 @@ void run_trial(std::uint64_t seed, bool use_gp, std::uint64_t& draws, std::uint6
 TEST_CASE("fast vertex path equals the reference path bit for bit (random formats and state)") {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   std::uint64_t draws = 0, verts = 0;
-  for (std::uint64_t seed = 1; seed <= 400; ++seed) run_trial(seed, (seed & 1) != 0, draws, verts);
-  std::printf("vertex exactness: %llu draws, %llu vertices compared\n", static_cast<unsigned long long>(draws),
-              static_cast<unsigned long long>(verts));
+  const char* only = std::getenv("VX_SEED");  // development: one trial
+  for (std::uint64_t seed = 1; seed <= 400; ++seed) {
+    if (only && seed != std::strtoull(only, nullptr, 10)) continue;
+    run_trial(seed, (seed & 1) != 0, draws, verts);
+  }
+  std::printf("vertex exactness: %llu draws, %llu vertices compared (%llu NaN floats with another NaN's payload)\n",
+              static_cast<unsigned long long>(draws), static_cast<unsigned long long>(verts),
+              static_cast<unsigned long long>(g_nan_payloads));
   CHECK(verts > 100000);
 }

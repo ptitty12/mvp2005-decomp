@@ -196,8 +196,8 @@ class GxProcessor {
   // Fill last_primitive() at every draw (off by default: it costs a copy per draw).
   void set_keep_primitive_info(bool on) { keep_prim_info_ = on; }
   // V5: primitives take the reference vertex path (load_vertex and transform, one
-  // vertex at a time) instead of the fast one; the two give the same bits
-  // (test_vertex_exact). For tests.
+  // vertex at a time) instead of the fast one, and XF loads drop cached matrices
+  // word by word; the two give the same bits (test_vertex_exact). For tests.
   void set_reference_vertices(bool on) { ref_vertices_ = on; }
   // V3: compute DrawCall::ident for every draw (in-between frames; off by default).
   void set_identify(bool on) { identify_ = on; }
@@ -219,6 +219,7 @@ class GxProcessor {
   void load_tlut();
   void preload();
   void xf_written(u32 addr);  // drops what xs_ holds of XF word `addr`
+  bool xf_matrices_written(u32 addr, u32 last);  // V5: the same for a range of matrix words, at once
   // V5: an indexed attribute's data in loader array `array` (0-11): through the
   // array's window of the GP's view (gp_memory.h) while it holds, else phys().
   const u8* fetch(u32 array, u32 addr, u32 len) const {

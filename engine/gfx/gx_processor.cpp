@@ -260,7 +260,36 @@ void GxProcessor::xf_written(u32 a) {
   }
 }
 
+// V5: XF words [addr, last] inside the position/texture matrices or inside the
+// normal matrices were written (the game's matrix uploads: a dozen words each,
+// thousands a field): drops the cached matrices they touch at once, as
+// xf_written for each word would. False for other ranges (the caller goes word
+// by word).
+bool GxProcessor::xf_matrices_written(u32 addr, u32 last) {
+  if (ref_vertices_) return false;  // tests: the reference goes word by word
+  if (last < 0x100) {
+    if (xs_valid_)  // each word's q = a >> 2 drops matrices q - 2 .. q (mod 64)
+      for (u32 q = (addr >> 2) + 62; q <= (last >> 2) + 64; ++q) xs_.have_pos &= ~(1ull << (q & 63));
+    return true;
+  }
+  if (addr >= xf::kNrmMtx && last < xf::kPostMtx) {
+    if (xs_valid_) {
+      const u32 w0 = addr - xf::kNrmMtx, w1 = last - xf::kNrmMtx;
+      for (u32 n = w0 >= 8 ? (w0 - 6) / 3 : 0; n <= w1 / 3 && n < 32; ++n) xs_.have_nrm &= ~(1ull << n);
+    }
+    return true;
+  }
+  return false;
+}
+
 void GxProcessor::load_xf(u32 addr, u32 count, const u8* data) {
+  if (count && addr + count <= xf::kPostMtx) {
+    const u32 last = addr + count - 1;
+    if ((last < 0x100 || addr >= xf::kNrmMtx) && xf_matrices_written(addr, last)) {
+      for (u32 k = 0; k < count; ++k) xf_mem_[addr + k] = be32_at(data + 4 * k);
+      return;
+    }
+  }
   for (u32 k = 0; k < count; ++k) {
     u32 a = addr + k;
     u32 v = be32_at(data + 4 * k);
@@ -277,6 +306,10 @@ void GxProcessor::load_xf_indexed(int array, u32 v) {
   u32 index = v >> 16;
   const u8* p = phys(array_base_[array] + index * array_stride_[array], 4 * count);
   if (!p) return;
+  if (addr + count <= xf::kPostMtx && xf_matrices_written(addr, addr + count - 1)) {  // V5
+    for (u32 k = 0; k < count; ++k) xf_mem_[addr + k] = be32_at(p + 4 * k);
+    return;
+  }
   for (u32 k = 0; k < count; ++k)
     if (addr + k < xf::kMemSize) {
       xf_mem_[addr + k] = be32_at(p + 4 * k);
