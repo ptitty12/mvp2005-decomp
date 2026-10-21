@@ -24,6 +24,9 @@ engine_test(test_tev_wgsl SOURCES tests/test_tev_wgsl.cpp LIBS engine_gfx)
 engine_test(test_texture_decode SOURCES tests/test_texture_decode.cpp LIBS engine_gfx)
 engine_test(test_gx_processor SOURCES tests/test_gx_processor.cpp LIBS engine_gfx)
 target_include_directories(test_gx_processor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# V5: the fast vertex path against the reference path, bit for bit, on random streams.
+engine_test(test_vertex_exact SOURCES tests/test_vertex_exact.cpp LIBS engine_gfx)
+target_include_directories(test_vertex_exact PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # P2: the memory each command makes the renderer read (gp_reads.h).
 engine_test(test_gp_reads SOURCES tests/test_gp_reads.cpp LIBS engine_gfx)
 # Q1: what the GP reads of memory, after the data cache (gp_memory.h).

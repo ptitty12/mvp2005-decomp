@@ -55,6 +55,20 @@ struct VertexFormat {
   Attr pos, nrm, color[2], tex[8];
   bool nbt = false, nbt3 = false;  // normal, binormal, tangent; with three indices
   u8 default_pnmtx = 0, default_texmtx[8] = {};
+  u32 matidx_a = 0, matidx_b = 0;  // V5: the CP matrix index registers the defaults come from
+  // V5: the same as a loader program (the fast path, GxProcessor::load_vertices):
+  // one step per data read, in the vertex's byte order, each with its decoder.
+  struct Step {
+    u8 op = 0;     // decoder: 0-4 components (u8, s8, u16, s16, f32), 8-13 colors (ColorFmt)
+    u8 type = 0;   // 1 direct, 2 8-bit index, 3 16-bit index
+    u8 array = 0;  // CP array (indexed)
+    u8 size = 0;   // bytes read
+    u8 dst = 0;    // first float written, counted in InVertex's floats from pos[0]
+    u8 n = 0;      // floats written
+    float scale = 1.0f;
+  };
+  Step steps[14];
+  u8 nsteps = 0;
 };
 
 // What the transform unit reads from XF registers and memory for one primitive,
@@ -83,6 +97,27 @@ struct XformSetup {
   std::uint64_t have_pos = 0, have_nrm = 0;
   float pos[64][12];
   float nrm[64][9];
+
+  // V5: the transform's plan for the fast path (transform_fast), from the fields
+  // above: what each color pass reads and which light factors it accumulates,
+  // and what each texture coordinate generator does.
+  struct Factor {
+    u8 light, diffuse, attn;  // a light's factor with these functions (computed once per vertex)
+  };
+  struct Pass {
+    u8 ch, alpha;             // channel, color (rgb) or alpha pass
+    u8 mat_vtx, lit, amb_vtx;  // material from the vertex color, lit, ambient from the vertex color
+    u8 nlights;
+    u8 light[8], factor[8];   // the lights in order, and their factors (index into factors)
+  };
+  u32 npasses = 0, nfactors = 0;
+  Pass passes[4];
+  Factor factors[32];
+  struct Gen {
+    u8 type, row, ab11, stq, emboss_src, post_norm;
+  };
+  Gen gens[8];
+  u32 ngen8 = 0;  // min(ngen, 8)
 };
 
 class GxProcessor {
@@ -129,6 +164,8 @@ class GxProcessor {
   // The same with the format unpacked once (vertex_format()).
   VertexFormat vertex_format(int fmt) const;
   void load_vertex(const VertexFormat& f, const u8* p, InVertex& v) const;
+  // V5: the fast path's loader (the format's loader program), for tests.
+  InVertex load_vertex_fast(int fmt, const u8* p) const;
   // The transform unit for one vertex.
   OutVertex transform(const InVertex& v) const;
   // The same with the state unpacked once per primitive.
@@ -158,6 +195,10 @@ class GxProcessor {
   const PrimInfo& last_primitive() const { return prim_info_; }
   // Fill last_primitive() at every draw (off by default: it costs a copy per draw).
   void set_keep_primitive_info(bool on) { keep_prim_info_ = on; }
+  // V5: primitives take the reference vertex path (load_vertex and transform, one
+  // vertex at a time) instead of the fast one, and XF loads drop cached matrices
+  // word by word; the two give the same bits (test_vertex_exact). For tests.
+  void set_reference_vertices(bool on) { ref_vertices_ = on; }
   // V3: compute DrawCall::ident for every draw (in-between frames; off by default).
   void set_identify(bool on) { identify_ = on; }
 
@@ -169,10 +210,27 @@ class GxProcessor {
   void load_xf(u32 addr, u32 count, const u8* data);
   void load_xf_indexed(int array, u32 value);
   void primitive(u8 op, const u8* data, u32 count);
+  // V5: the fast vertex path: `count` vertices of format `f` from `data` (`vsize`
+  // bytes each) loaded and transformed into `out`.
+  void vertices(const VertexFormat& f, const u8* data, u32 count, u32 vsize, OutVertex* out);
+  void transform_fast(const InVertex& v, XformSetup& x, OutVertex& o) const;
+  void load_fast(const VertexFormat& f, const u8* p, InVertex& v) const;
   void efb_copy();
   void load_tlut();
   void preload();
   void xf_written(u32 addr);  // drops what xs_ holds of XF word `addr`
+  bool xf_matrices_written(u32 addr, u32 last);  // V5: the same for a range of matrix words, at once
+  // V5: an indexed attribute's data in loader array `array` (0-11): through the
+  // array's window of the GP's view (gp_memory.h) while it holds, else phys().
+  const u8* fetch(u32 array, u32 addr, u32 len) const {
+    if (!gpm_) return phys(addr, len);
+    GpMemory::Window& w = win_[array];
+    const u32 a = addr & 0x01FFFFFFu;
+    if (w.version == gpm_->version() && a >= w.lo && a + len <= w.hi) return w.base + a;
+    if (gpm_->window(a, len, w)) return w.base + a;
+    w.version = 0;
+    return gpm_->view(addr, len, 0);
+  }
   const u8* phys(u32 addr, u32 len) const {  // null if outside memory
     if (gpm_) return gpm_->view(addr, len, 0);
     addr &= 0x01FFFFFFu;
@@ -201,6 +259,8 @@ class GxProcessor {
   Stats stats_;
   PrimInfo prim_info_;
   bool keep_prim_info_ = false;
+  bool ref_vertices_ = false;
+  mutable GpMemory::Window win_[12];  // V5: the loader's windows, per array (fetch)
   bool identify_ = false;  // V3
   // Vertex formats 0-7 unpacked, and their sizes, valid until a VCD or VAT write (E3c).
   VertexFormat fmt_cache_[8];

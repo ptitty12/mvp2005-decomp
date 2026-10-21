@@ -540,6 +540,7 @@ async function runOnce(context, run) {
                      renderBusyMs: st.render?.busy_ms, fenceMs: st.thread?.fence_ms, fences: st.thread?.fences,
                      gpu: st.gpu, scale: st.scale, presentsNew: st.presents_new,  // Q5
                      writeWaitMs: st.thread?.write_wait_ms, writeWaits: st.thread?.write_waits,
+                     gx: st.gx,  // V5: the GX path's and the renderer's counts so far
                      display: state.display });  // V1: the page's counts so far (presenter.ts)
     }
     const field = state.stats?.status.fields ?? 0;

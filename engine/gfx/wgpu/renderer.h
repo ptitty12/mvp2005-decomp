@@ -261,11 +261,11 @@ class Renderer : public Backend {
 
   std::unordered_map<PipelineConfig, Pipeline, CfgHash> pipelines_;
   std::unordered_map<std::string, wgpu::ShaderModule> modules_;
-  std::map<std::uint64_t, std::unique_ptr<TexEntry>> textures_;
+  std::unordered_map<std::uint64_t, std::unique_ptr<TexEntry>> textures_;  // V5: hashed (was ordered; never iterated)
   std::map<std::uint32_t, std::unique_ptr<CopyEntry>> copies_;  // EFB copies to textures, by address
-  std::map<std::uint64_t, std::unique_ptr<TexEntry>> tmem_textures_;  // preloaded textures, by content
+  std::unordered_map<std::uint64_t, std::unique_ptr<TexEntry>> tmem_textures_;  // preloaded textures, by content
   std::vector<std::uint8_t> tmem_buf_;
-  std::map<std::uint32_t, wgpu::Sampler> samplers_;
+  std::unordered_map<std::uint32_t, wgpu::Sampler> samplers_;
   // Texture bind groups, keyed by the addresses of the 8 views and 8 samplers
   // they bind. Q7: each entry holds references to those views and samplers.
   // A bind group does not keep the handles alive everywhere: emdawnwebgpu (the

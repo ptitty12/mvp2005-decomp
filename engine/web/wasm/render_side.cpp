@@ -226,6 +226,20 @@ std::string RenderSide::status_json() const {
                   static_cast<unsigned long long>(ts.untimed), static_cast<unsigned long long>(ts.dropped), ts.last_ms,
                   present_ms_, gpu_load_);
     s += b;
+    // V5: the GX path's work (primitives, vertices, pixel-state snapshots) and the
+    // renderer's per-draw paths (state reused, draws merged, WebGPU draws, bytes uploaded).
+    std::snprintf(b, sizeof b,
+                  ",\"gx\":{\"prims\":%llu,\"verts\":%llu,\"snaps\":%llu,\"same\":%llu,\"merged\":%llu,"
+                  "\"encoded\":%llu,\"vbytes\":%llu,\"ibytes\":%llu,\"tex_hits\":%llu,\"cmds\":%llu,\"passes\":%llu,"
+                  "\"tex_copies\":%llu,\"clears\":%llu}",
+                  static_cast<unsigned long long>(ps.draws), static_cast<unsigned long long>(ps.vertices),
+                  static_cast<unsigned long long>(ps.snapshots), static_cast<unsigned long long>(rs.same_state),
+                  static_cast<unsigned long long>(rs.merged), static_cast<unsigned long long>(rs.encoded),
+                  static_cast<unsigned long long>(rs.vertex_bytes), static_cast<unsigned long long>(rs.index_bytes),
+                  static_cast<unsigned long long>(rs.texture_hits), static_cast<unsigned long long>(ps.commands),
+                  static_cast<unsigned long long>(rs.passes), static_cast<unsigned long long>(rs.tex_copies),
+                  static_cast<unsigned long long>(rs.clears));
+    s += b;
     // V3: in-between frames (gfx/wgpu/renderer.h, InterpStats): made, not made and why, shown.
     const gfx::Renderer::InterpStats& is = renderer_->interp_stats();
     std::snprintf(b, sizeof b,
