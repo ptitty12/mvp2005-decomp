@@ -46,6 +46,22 @@
 
 namespace mvp::xlat {
 
+// V4: the runtime's addresses as constants in the code instead of loads of the
+// imported globals (env.unwinding, env.resume, env.entry_hook, env.wgp,
+// env.gp_pages, env.mem1). Each zero field keeps its global. A module emitted
+// with any of them works only in a runtime whose addresses they are: the
+// browser's engine translates in its own process (and its cache key names the
+// engine build), and rt::load_wasm_module refuses a module whose fixed
+// addresses differ from the runtime's (WasmModule::fixed). With mem1_limit set
+// (MEM1 at a fixed host address, mem1_base), a MEM1 access is a compare with a
+// constant and a load or store with mem1_base as its offset.
+struct WasmFixed {
+  std::uint32_t unwinding = 0, resume = 0, hook = 0, wgp = 0, gp_pages = 0;
+  std::uint32_t mem1_base = 0, mem1_limit = 0;  // as WasmMem1Layout's {base, limit}; limit 0: not fixed
+  bool any() const { return unwinding || resume || hook || wgp || gp_pages || mem1_limit; }
+  bool operator==(const WasmFixed&) const = default;
+};
+
 struct WasmEmitOptions {
   std::vector<HleSpec> hle;  // replacements and hooks, as for emit_cpp
   // Spill dirty registers before every guest memory access too, so the CPU
@@ -71,6 +87,8 @@ struct WasmEmitOptions {
   // ppc/fp.h, which the runtime's semantics library must use too
   // (ppc::fp::g_model); on, it must be Model::Exact.
   bool fp_exact = false;
+  // V4: constants for the runtime's addresses (WasmFixed); all zero: the globals.
+  WasmFixed fixed;
 };
 
 // A guest address and the table slot (relative to the module's table base) of
@@ -97,6 +115,7 @@ struct WasmModule {
   std::vector<std::uint32_t> safe, idle;            // safe points and idle spins (as emit_cpp's table)
   std::vector<std::pair<std::uint32_t, int>> hle_sites;  // replaced functions for the interpreter
   std::vector<int> hle_matched;                    // HleSpec::index of every spec that found its function
+  WasmFixed fixed;                                 // V4: the constants it was emitted with (WasmEmitOptions::fixed)
   WasmEmitStats stats;
 };
 

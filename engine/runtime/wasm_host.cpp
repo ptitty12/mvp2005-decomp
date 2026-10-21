@@ -37,6 +37,7 @@ struct Mem1View {
   u32 base = 0, limit = 0;
 };
 Mem1View g_mem1;
+xlat::WasmFixed g_loaded_fixed;  // V4: the fixed addresses of the module loaded last
 static_assert(offsetof(Mem1View, base) == xlat::WasmMem1Layout::kBase &&
                   offsetof(Mem1View, limit) == xlat::WasmMem1Layout::kLimit,
               "the translator's view of Mem1View");
@@ -223,10 +224,41 @@ WgpState* wasm_wgp_state() { return &g_wgp; }
 void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size) {
   g_mem1.base = static_cast<u32>(reinterpret_cast<std::uintptr_t>(base));
   g_mem1.limit = base && size >= 8 ? size - 7 : 0;  // whole accesses of up to 8 bytes
+  if (base && g_loaded_fixed.mem1_limit &&
+      (g_mem1.base != g_loaded_fixed.mem1_base || g_mem1.limit != g_loaded_fixed.mem1_limit)) {
+    // V4: the loaded module reads and writes MEM1 at its fixed place: a machine elsewhere cannot run it.
+    std::fprintf(stderr, "mvp: MEM1 at 0x%08X, but the translated module has it fixed at 0x%08X\n", g_mem1.base,
+                 g_loaded_fixed.mem1_base);
+    std::abort();
+  }
+}
+
+xlat::WasmFixed wasm_fixed_addrs() {
+  xlat::WasmFixed f;
+  f.unwinding = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_unwinding));
+  f.resume = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_resume));
+  f.hook = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_entry_hook));
+  f.wgp = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_wgp));
+  f.gp_pages = static_cast<u32>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages));
+  if (g_mem1.limit) {
+    f.mem1_base = g_mem1.base;
+    f.mem1_limit = g_mem1.limit;
+  }
+  return f;
 }
 
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error) {
   static_assert(sizeof(GuestFn) == 4, "wasm32: a function pointer is a table index");
+  if (m.fixed.any()) {  // V4: its constants must be this runtime's addresses
+    const xlat::WasmFixed now = wasm_fixed_addrs();
+    auto same = [](u32 fixed, u32 here) { return !fixed || fixed == here; };
+    if (!same(m.fixed.unwinding, now.unwinding) || !same(m.fixed.resume, now.resume) ||
+        !same(m.fixed.hook, now.hook) || !same(m.fixed.wgp, now.wgp) || !same(m.fixed.gp_pages, now.gp_pages) ||
+        (m.fixed.mem1_limit && (m.fixed.mem1_base != now.mem1_base || m.fixed.mem1_limit != now.mem1_limit))) {
+      if (error) *error = "the translated module was made for other runtime addresses (another engine build)";
+      return false;
+    }
+  }
   alignas(8) double times[2] = {0, 0};
   int base = mvp_js_instantiate(m.bytes.data(), static_cast<unsigned>(m.bytes.size()), m.slots,
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_unwinding)),
@@ -248,6 +280,7 @@ bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::stri
   g_native.set(entries.data(), entries.size());
   g_resume_labels.set(resume.data(), resume.size());
   g_safe.set(m.safe.data(), m.safe.size());
+  g_loaded_fixed = m.fixed;
   g_idle.set(m.idle.data(), m.idle.size());
   std::vector<HleSite> sites;
   for (const auto& [a, k] : m.hle_sites) sites.push_back({a, k});

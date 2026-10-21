@@ -10,6 +10,7 @@
 //   MVP_WASM_HELPERS=1   every non-branch instruction through the runtime
 //   MVP_WASM_OUT=FILE    also write the module (only ever under build/)
 //   MVP_WASM_NAMES=1     add a name section (function names for profilers)
+//   MVP_WASM_FIXED=0     the runtime's addresses as imported globals (V4: constants by default)
 #include <emscripten.h>
 
 #include <chrono>
@@ -54,6 +55,9 @@ void mvp_register_game() {
   opt.precise_io = env_on("MVP_WASM_PRECISE");
   opt.inline_ops = !env_on("MVP_WASM_HELPERS");
   opt.names = env_on("MVP_WASM_NAMES");
+  // V4: the runtime's addresses (MEM1's included: the machine exists by now) as
+  // constants, as the browser's engine emits them; MVP_WASM_FIXED=0 keeps the globals.
+  if (const char* v = std::getenv("MVP_WASM_FIXED"); !v || *v != '0') opt.fixed = rt::wasm_fixed_addrs();
   auto t2 = std::chrono::steady_clock::now();
   xlat::WasmModule mod;
   if (!xlat::emit_wasm(cfg, opt, &mod, &err)) {

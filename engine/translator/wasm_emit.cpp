@@ -96,6 +96,22 @@ constexpr const char* kHelperName[kHelperCount] = {"rd8",  "rd16", "rd32", "wr8"
                                                    "wr32.page", "rd64.page", "wr64.page", "lfs.page", "stfs.page"};
 // Imported globals (immutable i32): the table base and three runtime addresses.
 enum Glb : u32 { gTableBase, gUnwinding, gResume, gHook, gWgp, gGpPages, gMem1, kGlobals };
+// V4: WasmEmitOptions::fixed of the module being emitted (emit_wasm sets it).
+thread_local WasmFixed t_fixed;
+// Pushes the address the imported global `g` holds: the constant when it is fixed.
+void glb(Fn& b, Glb g) {
+  u32 c = 0;
+  switch (g) {
+    case gUnwinding: c = t_fixed.unwinding; break;
+    case gResume: c = t_fixed.resume; break;
+    case gHook: c = t_fixed.hook; break;
+    case gWgp: c = t_fixed.wgp; break;
+    case gGpPages: c = t_fixed.gp_pages; break;
+    default: break;
+  }
+  if (c) b.i32c(c);
+  else b.global(g);
+}
 
 // ---- per-instruction classification ----
 enum Kind : u8 {
@@ -331,7 +347,7 @@ class FuncGen {
     body_->set(L_sp);
   }
   void leave() {  // rt::leave(); return;
-    body_->global(gUnwinding);
+    glb(*body_, gUnwinding);
     body_->i32c(1);
     body_->mem(op::i32_store8, 0, 0);
     body_->op(op::return_);
@@ -403,12 +419,12 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
   b.get(0);
   b.i32c(e);
   b.mem(op::i32_store, 2, kPc);
-  b.global(gHook);
+  glb(b, gHook);
   b.mem(op::i32_load, 2, 0);
   event_due();
   b.op(op::i32_or);
   b.if_();
-  b.global(gHook);
+  glb(b, gHook);
   b.mem(op::i32_load, 2, 0);
   b.if_();
   b.get(0);
@@ -424,7 +440,7 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
   b.mem(op::i32_load, 2, kPc);
   b.i32c(e);
   b.op(op::i32_ne);
-  b.global(gUnwinding);
+  glb(b, gUnwinding);
   b.mem(op::i32_load8_u, 0, 0);
   b.op(op::i32_or);
   b.if_();
@@ -434,7 +450,7 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
 }
 
 void emit_leave(Fn& b) {
-  b.global(gUnwinding);
+  glb(b, gUnwinding);
   b.i32c(1);
   b.mem(op::i32_store8, 0, 0);
   b.op(op::return_);
@@ -730,7 +746,7 @@ void FuncGen::check(u32 expect) {
   body_->mem(op::i32_load, 2, kPc);
   body_->i32c(expect);
   body_->op(op::i32_ne);
-  body_->global(gUnwinding);
+  glb(*body_, gUnwinding);
   body_->mem(op::i32_load8_u, 0, 0);
   body_->op(op::i32_or);
   body_->if_();
@@ -2870,7 +2886,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
       body.i32c(0);
       body.set(L_label);
       pre_level_ = body.block();
-      body.global(gResume);
+      glb(body, gResume);
       body.mem(op::i32_load8_u, 0, 0);
       body.br_if(pre_level_);
     }
@@ -2884,7 +2900,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
         body.i32c(hook_);
         body.call(iHleBefore);
         // The hook may stop the run before the first instruction (runtime/hle.h).
-        body.global(gUnwinding);
+        glb(body, gUnwinding);
         body.mem(op::i32_load8_u, 0, 0);
         body.if_();
         if (has_resume_) body.br(pre_level_);
@@ -2986,7 +3002,7 @@ thread_local bool t_gp_checks = false;
 void gp_check(Fn& h, const std::function<void()>& first, const std::function<void()>& last) {
   if (!t_gp_checks) return;
   auto entry = [&](const std::function<void()>& addr) {
-    h.global(gGpPages);
+    if (!t_fixed.gp_pages) h.global(gGpPages);
     addr();
     h.i32c(WasmGpLayout::kShift);
     h.op(op::i32_shr_u);
@@ -2994,8 +3010,8 @@ void gp_check(Fn& h, const std::function<void()>& first, const std::function<voi
     h.op(op::i32_and);
     h.i32c(2);
     h.op(op::i32_shl);
-    h.op(op::i32_add);
-    h.mem(op::i32_load, 2, 0);
+    if (!t_fixed.gp_pages) h.op(op::i32_add);
+    h.mem(op::i32_load, 2, t_fixed.gp_pages);  // V4: the table's address as the offset
   };
   entry(first);
   entry(last);
@@ -3034,12 +3050,24 @@ void host_addr(Fn& h, u32 p_local) {
 // 0x80000000 + t with t < limit is at base + t, the host address `access` finds
 // in the i32 local `a`; `access` ends with a return. The page table maps the
 // same bytes there (Machine), so the result is the same.
+// V4: with MEM1 fixed (WasmFixed::mem1_limit) the limit is a constant and `a`
+// keeps t: `access` adds mem1_offset() to its offsets (the load's or store's
+// offset immediate holds the base, so the host address is never computed).
+u32 mem1_offset() { return t_fixed.mem1_limit ? t_fixed.mem1_base : 0; }
 void mem1_path(Fn& h, u32 a, const std::function<void()>& access) {
   using M = WasmMem1Layout;
   h.get(1);
   h.i32c(0x80000000u);
   h.op(op::i32_sub);
   h.tee(a);
+  if (t_fixed.mem1_limit) {
+    h.i32c(t_fixed.mem1_limit);
+    h.op(op::i32_lt_u);
+    h.if_();
+    access();
+    h.end();
+    return;
+  }
   h.global(gMem1);
   h.mem(op::i32_load, 2, M::kLimit);
   h.op(op::i32_lt_u);
@@ -3066,6 +3094,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
   const bool wr = f == Front::Write || f == Front::Write64 || f == Front::Stfs;
   const u32 params = wr ? 5 : 4;
   const u32 a = params, w = params + 1;  // the host address; a word
+  const u32 mo = mem1_offset();  // V4: added to the accesses' offsets (0 unless MEM1 is fixed)
   h.uleb(1);
   h.uleb(2);
   h.byte(kI32);
@@ -3087,9 +3116,9 @@ Fn helper_front(Front f, int bytes, u32 page) {
       case Front::Read:
         h.get(a);
         if (bytes == 1) {
-          h.mem(op::i32_load8_u, 0, 0);
+          h.mem(op::i32_load8_u, 0, mo + 0);
         } else if (bytes == 2) {
-          h.mem(op::i32_load16_u, 0, 0);
+          h.mem(op::i32_load16_u, 0, mo + 0);
           h.tee(w);
           h.i32c(8);
           h.op(op::i32_shl);
@@ -3100,7 +3129,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.i32c(0xFFFF);
           h.op(op::i32_and);
         } else {
-          h.mem(op::i32_load, 0, 0);
+          h.mem(op::i32_load, 0, mo + 0);
           h.tee(w);
           swap32_from_local(h, w);
         }
@@ -3110,7 +3139,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
         h.get(a);
         if (bytes == 1) {
           h.get(2);
-          h.mem(op::i32_store8, 0, 0);
+          h.mem(op::i32_store8, 0, mo + 0);
         } else if (bytes == 2) {
           h.get(2);
           h.i32c(8);
@@ -3121,17 +3150,17 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.i32c(0xFF);
           h.op(op::i32_and);
           h.op(op::i32_or);
-          h.mem(op::i32_store16, 0, 0);
+          h.mem(op::i32_store16, 0, mo + 0);
         } else {
           h.get(2);
           swap32_from_local(h, 2);
-          h.mem(op::i32_store, 0, 0);
+          h.mem(op::i32_store, 0, mo + 0);
         }
         break;
       case Front::Read64:
         for (u32 off : {0u, 4u}) {
           h.get(a);
-          h.mem(op::i32_load, 0, off);
+          h.mem(op::i32_load, 0, mo + off);
           h.tee(w);
           swap32_from_local(h, w);
           h.op(op::i64_extend_i32_u);
@@ -3154,12 +3183,12 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.op(op::i32_wrap_i64);
           h.tee(w);
           swap32_from_local(h, w);
-          h.mem(op::i32_store, 0, off);
+          h.mem(op::i32_store, 0, mo + off);
         }
         break;
       case Front::Lfs:
         h.get(a);
-        h.mem(op::i32_load, 0, 0);
+        h.mem(op::i32_load, 0, mo + 0);
         h.tee(w);
         swap32_from_local(h, w);
         h.set(w);
@@ -3170,7 +3199,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
         h.get(a);
         h.get(w);
         swap32_from_local(h, w);
-        h.mem(op::i32_store, 0, 0);
+        h.mem(op::i32_store, 0, mo + 0);
         break;
     }
     h.op(op::return_);
@@ -3535,7 +3564,7 @@ Fn helper_write(int bytes, u32 slow) {
   h.i32c(0x1000);
   h.op(op::i32_lt_u);
   h.if_();
-  h.global(gWgp);
+  glb(h, gWgp);
   h.tee(6);
   h.mem(op::i32_load, 2, L::kFast);
   h.if_();
@@ -4245,7 +4274,7 @@ Fn helper_psq_store() {
     h.i32c(0x1000);
     h.op(op::i32_lt_u);
     h.if_();
-    h.global(gWgp);
+    glb(h, gWgp);
     h.tee(10);
     h.mem(op::i32_load, 2, L::kFast);
     h.if_();
@@ -4554,7 +4583,9 @@ const char* wasm_trap_text(std::uint32_t code) {
 
 bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out, std::string* error) {
   t_gp_checks = opt.shared_memory;
+  t_fixed = opt.fixed;
   *out = WasmModule{};
+  out->fixed = opt.fixed;
   if (p.errors) {
     if (error) *error = "the CFG has errors";
     return false;
@@ -4669,7 +4700,7 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
       const BodyInfo& info = bodies.at(w.target);
       fn.uleb(0);
       if (w.entry == f.start && info.resume) {
-        fn.global(gResume);
+        glb(fn, gResume);
         fn.mem(op::i32_load8_u, 0, 0);
         fn.if_();
         fn.get(0);

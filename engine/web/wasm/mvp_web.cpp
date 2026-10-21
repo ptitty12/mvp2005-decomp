@@ -338,6 +338,10 @@ struct Engine {
   std::string state_result;             // the last request's outcome for the page (JSON), until taken
 };
 Engine g;
+// V4: MEM1 at a fixed address (static storage: the same place in every run of this
+// engine build), so the translated module has it as a constant (xlat::WasmFixed;
+// the cache key names the build, and rt::load_wasm_module checks the addresses).
+alignas(64) std::uint8_t g_mem1_store[Machine::kMem1Size + Machine::kGuard];
 std::vector<TimedSource::Record> g_io_log;
 bool g_io_logging = false;
 
@@ -666,6 +670,8 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate(const char* text, int len) {
     const auto& table = hle_table();
     for (std::size_t k = 0; k < table.size(); ++k)
       opt.hle.push_back({table[k].name, table[k].address, static_cast<int>(k), table[k].kind == HleKind::Before});
+    set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: where the machine's MEM1 will be (mvp_boot)
+    opt.fixed = wasm_fixed_addrs();                    // the runtime's addresses as constants
     if (!xlat::emit_wasm(cfg, opt, &mod, &g.error)) return 0;
     double t3 = now_ms();
     g.t_symbols = t1 - t0;
@@ -718,6 +724,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate_cached(const std::uint8_t* blob, double l
   g.module_bytes = mod.bytes.size();
   g.emit_stats = mod.stats;
   mvp_js_progress("Loading the cached translation: compiling", 4, 5);
+  set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: the module's fixed MEM1 (load_wasm_module checks it)
   if (!load_wasm_module(mod, &g.load, &g.error)) return 0;
   g.translated = true;
   g.from_cache = true;
@@ -769,7 +776,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   if (stop_fields > 0) g.stop_fields = static_cast<std::uint64_t>(stop_fields);
   if (stop_frames > 0) g.stop_frames = static_cast<std::uint64_t>(stop_frames);
 
-  g.m = std::make_unique<Machine>();
+  g.m = std::make_unique<Machine>(g_mem1_store);  // V4: MEM1 where the translated module has it
   g.m->load_dol(g.disc->dol);
   setup_boot_environment(*g.m, *g.disc);
   g.hw = std::make_unique<Hardware>(&g.m->cpu(), g.m->mem1(), Machine::kMem1Size);

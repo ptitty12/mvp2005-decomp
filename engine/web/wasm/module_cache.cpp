@@ -7,12 +7,12 @@ namespace mvp::web {
 namespace {
 
 constexpr char kMagic[8] = {'M', 'V', 'P', 'X', 'L', 'A', 'T', '\0'};
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2;  // V4: 2 carries WasmModule::fixed
 
 // If this fails, xlat::WasmModule or WasmEmitStats changed: carry the new
 // fields below and bump kVersion (the cache key changes with the engine build
 // anyway; this keeps a warm start equal to a fresh translation).
-static_assert(sizeof(xlat::WasmModule) == 164 && sizeof(xlat::WasmEmitStats) == 64,
+static_assert(sizeof(xlat::WasmModule) == 192 && sizeof(xlat::WasmEmitStats) == 64,
               "update serialize_module/deserialize_module for the changed WasmModule");
 
 struct Writer {
@@ -99,6 +99,8 @@ std::vector<std::uint8_t> serialize_module_header(const xlat::WasmModule& m) {
   }
   w.u32(static_cast<std::uint32_t>(m.hle_matched.size()));
   for (int k : m.hle_matched) w.u32(static_cast<std::uint32_t>(k));
+  const auto& f = m.fixed;  // V4
+  for (std::uint32_t v : {f.unwinding, f.resume, f.hook, f.wgp, f.gp_pages, f.mem1_base, f.mem1_limit}) w.u32(v);
   const auto& s = m.stats;
   for (std::size_t v : {s.functions, s.wasm_functions, s.entries, s.instructions, s.inline_insns, s.helper_insns,
                         s.branch_insns, s.resume_labels, s.dispatch_functions, s.spills, s.reloads, s.hle_stubs,
@@ -142,6 +144,9 @@ bool deserialize_module(const std::uint8_t* p, std::size_t n, xlat::WasmModule* 
   }
   out.hle_matched.resize(r.count(4));
   for (int& k : out.hle_matched) k = static_cast<int>(r.u32());
+  auto& f = out.fixed;  // V4
+  for (std::uint32_t* v : {&f.unwinding, &f.resume, &f.hook, &f.wgp, &f.gp_pages, &f.mem1_base, &f.mem1_limit})
+    *v = r.u32();
   auto& s = out.stats;
   for (std::size_t* v : {&s.functions, &s.wasm_functions, &s.entries, &s.instructions, &s.inline_insns,
                          &s.helper_insns, &s.branch_insns, &s.resume_labels, &s.dispatch_functions, &s.spills,

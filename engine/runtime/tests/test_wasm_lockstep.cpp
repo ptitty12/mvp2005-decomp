@@ -53,7 +53,9 @@ static void install_fp_handler(Machine& m) {
   m.set_real_mode(true);  // the vector runs at its physical address
 }
 
-static void run_case(bool inline_ops, bool mem1 = false) {
+// V4 (`fixed`): the module has the runtime's addresses as constants, MEM1's
+// (the native machine's) included (xlat::WasmFixed), as the browser emits it.
+static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false) {
   xlat::synth::Program prog = xlat::synth::make();
   auto syms = xlat::SymbolTable::parse(prog.symbols);
   auto dol = vfs::Dol::parse(prog.dol);
@@ -67,13 +69,18 @@ static void run_case(bool inline_ops, bool mem1 = false) {
     opt.hle.push_back({table[k].name, table[k].address, static_cast<int>(k), table[k].kind == HleKind::Before});
   opt.precise_io = true;  // exact registers at the MMIO stop
   opt.inline_ops = inline_ops;
+  Machine ref, nat;
+  if (fixed) {
+    set_wasm_mem1(nat.mem1(), Machine::kMem1Size);
+    opt.fixed = wasm_fixed_addrs();
+    REQUIRE(opt.fixed.mem1_limit == Machine::kMem1Size - 7);
+  }
   xlat::WasmModule mod;
   std::string err;
   REQUIRE_MESSAGE(xlat::emit_wasm(cfg, opt, &mod, &err), err);
   MESSAGE(mod.bytes.size(), " bytes, ", mod.stats.instructions, " instructions (", mod.stats.inline_insns, " inline, ",
           mod.stats.helper_insns, " through the runtime, ", mod.stats.branch_insns, " control)");
 
-  Machine ref, nat;
   FixedHooks hr, hn;
   StopIo ir, in;
   ir.cpu = &ref.cpu();
@@ -131,6 +138,40 @@ TEST_CASE("wasm-emitted synthetic program matches the interpreter in lockstep (r
 TEST_CASE("Q6: the same with the memory helpers' own MEM1 path") {
   run_case(true, true);
   run_case(false, true);
+}
+
+TEST_CASE("V4: the same with the runtime's addresses and MEM1 fixed in the module") {
+  run_case(true, true, true);
+  run_case(false, true, true);
+}
+
+TEST_CASE("V4: a module made for other runtime addresses is refused") {
+  xlat::synth::Program prog = xlat::synth::make();
+  auto syms = xlat::SymbolTable::parse(prog.symbols);
+  auto dol = vfs::Dol::parse(prog.dol);
+  REQUIRE(dol);
+  xlat::ProgramCfg cfg = xlat::build_cfg(*dol, syms);
+  REQUIRE(cfg.errors == 0);
+  set_wasm_mem1(nullptr, 0);
+  const xlat::WasmFixed here = wasm_fixed_addrs();
+  CHECK(here.mem1_limit == 0);  // no MEM1 given: not fixed
+  for (int k = 0; k < 3; ++k) {
+    xlat::WasmEmitOptions opt;
+    opt.fixed = here;
+    if (k == 0) opt.fixed.unwinding += 4;
+    if (k == 1) opt.fixed.gp_pages += 64;
+    if (k == 2) {
+      opt.fixed.mem1_base = 0x100000;  // MEM1 fixed where the runtime has none
+      opt.fixed.mem1_limit = Machine::kMem1Size - 7;
+    }
+    xlat::WasmModule mod;
+    std::string err;
+    REQUIRE_MESSAGE(xlat::emit_wasm(cfg, opt, &mod, &err), err);
+    CHECK(mod.fixed == opt.fixed);
+    WasmLoadStats ls;
+    CHECK_FALSE(load_wasm_module(mod, &ls, &err));
+    CHECK(err.find("other runtime addresses") != std::string::npos);
+  }
 }
 
 // E5c: in wasm-emitted code too, the frame poll stops the run before it consumes

@@ -34,4 +34,11 @@ WgpState* wasm_wgp_state();
 // Call once the machine exists, before its code runs; null turns it off.
 void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size);
 
+// V4: the runtime's addresses a module may hold as constants (xlat::WasmFixed):
+// g_unwinding, g_resume, g_entry_hook, the pipe's state, ppc::g_gp_pages, and
+// MEM1's once set_wasm_mem1 gave it. load_wasm_module refuses a module whose
+// fixed (nonzero) fields differ from these, and set_wasm_mem1 must not move MEM1
+// away from where a loaded module has it fixed.
+xlat::WasmFixed wasm_fixed_addrs();
+
 }  // namespace mvp::rt
