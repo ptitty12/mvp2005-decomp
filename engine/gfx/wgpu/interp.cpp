@@ -16,7 +16,6 @@ namespace mvp::gfx {
 
 namespace {
 
-constexpr std::uint64_t kSlot = 256;                  // clear and conversion constants per op
 constexpr std::uint64_t kMaxReplayBytes = 96u << 20;  // a frame's vertex + index + constant bytes (else no in-between)
 
 bool has_alpha(std::uint8_t pixel_format) { return pixel_format == 1; }  // RGBA6_Z24
@@ -58,13 +57,14 @@ void Renderer::set_interp(bool on) {
   for (Between& b : between_) b = Between{};
   between_mixed_ = Frame{};
   between_mixed_key_ = ~0ull;
-  ivbuf_ = iibuf_ = iubuf_ = iclear_buf_ = iconv_buf_ = nullptr;
-  ivcap_ = iicap_ = iucap_ = iclear_cap_ = iconv_cap_ = 0;
-  iuniform_group_ = nullptr;
+  ivbuf_ = nullptr;
+  ivcap_ = 0;
+  iconvert_group_ = nullptr;
 }
 
 void Renderer::rec_drop() {
   recording_ = false;
+  keep_frame_ = false;  // V6: the live data starts over with the next batch
   for (Record& r : rec_) {
     r.valid = false;
     r.binds.clear();  // the textures they hold
@@ -80,15 +80,22 @@ void Renderer::rec_begin(const EfbCopy& c) {
   r.field = r.serial = 0;
   r.scale = scale_;
   r.ops.clear();
-  r.npasses = 0;
+  r.v.clear();
+  r.draws.clear();
   r.clears.clear();
   r.copies.clear();
   r.binds.clear();
   r.bind_index.clear();
   r.ranges.clear();
   r.pos.clear();
-  r.pass_serial = 0;
   recording_ = true;
+  // V6: the frame's vertices, indices and constants go into the live buffers from offset 0
+  // on and stay there for the whole frame (the batch before was submitted at this copy).
+  keep_frame_ = true;
+  vdata_.clear();
+  udata_.clear();
+  idata_.clear();
+  vup_ = iup_ = uup_ = 0;
   // The frame starts with the EFB as this copy's clear leaves it (recorded next). A
   // copy that does not clear color and depth leaves the EFB as it is now: the private
   // EFB starts as a copy of it.
@@ -117,7 +124,6 @@ std::uint32_t Renderer::rec_bind(const BindEntry& be) {
 
 void Renderer::rec_range(const DrawCall& d, std::size_t voff, std::uint32_t stride) {
   Record& r = rec_[rec_cur_];
-  if (r.npasses == 0) return;
   const std::uint32_t n = static_cast<std::uint32_t>(d.verts.size());
   const std::size_t at = r.pos.size();
   r.pos.resize(at + 4 * static_cast<std::size_t>(n));
@@ -128,13 +134,11 @@ void Renderer::rec_range(const DrawCall& d, std::size_t voff, std::uint32_t stri
     n3 += v.pos[3] > 1e-6f && v.pos[3] != 1.0f;
     out += 4;
   }
-  r.ranges.push_back({d.ident, static_cast<std::uint32_t>(r.npasses - 1), static_cast<std::uint32_t>(voff), n, stride,
-                      static_cast<std::uint32_t>(at / 4), n3});
+  r.ranges.push_back({d.ident, static_cast<std::uint32_t>(voff), n, stride, static_cast<std::uint32_t>(at / 4), n3});
 }
 
 void Renderer::rec_draw() {
   Record& r = rec_[rec_cur_];
-  if (r.npasses == 0 || r.pass_serial != pass_serial_) return;
   RecDraw d;
   d.pipe = static_cast<const Pipeline*>(pending_.pipe);
   d.bind = pending_.bind;
@@ -142,40 +146,33 @@ void Renderer::rec_draw() {
   d.first_index = pending_.first_index;
   d.index_count = pending_.index_count;
   d.base = pending_.base;
+  d.vertices = pending_.vertices;
   std::memcpy(d.scissor, pending_.scissor, sizeof d.scissor);
-  r.passes[r.npasses - 1].draws.push_back(d);
+  // V6: the frame's draws since its last clear or copy are one op (passes, batches and
+  // submits do not matter to the replay).
+  const std::uint32_t at = static_cast<std::uint32_t>(r.draws.size());
+  r.draws.push_back(d);
+  if (!r.ops.empty() && r.ops.back().kind == RecKind::Pass) r.ops.back().end = at + 1;
+  else r.ops.push_back({RecKind::Pass, 0, at, at + 1});
 }
 
-void Renderer::rec_pass_end() {
-  Record& r = rec_[rec_cur_];
-  if (r.npasses == 0 || r.pass_serial != pass_serial_) return;
-  RecPass& p = r.passes[r.npasses - 1];
-  // The bytes were uploaded; the record takes them (and the pass gets the record's
-  // old buffers, cleared at its next begin_pass()).
-  std::swap(p.v, vdata_);
-  std::swap(p.i, idata_);
-  std::swap(p.u, udata_);
-  p.filled = true;
-}
-
-void Renderer::rec_clear(int m, const float* data, const std::uint32_t* rect) {
+void Renderer::rec_clear(int m, std::uint32_t uoff, const std::uint32_t* rect) {
   Record& r = rec_[rec_cur_];
   RecClear c;
   c.m = m;
-  std::memcpy(c.data, data, sizeof c.data);
+  c.uoff = uoff;
   std::memcpy(c.rect, rect, sizeof c.rect);
   r.ops.push_back({RecKind::Clear, static_cast<std::uint32_t>(r.clears.size())});
   r.clears.push_back(c);
 }
 
-void Renderer::rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph,
-                        const std::int32_t* params) {
+void Renderer::rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph, std::uint32_t uoff) {
   Record& r = rec_[rec_cur_];
   RecCopy c;
   c.live = view;
   c.pw = pw;
   c.ph = ph;
-  std::memcpy(c.params, params, sizeof c.params);
+  c.uoff = uoff;
   r.ops.push_back({RecKind::Copy, static_cast<std::uint32_t>(r.copies.size())});
   r.copies.push_back(std::move(c));
 }
@@ -184,7 +181,11 @@ void Renderer::rec_end(std::uint32_t x0, std::uint32_t y0, std::uint32_t w, std:
   Record& cur = rec_[rec_cur_];
   Record& prev = rec_[rec_cur_ ^ 1];
   recording_ = false;
+  keep_frame_ = false;
   if (!cur.valid) return;
+  // V6: the frame's vertex bytes (uploaded: the batch was submitted at this copy) go into the
+  // record; its indices and constants stay in the live buffers for the replay.
+  std::swap(cur.v, vdata_);
   cur.field = fields_;
   cur.serial = serial;
   cur.xfb[0] = x0;
@@ -235,6 +236,7 @@ void Renderer::interp_targets() {
   iefb_depth_ = gpu_.device().CreateTexture(&td);
   iefb_depth_view_ = iefb_depth_.CreateView();
   iefb_scale_ = scale_;
+  iconvert_group_ = nullptr;  // V6: it binds the private EFB's views
 }
 
 const wgpu::BindGroup& Renderer::interp_bind(const RecBind& b) {
@@ -255,7 +257,10 @@ const wgpu::BindGroup& Renderer::interp_bind(const RecBind& b) {
   if (ibind_.size() > 1024) ibind_.clear();
   BindEntry& e = ibind_[key];
   if (!e.group) {
-    wgpu::BindGroupEntry te[16]{};
+    wgpu::BindGroupEntry te[17]{};
+    te[16].binding = 16;  // V6: the live constants, as in the live groups
+    te[16].buffer = ubuf_;
+    te[16].size = kUniformSize;
     for (std::size_t k = 0; k < 8; ++k) {
       auto it = subst_.find(b.views[k].Get());
       e.views[k] = it != subst_.end() ? it->second : b.views[k];
@@ -267,7 +272,7 @@ const wgpu::BindGroup& Renderer::interp_bind(const RecBind& b) {
     }
     wgpu::BindGroupDescriptor bgd{};
     bgd.layout = bgl_textures_;
-    bgd.entryCount = 16;
+    bgd.entryCount = 17;
     bgd.entries = te;
     e.group = gpu_.device().CreateBindGroup(&bgd);
   }
@@ -278,7 +283,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   const auto t0 = std::chrono::steady_clock::now();
   const std::vector<RecRange>& C = cur.ranges;
   const std::vector<RecRange>& P = prev.ranges;
-  if (C.empty() || cur.npasses == 0) {
+  if (C.empty() || cur.draws.empty()) {
     ++istats_.other;
     return false;
   }
@@ -452,15 +457,23 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   // keeps its own positions for the next frame's matching). ----
   const bool snap = cur.scale > 1;
   constexpr float kHalfW = kEfbWidth / 2.0f, kHalfH = kEfbHeight / 2.0f;
+  // V6: the draws holding a range written here take their vertices from the replay's
+  // buffer; the others read the live one (ranges and draws both run up the frame's bytes).
+  moved_.assign(cur.draws.size(), 0);
+  std::size_t di = 0;
   for (std::uint32_t k = 0; k < C.size(); ++k) {
     if (match_[k] == ~0u || match_[k] == kStill) continue;  // drawn where it is now; or it did not move
     const RecRange& c = C[k];
     const RecRange& p = P[match_[k]];
-    RecPass& rp = cur.passes[c.pass];
-    if (!rp.filled || c.voff + static_cast<std::size_t>(c.count) * c.stride > rp.v.size()) continue;
+    if (c.voff + static_cast<std::size_t>(c.count) * c.stride > cur.v.size()) continue;
+    while (di < cur.draws.size() && (static_cast<std::size_t>(cur.draws[di].base) + cur.draws[di].vertices) *
+                                            cur.draws[di].pipe->stride <= c.voff)
+      ++di;
+    if (di < cur.draws.size() && static_cast<std::size_t>(cur.draws[di].base) * cur.draws[di].pipe->stride <= c.voff)
+      moved_[di] = 1;
     const float* a = &prev.pos[4 * static_cast<std::size_t>(p.pos)];
     const float* b = &cur.pos[4 * static_cast<std::size_t>(c.pos)];
-    std::uint8_t* out = rp.v.data() + c.voff;
+    std::uint8_t* out = cur.v.data() + c.voff;
     for (std::uint32_t v = 0; v < c.count; ++v, a += 4, b += 4, out += c.stride) {
       if ((a[3] > 0) != (b[3] > 0)) continue;  // crosses the camera plane: where it is now
       float m[4] = {0.5f * (a[0] + b[0]), 0.5f * (a[1] + b[1]), 0.5f * (a[2] + b[2]), 0.5f * (a[3] + b[3])};
@@ -476,100 +489,88 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   istats_.ranges += C.size();
   istats_.vertices += total;
 
-  // ---- The replay, into the private targets. ----
-  struct Off {
-    std::uint64_t v, i, u;
-  };
-  std::vector<Off> offs(cur.npasses);
-  std::uint64_t vb = 0, ib = 0, ub = 0;
-  for (std::size_t k = 0; k < cur.npasses; ++k) {
-    const RecPass& p = cur.passes[k];
-    offs[k] = {vb, ib, ub};
-    if (!p.filled) continue;
-    vb += (p.v.size() + 255) & ~std::uint64_t(255);
-    ib += (p.i.size() * 4 + 255) & ~std::uint64_t(255);
-    ub += (p.u.size() + 255) & ~std::uint64_t(255);
-  }
-  if (vb + ib + ub > kMaxReplayBytes) {
+  // ---- The replay, into the private targets. V6: the frame's indices and constants (draws,
+  // clears, conversions) are where the live frame put them in the live buffers (kept for the
+  // whole recorded frame and submitted at its XFB copy, just before; the next frame writes
+  // them after this replay's submit). The vertices too, except the draws with a vertex at a
+  // halfway position: those spans of the frame's bytes go into the replay's own buffer, at the
+  // same offsets (the whole frame's bytes went every time before). ----
+  if (cur.v.size() > kMaxReplayBytes) {
     ++istats_.other;
     return false;
   }
   interp_targets();
   const wgpu::Device& dev = gpu_.device();
   wgpu::Queue q = gpu_.queue();
-  interp_buffer(ivbuf_, ivcap_, std::max<std::uint64_t>(vb, 256), wgpu::BufferUsage::Vertex, "in-between vertices");
-  interp_buffer(iibuf_, iicap_, std::max<std::uint64_t>(ib, 256), wgpu::BufferUsage::Index, "in-between indices");
-  const std::uint64_t ucap = iucap_;
-  interp_buffer(iubuf_, iucap_, std::max<std::uint64_t>(ub, 1024), wgpu::BufferUsage::Uniform, "in-between uniforms");
-  if (!iuniform_group_ || ucap != iucap_) {
-    wgpu::BindGroupEntry be{};
-    be.binding = 0;
-    be.buffer = iubuf_;
-    be.size = kUniformSize;
+  interp_buffer(ivbuf_, ivcap_, std::max<std::uint64_t>(cur.v.size(), 256), wgpu::BufferUsage::Vertex,
+                "in-between vertices");
+  {
+    // Runs of moved draws, joined over gaps of under 4 KiB (fewer writes).
+    constexpr std::size_t kJoin = 4096;
+    spans_.clear();
+    for (std::size_t k = 0; k < cur.draws.size(); ++k) {
+      if (!moved_[k]) continue;
+      const RecDraw& d = cur.draws[k];
+      const std::size_t s = static_cast<std::size_t>(d.base) * d.pipe->stride;
+      const std::size_t e = s + static_cast<std::size_t>(d.vertices) * d.pipe->stride;
+      if (!spans_.empty() && s <= spans_.back().to + kJoin) spans_.back().to = std::max(spans_.back().to, e);
+      else spans_.push_back({s, e});
+    }
+    istats_.frame_bytes += cur.v.size();
+  }
+  // V6: through a staging buffer (copied at the start of the replay's commands) when one is
+  // mapped, else queue writes.
+  std::uint64_t staged_bytes = 0;
+  for (const Span& sp : spans_) staged_bytes += (sp.to - sp.from + 7) & ~std::size_t(7);
+  StagingPool::Entry* st = staged_bytes ? take_staging(staged_bytes) : nullptr;
+  bool staged = false;
+  if (st) {
+    st->ready = false;
+    std::uint64_t at = 0;
+    bool ok = true;
+    for (const Span& sp : spans_) {
+      ok = ok && st->buf.WriteMappedRange(at, cur.v.data() + sp.from, sp.to - sp.from) == wgpu::Status::Success;
+      at += (sp.to - sp.from + 7) & ~std::size_t(7);
+    }
+    st->buf.Unmap();
+    staged = ok;
+  }
+  if (!staged)  // queue writes (no staging buffer mapped, or the mapped memory refused a write)
+    for (const Span& sp : spans_) q.WriteBuffer(ivbuf_, sp.from, cur.v.data() + sp.from, sp.to - sp.from);
+  for (const Span& sp : spans_) istats_.upload_bytes += sp.to - sp.from;
+  if (!cur.copies.empty() && !iconvert_group_) {
+    wgpu::BindGroupEntry be[3]{};
+    be[0].binding = 0;
+    be[0].buffer = ubuf_;
+    be[0].size = 32;
+    be[1].binding = 1;
+    be[1].textureView = iefb_color_view_;
+    be[2].binding = 2;
+    be[2].textureView = iefb_depth_view_;
     wgpu::BindGroupDescriptor bgd{};
-    bgd.layout = bgl_uniforms_;
-    bgd.entryCount = 1;
-    bgd.entries = &be;
-    iuniform_group_ = dev.CreateBindGroup(&bgd);
-  }
-  for (std::size_t k = 0; k < cur.npasses; ++k) {
-    const RecPass& p = cur.passes[k];
-    if (!p.filled) continue;
-    if (!p.v.empty()) q.WriteBuffer(ivbuf_, offs[k].v, p.v.data(), p.v.size());
-    if (!p.i.empty()) q.WriteBuffer(iibuf_, offs[k].i, p.i.data(), p.i.size() * 4);
-    if (!p.u.empty()) q.WriteBuffer(iubuf_, offs[k].u, p.u.data(), p.u.size());
-  }
-  // Clear and conversion constants, one 256-byte slot per op.
-  std::vector<wgpu::BindGroup> clear_groups, conv_groups;
-  if (!cur.clears.empty()) {
-    interp_buffer(iclear_buf_, iclear_cap_, cur.clears.size() * kSlot, wgpu::BufferUsage::Uniform, "in-between clears");
-    std::vector<std::uint8_t> slots(cur.clears.size() * kSlot, 0);
-    for (std::size_t k = 0; k < cur.clears.size(); ++k) {
-      std::memcpy(slots.data() + k * kSlot, cur.clears[k].data, sizeof cur.clears[k].data);
-      wgpu::BindGroupEntry be{};
-      be.binding = 0;
-      be.buffer = iclear_buf_;
-      be.offset = k * kSlot;
-      be.size = 32;
-      wgpu::BindGroupDescriptor bgd{};
-      bgd.layout = bgl_clear_;
-      bgd.entryCount = 1;
-      bgd.entries = &be;
-      clear_groups.push_back(dev.CreateBindGroup(&bgd));
-    }
-    q.WriteBuffer(iclear_buf_, 0, slots.data(), slots.size());
-  }
-  if (!cur.copies.empty()) {
-    interp_buffer(iconv_buf_, iconv_cap_, cur.copies.size() * kSlot, wgpu::BufferUsage::Uniform, "in-between copies");
-    std::vector<std::uint8_t> slots(cur.copies.size() * kSlot, 0);
-    for (std::size_t k = 0; k < cur.copies.size(); ++k) {
-      std::memcpy(slots.data() + k * kSlot, cur.copies[k].params, sizeof cur.copies[k].params);
-      wgpu::BindGroupEntry be[3]{};
-      be[0].binding = 0;
-      be[0].buffer = iconv_buf_;
-      be[0].offset = k * kSlot;
-      be[0].size = 32;
-      be[1].binding = 1;
-      be[1].textureView = iefb_color_view_;
-      be[2].binding = 2;
-      be[2].textureView = iefb_depth_view_;
-      wgpu::BindGroupDescriptor bgd{};
-      bgd.layout = bgl_convert_;
-      bgd.entryCount = 3;
-      bgd.entries = be;
-      conv_groups.push_back(dev.CreateBindGroup(&bgd));
-    }
-    q.WriteBuffer(iconv_buf_, 0, slots.data(), slots.size());
+    bgd.layout = bgl_convert_;
+    bgd.entryCount = 3;
+    bgd.entries = be;
+    iconvert_group_ = dev.CreateBindGroup(&bgd);
   }
 
   ++replays_;
   subst_.clear();
   wgpu::CommandEncoder enc = dev.CreateCommandEncoder();
+  if (staged) {
+    std::uint64_t at = 0;
+    for (const Span& sp : spans_) {
+      enc.CopyBufferToBuffer(st->buf, at, ivbuf_, sp.from, sp.to - sp.from);
+      at += (sp.to - sp.from + 7) & ~std::size_t(7);
+    }
+  }
   wgpu::RenderPassEncoder pass;
   bool open = false;
   const void* bpipe = nullptr;
   const void* btex = nullptr;
   std::uint32_t buoff = ~0u, bsc[4] = {~0u, ~0u, ~0u, ~0u};
+  int bvb = -1;        // V6: the vertex buffer bound (0 live, 1 the replay's), -1 none
+  bool bib = false;    // ... the index buffer
   const std::uint32_t s = cur.scale;
   auto begin = [&] {
     if (open) return;
@@ -592,6 +593,8 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
     bpipe = btex = nullptr;
     buoff = ~0u;
     bsc[0] = bsc[1] = bsc[2] = bsc[3] = ~0u;
+    bvb = -1;
+    bib = false;
   };
   auto end = [&] {
     if (!open) return;
@@ -602,27 +605,29 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   for (const RecOp& op : cur.ops) {
     switch (op.kind) {
       case RecKind::Pass: {
-        const RecPass& p = cur.passes[op.index];
-        if (!p.filled || p.draws.empty() || p.v.empty() || p.i.empty() || p.u.empty()) break;
+        if (op.begin >= op.end) break;
         begin();
-        const Off& o = offs[op.index];
-        pass.SetVertexBuffer(0, ivbuf_, o.v, p.v.size());
-        pass.SetIndexBuffer(iibuf_, wgpu::IndexFormat::Uint32, o.i, p.i.size() * 4);
-        buoff = ~0u;
-        for (const RecDraw& d : p.draws) {
+        if (!bib) {
+          pass.SetIndexBuffer(ibuf_, wgpu::IndexFormat::Uint16, 0, kIndexCapacity);
+          bib = true;
+        }
+        for (std::uint32_t k = op.begin; k < op.end; ++k) {
+          const RecDraw& d = cur.draws[k];
+          const int vb = moved_[k] ? 1 : 0;
+          if (bvb != vb) {
+            if (vb) pass.SetVertexBuffer(0, ivbuf_, 0, ivcap_);
+            else pass.SetVertexBuffer(0, vbuf_, 0, kVertexCapacity);
+            bvb = vb;
+          }
           if (bpipe != d.pipe) {
             pass.SetPipeline(d.pipe->pipe);
             bpipe = d.pipe;
           }
-          const std::uint32_t uo = static_cast<std::uint32_t>(o.u) + d.uoff;
-          if (buoff != uo) {
-            pass.SetBindGroup(0, iuniform_group_, 1, &uo);
-            buoff = uo;
-          }
           const wgpu::BindGroup& g = interp_bind(cur.binds[d.bind]);
-          if (btex != g.Get()) {
-            pass.SetBindGroup(1, g);
+          if (btex != g.Get() || buoff != d.uoff) {  // V6: textures and constants, one group
+            pass.SetBindGroup(0, g, 1, &d.uoff);
             btex = g.Get();
+            buoff = d.uoff;
           }
           if (std::memcmp(bsc, d.scissor, sizeof bsc) != 0) {
             pass.SetScissorRect(d.scissor[0] * s, d.scissor[1] * s, (d.scissor[2] - d.scissor[0]) * s,
@@ -631,14 +636,14 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
           }
           pass.DrawIndexed(d.index_count, 1, d.first_index, static_cast<std::int32_t>(d.base), 0);
         }
-        istats_.replayed += p.draws.size();
+        istats_.replayed += op.end - op.begin;
         break;
       }
       case RecKind::Clear: {
         const RecClear& c = cur.clears[op.index];
         begin();
         pass.SetPipeline(clear_pipes_[c.m]);
-        pass.SetBindGroup(0, clear_groups[op.index]);
+        pass.SetBindGroup(0, clear_group_, 1, &c.uoff);
         pass.SetScissorRect(c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
         pass.Draw(3);
         bpipe = btex = nullptr;  // the next draw binds its own state again
@@ -673,7 +678,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
         if (timer_) rp.timestampWrites = timer_->pass();
         wgpu::RenderPassEncoder cp = enc.BeginRenderPass(&rp);
         cp.SetPipeline(convert_pipe_);
-        cp.SetBindGroup(0, conv_groups[op.index]);
+        cp.SetBindGroup(0, iconvert_group_, 1, &c.uoff);
         cp.Draw(3);
         cp.End();
         subst_[c.live.Get()] = pc.view;  // later draws that sample this copy sample the private one
@@ -708,6 +713,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   }
   wgpu::CommandBuffer cb = enc.Finish();
   q.Submit(1, &cb);
+  if (st) staging_submitted(st, staged_bytes);
   bt.from = prev.serial;
   bt.to = cur.serial;
   bt.frame.serial = cur.serial;
@@ -761,7 +767,6 @@ const Renderer::Frame* Renderer::between(std::uint64_t from, std::uint64_t to) {
   bgd.entryCount = 3;
   bgd.entries = be;
   wgpu::BindGroup bg = gpu_.device().CreateBindGroup(&bgd);
-  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
   wgpu::RenderPassColorAttachment ca{};
   ca.view = between_mixed_.view;
   ca.loadOp = wgpu::LoadOp::Clear;
@@ -770,13 +775,11 @@ const Renderer::Frame* Renderer::between(std::uint64_t from, std::uint64_t to) {
   rp.colorAttachmentCount = 1;
   rp.colorAttachments = &ca;
   if (timer_) rp.timestampWrites = timer_->pass();
-  wgpu::RenderPassEncoder pass = enc.BeginRenderPass(&rp);
+  wgpu::RenderPassEncoder pass = encoder().BeginRenderPass(&rp);  // V6: in the batch (a submit of its own before)
   pass.SetPipeline(mix_pipe_);
   pass.SetBindGroup(0, bg);
   pass.Draw(3);
   pass.End();
-  wgpu::CommandBuffer cb = enc.Finish();
-  gpu_.queue().Submit(1, &cb);
   between_mixed_.serial = b->frame.serial;
   between_mixed_key_ = key;
   return &between_mixed_;

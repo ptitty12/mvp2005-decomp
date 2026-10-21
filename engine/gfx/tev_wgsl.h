@@ -9,8 +9,9 @@
 //   order: @location(0) clip position (vec4f), (1) color0, (2) color1 (vec4f),
 //   (3..10) texture coordinates 0-7 (s, t, q as vec3f); vertex_attrs() says which
 //   are present, vertex_stride() the stride. Absent ones are zero in the shader;
-// - @group(0) @binding(0): DrawUniforms (draw.h) as `U`, with a dynamic offset;
-// - @group(1) @binding(0..7): texture maps 0-7, @binding(8..15): their samplers.
+// - @group(0) @binding(0..7): texture maps 0-7, @binding(8..15): their samplers;
+// - @group(0) @binding(16): DrawUniforms (draw.h) as `U`, with a dynamic offset (V6: in
+//   the textures' group, one bind group per draw; it was group 0 of its own).
 // Entry points: `vs_main`, `fs_main`.
 #pragma once
 

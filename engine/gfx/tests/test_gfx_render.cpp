@@ -245,7 +245,32 @@ TEST_CASE("indexed draws: strips, merged runs and vertex layouts of different st
   CHECK(st.same_state == 2);    // the second red quad and the strip: only CP writes in between
   // 12 vertices of 32 bytes, 8 bytes of padding to a multiple of 28, 4 of 28, 8 to a multiple of 32, 4 of 32.
   CHECK(st.vertex_bytes == 12 * 32 + 8 + 4 * 28 + 8 + 4 * 32);
-  CHECK(st.index_bytes == (6 + 6 + 6 + 6 + 6) * 4);
+  CHECK(st.index_bytes == (6 + 6 + 6 + 6 + 6) * 2);  // V6: 16-bit indices
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("16-bit indices: a run of one state past 65,536 vertices becomes two WebGPU draws (V6)") {
+  Scene sc;
+  Stream s = base();
+  copy_xfb(s, 0x0000FFFF);  // blue
+  // 160 x 120 red quads of 2 x 2 pixels, one in each 4 x 4 cell: 76,800 vertices of one state.
+  for (u32 y = 0; y < 120; ++y)
+    for (u32 x = 0; x < 160; ++x)
+      quad(s, static_cast<float>(x * 4), static_cast<float>(y * 4), static_cast<float>(x * 4 + 2),
+           static_cast<float>(y * 4 + 2), 0xFF0000FF);
+  copy_xfb(s, 0x000000FF, false);
+  s.run(sc.p);
+  const Renderer::Frame* f = sc.r.xfb(0x80000);
+  REQUIRE(f != nullptr);
+  auto img = sc.r.read_frame(*f);
+  CHECK(near(px(img, 640, 1, 1), 255, 0, 0));      // the first quad
+  CHECK(near(px(img, 640, 3, 3), 0, 0, 255));      // a gap
+  CHECK(near(px(img, 640, 401, 409), 255, 0, 0));  // quad 16,420: past the first draw's 65,536 vertices
+  CHECK(near(px(img, 640, 637, 477), 255, 0, 0));  // the last quad
+  CHECK(near(px(img, 640, 639, 479), 0, 0, 255));
+  const Renderer::Stats& st = sc.r.stats();
+  CHECK(st.draws == 160 * 120);
+  CHECK(st.encoded == 2);  // 16,384 quads, then the rest
   CHECK(gpu().errors() == 0);
 }
 

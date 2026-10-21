@@ -1272,6 +1272,10 @@ EMSCRIPTEN_KEEPALIVE void mvp_batch_end() {
 // for comparisons). Call before mvp_gfx_init.
 EMSCRIPTEN_KEEPALIVE void mvp_gpu_timing(int on) { web::g_gpu_timing = on != 0; }
 
+// V6 (development): 0 = the renderer uploads by queue writes instead of staging buffers
+// (staging=0; for comparisons). Call before mvp_gfx_init.
+EMSCRIPTEN_KEEPALIVE void mvp_gpu_staging(int on) { web::g_gpu_staging = on != 0; }
+
 // Q5 (development): extra GPU work at every present, in proportion to the
 // picture's internal size (`gpuLoad=N`: N passes; gfx::Window::burn), to try the
 // picture's Auto setting on a GPU that cannot keep up.

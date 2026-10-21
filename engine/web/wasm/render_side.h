@@ -28,6 +28,9 @@ namespace mvp::web {
 // Q5: time the render passes on the GPU where the device can (gfx/wgpu/gpu_timer.h); false
 // (`gpuTimer=0`, development) leaves them untimed. Set before the renderer is created.
 extern bool g_gpu_timing;
+// V6: the renderer's uploads through staging buffers (gfx/wgpu/renderer.h); false
+// (`staging=0`, development): queue writes. Set before the renderer is created.
+extern bool g_gpu_staging;
 
 // Presentation trace (P1, development): every VI field's frame buffer address,
 // every XFB copy and what each present showed, as JSON records. The tap sits
