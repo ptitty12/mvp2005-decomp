@@ -166,6 +166,12 @@ Render thread busy ms per field (run means; medians 5.15 / 5.20 -> 4.26 / 4.28 a
   conversions themselves, so no per-format loaders were generated.
 - **DrawCall::verts without zeroing on growth** (an allocator that default-initializes): 42.5 /
   43.1 against 43.4 / 43.1 ns a vertex; not worth changing a type V3's code shares.
+- **Four vertices at a time (SoA, wasm SIMD)**, as a standalone microbenchmark of the game's
+  transform (position, projection, viewport, the color pass pair, one generator with a post matrix;
+  bit-identical results): 9.7 -> 8.3 ns a vertex. Gathering the inputs and scattering the outputs
+  costs most of what four lanes save; not worth a rewrite of the transform.
+- **The transform templated on the plan's counts** (generators, passes as constants): 42.4 / 41.8
+  -> 41.6 / 41.1 ns a vertex with the game's lighting, nothing with lights. Dropped.
 - **The parts of the transform, by elimination** (bench, game lighting, ns a vertex, for the
   record): loading 16, per-primitive work 8, position and projection 5, color passes 4.6, two
   texture coordinate generators with post matrices 7, zeroing 2.6 (then removed: 3.3).
@@ -189,7 +195,13 @@ Render thread busy ms per field (run means; medians 5.15 / 5.20 -> 4.26 / 4.28 a
   3,010 fields, 0 differ, at each step; with in-between frames on (`interp=1&fakeHz=120`): 3,009
   fields, 0 differ. The final picture of each run (field 139,000) is byte-identical to the
   baseline's (the digest covers what the renderer is given; the picture covers what it draws).
-- `ctest` (msvc) gfx tests: 11 of 11 (`test_gfx_render` draws through Dawn natively).
+- From power-on through the intro, the title and the front end's menus (an input script:
+  `menus.input`, START/A/B/stick taps at fixed frame polls; unpaced, 3,600 fields): renderer
+  digests of origin/main and this branch, 3,594 common fields, 0 differ; the final picture (the User
+  Profiles screen) byte-identical. (Live `--keys` presses land on different fields from run to run:
+  use a script.)
+- `ctest` (msvc) gfx tests: 11 of 11 (`test_gfx_render` draws through Dawn natively); the emscripten
+  preset's gfx tests (Node): 8 of 8.
 
 ## 6. The GPU
 
@@ -210,6 +222,11 @@ the EFB because the game continues it across copies; the depth format is the exa
 - **Merging same-state primitives into one DrawCall** in the processor: would cut most per-draw
   overhead, but changes what the digest folds and V3's per-primitive identities.
 - **writeBuffer** (0.6 ms a field, 2.6 MB): proportional to the bytes; the layout is the picture's.
+- **The GPU process** (Chrome's, not ours): its main thread spends ~2 ms a field on the dev PC
+  executing the WebGPU command stream (`CommandBufferService:PutChanged`, 975 ms of an 8 s trace):
+  ~270 WebGPU draws, their state changes, 7.5 passes and 2.6 MB of uploads a field. Fewer passes
+  (clears drawn inside the open pass, EFB copies batched) or 16-bit indices would cut it; they live in
+  flush/efb_copy/clear_efb and V3's replay, so they are left for whoever owns those.
 
 ## 7. In-between frames on (4 efficiency cores)
 
