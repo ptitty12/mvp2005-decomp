@@ -159,6 +159,7 @@ struct Renderer::TexEntry {
   std::uint32_t w = 0, h = 0;
   std::uint64_t mem_hash = 0, epoch = 0;
   std::uint64_t pass = 0;  // the render pass that last sampled it
+  std::uint64_t rec = 0;   // V3: the frame record that last sampled it
 };
 
 struct Renderer::CopyEntry {
@@ -169,6 +170,7 @@ struct Renderer::CopyEntry {
   std::uint32_t bytes = 0;
   std::uint64_t mem_hash = 0, epoch = 0;
   std::uint64_t serial = 0;  // bumped by every copy to it
+  std::uint64_t rec = 0;     // V3: the frame record that last redid it
   // P2: the copy as part of a taller texture of the same width (tall_copy()).
   struct Tall {
     wgpu::Texture tex;
@@ -366,7 +368,9 @@ void Renderer::create_efb() {
   efb_color_ = gpu_.device().CreateTexture(&td);
   efb_color_view_ = efb_color_.CreateView();
   td.format = wgpu::TextureFormat::Depth32Float;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+  // V3: CopySrc for the in-between frames' private EFB, which starts as a copy of this one
+  // when a frame does not clear it.
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc;
   td.label = "efb depth";
   efb_depth_ = gpu_.device().CreateTexture(&td);
   efb_depth_view_ = efb_depth_.CreateView();
@@ -433,6 +437,7 @@ void Renderer::emit_pending() {
   }
   pass_.DrawIndexed(pending_.index_count, 1, pending_.first_index, static_cast<std::int32_t>(pending_.base), 0);
   ++stats_.encoded;
+  if (recording_) rec_draw();  // V3
 }
 
 void Renderer::flush() {
@@ -445,6 +450,7 @@ void Renderer::flush() {
   if (!udata_.empty()) gpu_.queue().WriteBuffer(ubuf_, 0, udata_.data(), udata_.size());
   stats_.vertex_bytes += vdata_.size();
   stats_.index_bytes += idata_.size() * 4;
+  if (recording_) rec_pass_end();  // V3: uploaded; the record keeps the bytes
   wgpu::CommandBuffer cb = encoder_.Finish();
   gpu_.queue().Submit(1, &cb);
   encoder_ = nullptr;
@@ -607,6 +613,7 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
     }
     if (ci != copies_.end() && e.w == t.width && e.h == t.height) {
       ++stats_.copy_textures_used;
+      if (recording_ && e.rec != rec_[rec_cur_].id) ++istats_.early_copies;  // V3: sampled before this frame redid it
       return e.view;
     }
     // P2: sampled taller than the copy, at the same width (the game samples a
@@ -640,6 +647,7 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
   if (slot && slot->epoch == epoch_) {
     ++stats_.texture_hits;
     slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+    if (recording_) slot->rec = rec_[rec_cur_].id;
     return slot->view;
   }
   const std::uint8_t* src = guest(t.addr, bytes);  // Q1: memory as the GP sees it
@@ -647,10 +655,13 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
   if (slot && slot->mem_hash == mh) {
     slot->epoch = epoch_;
     slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+    if (recording_) slot->rec = rec_[rec_cur_].id;
     ++stats_.texture_hits;
     return slot->view;
   }
   if (!src) return dummy_view_;
+  // V3: new contents for a texture this frame already sampled: the in-between shows the new ones.
+  if (recording_ && slot && slot->rec == rec_[rec_cur_].id) ++istats_.retextured;
   // The open pass may already sample this texture's old contents: submit it
   // before the upload replaces them.
   if (slot && pass_open_ && slot->pass == pass_serial_) flush();
@@ -687,6 +698,7 @@ wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std:
   slot->mem_hash = mh;
   slot->epoch = epoch_;
   slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+  if (recording_) slot->rec = rec_[rec_cur_].id;
   ++stats_.textures_decoded;
   return slot->view;
 }
@@ -842,7 +854,8 @@ void Renderer::draw(const DrawCall& d) {
   // The same pixel state as the previous draw, in the same pass and texture
   // epoch: its pipeline, textures and constants (nothing they come from changed).
   const bool same = d.state != 0 && d.state == last_.state && c.topology == last_.topology && pass_open_ &&
-                    pass_serial_ == last_.pass && epoch_ == last_.epoch;
+                    pass_serial_ == last_.pass && epoch_ == last_.epoch &&
+                    (!recording_ || last_.bind_rec == rec_[rec_cur_].id);  // V3: its bind group is in the record
   if (same) {
     ++stats_.same_state;
   } else {
@@ -896,12 +909,26 @@ void Renderer::draw(const DrawCall& d) {
       }
     }
     last_.textures = be.group;
+    if (recording_) {  // V3
+      last_.bind = rec_bind(be);
+      last_.bind_rec = rec_[rec_cur_].id;
+    }
   }
   if (last_.indirect) ++stats_.indirect_draws;
   if (last_.fog) ++stats_.fog_draws;
   const Pipeline& pl = *last_.pipe;
 
   begin_pass();
+  if (recording_ && rec_[rec_cur_].pass_serial != pass_serial_) {  // V3: a new pass in the frame record
+    Record& r = rec_[rec_cur_];
+    if (r.npasses == r.passes.size()) r.passes.emplace_back();
+    RecPass& rp = r.passes[r.npasses];
+    rp.draws.clear();
+    rp.filled = false;
+    r.ops.push_back({RecKind::Pass, static_cast<std::uint32_t>(r.npasses)});
+    ++r.npasses;
+    r.pass_serial = pass_serial_;
+  }
   last_.state = d.state;
   last_.topology = c.topology;
   last_.pass = pass_serial_;
@@ -941,6 +968,8 @@ void Renderer::draw(const DrawCall& d) {
     pending_.stride = stride;
     std::memcpy(pending_.scissor, d.scissor, sizeof pending_.scissor);
     pending_.u = d.u;
+    pending_.pipe = &pl;  // V3: for the frame record
+    pending_.bind = last_.bind;
   }
   pending_.state = d.state;
   // Vertices, packed to the pipeline's layout.
@@ -984,6 +1013,7 @@ void Renderer::draw(const DrawCall& d) {
         out += 12;
       }
   }
+  if (recording_) rec_range(d, voff, stride);  // V3: where this geometry's vertices went
   // Indices, relative to the recorded draw's first vertex.
   const std::uint32_t first = pending_.vertices;
   const std::size_t ioff = idata_.size();
@@ -1021,6 +1051,10 @@ void Renderer::clear_efb(const EfbCopy& c) {
   if (x1 <= x0 || y1 <= y0) return;
   pass_.SetScissorRect(x0 * scale_, y0 * scale_, (x1 - x0) * scale_, (y1 - y0) * scale_);
   pass_.Draw(3);
+  if (recording_) {  // V3
+    const std::uint32_t rect[4] = {x0 * scale_, y0 * scale_, (x1 - x0) * scale_, (y1 - y0) * scale_};
+    rec_clear(m, data, rect);
+  }
   // The clear must land before the next clear rewrites its buffer.
   flush();
 }
@@ -1090,6 +1124,10 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
   pass.End();
   wgpu::CommandBuffer cb = enc.Finish();
   gpu_.queue().Submit(1, &cb);
+  if (recording_) {  // V3
+    e->rec = rec_[rec_cur_].id;
+    rec_copy(e->view, e->pw, e->ph, params);
+  }
 }
 
 void Renderer::efb_copy(const EfbCopy& c) {
@@ -1125,6 +1163,10 @@ void Renderer::efb_copy(const EfbCopy& c) {
       enc.CopyTextureToTexture(&src, &dst, &ext);
       wgpu::CommandBuffer cb = enc.Finish();
       gpu_.queue().Submit(1, &cb);
+      // V3: the frame ends here: its in-between picture, then the next frame's record
+      // (which starts with this copy's clear).
+      if (recording_) rec_end(x0, y0, w, h, f.serial);
+      if (interp_on_) rec_begin(c);
     } else {
       EfbCopy cc = c;
       cc.src_x = x0;
@@ -1140,6 +1182,7 @@ void Renderer::efb_copy(const EfbCopy& c) {
   // copy's clear values.
   if (want_scale_ != scale_ && c.to_xfb && c.clear) {
     flush();
+    if (recording_) rec_drop();  // V3: a new scale: the next frames start over
     scale_ = want_scale_;
     create_efb();
     EfbCopy all = c;
@@ -1164,6 +1207,7 @@ std::vector<std::uint8_t> Renderer::read_frame(const Frame& f) {
 }
 
 void Renderer::scan_field(std::uint32_t addr) {
+  ++fields_;  // V3: frames one field apart get an in-between
   const Frame* f = xfb(addr);
   if (!f) f = latest_;
   if (!f) return;
@@ -1213,6 +1257,24 @@ void Renderer::scan_field(std::uint32_t addr) {
   scan_[slot].addr = f->addr;
 }
 
+void Renderer::ensure_mix_pipe() {
+  if (mix_pipe_) return;
+  wgpu::ShaderModule sm = gpu_.shader(kScanMixWgsl, "scanout mix");
+  wgpu::ColorTargetState ct{};
+  ct.format = wgpu::TextureFormat::RGBA8Unorm;
+  wgpu::FragmentState fs{};
+  fs.module = sm;
+  fs.entryPoint = "fs";
+  fs.targetCount = 1;
+  fs.targets = &ct;
+  wgpu::RenderPipelineDescriptor pd{};
+  pd.label = "scanout mix";
+  pd.vertex.module = sm;
+  pd.vertex.entryPoint = "vs";
+  pd.fragment = &fs;
+  mix_pipe_ = gpu_.device().CreateRenderPipeline(&pd);
+}
+
 const Renderer::Frame* Renderer::scanout() {
   if (scan_slot_[0] < 0) return nullptr;
   const Frame& a = scan_[scan_slot_[0]];
@@ -1223,22 +1285,7 @@ const Renderer::Frame* Renderer::scanout() {
   const std::uint64_t key =
       scan_serial_[0] * 0x9E3779B97F4A7C15ull ^ scan_serial_[1] * 0xC2B2AE3D27D4EB4Full ^ scan_serial_[2];
   if (key == mixed_key_) return &mixed_;
-  if (!mix_pipe_) {
-    wgpu::ShaderModule sm = gpu_.shader(kScanMixWgsl, "scanout mix");
-    wgpu::ColorTargetState ct{};
-    ct.format = wgpu::TextureFormat::RGBA8Unorm;
-    wgpu::FragmentState fs{};
-    fs.module = sm;
-    fs.entryPoint = "fs";
-    fs.targetCount = 1;
-    fs.targets = &ct;
-    wgpu::RenderPipelineDescriptor pd{};
-    pd.label = "scanout mix";
-    pd.vertex.module = sm;
-    pd.vertex.entryPoint = "vs";
-    pd.fragment = &fs;
-    mix_pipe_ = gpu_.device().CreateRenderPipeline(&pd);
-  }
+  ensure_mix_pipe();
   if (!mixed_.tex || mixed_.width != a.width || mixed_.height != a.height) {
     wgpu::TextureDescriptor td{};
     td.size = {a.width, a.height, 1};
