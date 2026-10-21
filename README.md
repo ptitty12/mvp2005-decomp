@@ -35,8 +35,9 @@ in-game memory card.
 
 - **Engine** (`engine/`):
   - The whole DOL translates in the browser in about half a second, then is cached in the browser.
-  - The emulation thread needs about 7.5 ms per 16.7 ms field on the dev PC. A machine 1.3 times slower (the owner's ThinkPad stand-in) keeps full speed; one twice as slow runs at about 0.97x.
-  - The renderer runs on its own thread. The picture can be drawn at 1x, 2x or 3x the console's resolution, and Auto picks one for the GPU.
+  - In a real game with the ABS challenge on, the emulation thread needs about 7.5 ms per 16.7 ms field on the dev PC. A simulated machine twice as slow, or Chrome held to four efficiency cores, still runs at full speed with 60 new pictures a second.
+  - The renderer runs on its own thread (about 4.3 ms a field on the dev PC). The picture can be drawn at 1x, 2x or 3x the console's resolution, and Auto picks one for the GPU.
+  - **120 fps** on displays of 100 Hz or more: the Motion setting (Auto by default) draws an in-between picture between each two game frames, with every moving object halfway. The game itself still runs at 60 Hz, so online play is unaffected.
 - **Online play:** two browsers in lockstep over WebRTC.
   - The owner's VPS runs the lobby, signaling and a TURN relay, deployed with Dokploy.
   - Input delay is chosen from the measured link.
@@ -57,7 +58,7 @@ in-game memory card.
   - An admin link gives the owner the disc page, save states and a memory card kept on the server.
 
 What's still rough is tracked in `PROGRESS.md` and the logs in `docs/engine/`. The
-main gap is weaker machines: below about 0.75x of the dev PC the game slows down.
+main gap is the weakest machines: one about four times slower than the dev PC still slows the game down.
 
 ## How it works
 
@@ -116,7 +117,7 @@ written down.
 | Oct 15-17 | **Making it feel right.** Q1-Q7 and P1/P2: menu flicker, sound that stretches instead of cutting out, controllers with a guided setup, the disc downloaded once instead of streamed, the renderer on its own thread, multi-second freezes traced to an idle-skip bug (CLK2), emulation 30% faster, pacing between unequal machines online, a frozen block after a scale change |
 | Oct 16 | **F1:** deterministic across players matters, bit-exactness to the console doesn't. That unlocked a faster floating-point model |
 | Oct 17-20 | **Mods and polish.** The hook API and the ABS challenge, the MLB 2026 roster pipeline, packs on the server, save states, the in-game memory card, an open site with player and admin links, MVP 2005's menu look, thin-line fixes at 2x/3x |
-| Oct 21 | Frame pacing and high-refresh work (this README's update; see `PROGRESS.md`) |
+| Oct 21 | **Speed and 120 fps.** The ABS challenge had been forcing the slow single-threaded engine; it now runs threaded like everything else (four efficiency cores: 0.79x and 29 pictures a second, now full speed and 60). The render thread got about 20% cheaper. In-between frames give 120 fps on high-refresh displays. The page counts exactly which pictures reach the screen (`docs/engine/V1_LOG.md`, `V3_LOG.md`, `V5_LOG.md`) |
 
 The old phase plan is kept as history in [`docs/ROADMAP.md`](docs/ROADMAP.md) §6.
 
