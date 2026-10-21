@@ -99,7 +99,14 @@ inline u64 single_to_double_inline(u32 s) {
   return single_to_double(s);
 }
 u32 double_to_single(u64 d);  // stfs (no rounding: truncates; denormalizes small values)
-u32 double_to_single_ftz(u64 d);  // psq_st type 0: below the single normal range -> signed zero
+// psq_st type 0: below the single normal range -> signed zero (V4: inline, the native
+// skinning code's stores call it for every word).
+inline u32 double_to_single_ftz(u64 d) {
+  const u32 exp = static_cast<u32>((d >> 52) & 0x7FF);
+  if (exp > 896 || (d & ~kSign) == 0)
+    return static_cast<u32>((d >> 32) & 0xC0000000u) | static_cast<u32>((d >> 29) & 0x3FFFFFFF);
+  return static_cast<u32>((d >> 32) & 0x80000000u);
+}
 
 // The Gekko's rounding of a multiplier operand to a 25-bit significand.
 u64 force25(u64 x);

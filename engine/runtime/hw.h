@@ -142,15 +142,24 @@ class Hardware : public ppc::Io {
   // write-gather pipe, at an address write() takes for it, by host code that runs
   // a game function natively (runtime/hle_game.h) for the instruction at `pc`,
   // with c.ticks == `ticks` there: what write(addr, value, size) does, inline
-  // while nothing is logged (`fast`) and the value does not complete a burst.
+  // while nothing is logged (`fast`). V4: a store that completes a burst (or
+  // reaches into the next) takes write()'s pipe path from there too (count, end
+  // the poll detector's run, gather: no log entry once `fast` is set, and `fast`
+  // stays set), with c.pc and c.ticks set first, as write() would have them.
   void wgp_store(u32 addr, u32 value, int size, u32 pc, std::uint64_t ticks) {
     WgpState& w = *wgp_;
-    if (w.fast && w.n + static_cast<u32>(size) < 32) {
+    if (w.fast) {
       ++writes_[addr - kRegBase];
       w.last_read = 0;
-      u8* g = w.buf + w.n;
-      for (int k = 0; k < size; ++k) g[k] = static_cast<u8>(value >> (8 * (size - 1 - k)));
-      w.n += static_cast<u32>(size);
+      if (w.n + static_cast<u32>(size) < 32) {
+        u8* g = w.buf + w.n;
+        for (int k = 0; k < size; ++k) g[k] = static_cast<u8>(value >> (8 * (size - 1 - k)));
+        w.n += static_cast<u32>(size);
+        return;
+      }
+      cpu_->pc = pc;
+      cpu_->ticks = ticks;
+      wgp_write(value, size);
       return;
     }
     cpu_->pc = pc;
