@@ -740,6 +740,9 @@ function fallbackCopy(text: string, done: () => void): void {
 // because of this computer (solo: slower than the game; online: this side sets a pace below full speed).
 // Dismissed, it stays away for this visit.
 const HINT_AFTER_MS = 15000, HINT_SPEED = 0.93, HINT_HOLD_MS = 5000;
+// V1: a browser that draws the page fewer times a second than the game makes pictures (Chrome's
+// Energy Saver caps pages at 30 on a laptop on battery) looks choppy at full speed: say so.
+const HINT_LOW_HZ = 45;
 const hintBox = $<HTMLElement>('slow-hint');
 let hintDismissed = false, hintShownSince = 0, hintSlowSince = -1;
 $<HTMLButtonElement>('slow-hint-close').addEventListener('click', () => {
@@ -758,16 +761,21 @@ function updateSlowHint(local: StatsSummary): void {
   const speed = local.speed;
   const ours = online ? !(p!.peerProp !== null && p!.peerProp < p!.prop) : local.cap !== null && local.cap < 1;
   const slow = speed !== null && speed < HINT_SPEED && ours;
-  if (!slow) {
+  const lowRefresh = !slow && refreshHz > 5 && refreshHz < HINT_LOW_HZ;
+  if (!slow && !lowRefresh) {
     hintSlowSince = -1;
     if (!hintBox.hidden && now - hintShownSince > 10000) hintBox.hidden = true;
     return;
   }
   if (hintSlowSince < 0) hintSlowSince = now;
   if (now - hintSlowSince < HINT_HOLD_MS && hintBox.hidden) return;  // a few seconds, not a heavy moment
-  const text = `This computer is running the game at ${speed!.toFixed(2)}× speed` +
-               (online ? ', so the online game runs at that pace for both players' : '') +
-               '. On a laptop, plugging in and choosing the Best performance power mode helps.';
+  const text = lowRefresh
+    ? `This browser is showing only ${Math.round(refreshHz)} pictures a second, so the game looks choppy ` +
+      "even though it runs at full speed. On a laptop on battery, Chrome's Energy Saver does this: plug in, " +
+      'or turn Energy Saver off (Chrome settings, Performance).'
+    : `This computer is running the game at ${speed!.toFixed(2)}× speed` +
+      (online ? ', so the online game runs at that pace for both players' : '') +
+      '. On a laptop, plugging in and choosing the Best performance power mode helps.';
   $<HTMLElement>('slow-hint-text').textContent = text;
   if (hintBox.hidden) hintShownSince = now;
   hintBox.hidden = false;
@@ -878,8 +886,14 @@ window.addEventListener('keydown', (e) => {
 const vsync = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated === true &&
               typeof SharedArrayBuffer !== 'undefined' ? new Int32Array(new SharedArrayBuffer(4)) : null;
 
+// V1: the display's refresh rate as this page sees it (its animation frames), smoothed.
+let lastTickAt = 0, refreshHz = 0;
+
 function tick(now: number): void {
   presenter?.tick(now);  // V1: first, so the picture goes with this refresh
+  const dt = now - lastTickAt;
+  if (lastTickAt > 0 && dt > 2 && dt < 100 && !document.hidden) refreshHz += 0.05 * (1000 / dt - refreshHz);
+  lastTickAt = now;
   input.poll();
   if (!startBox.hidden && !input.capture && input.manager.confirmPressed()) playBtn.click();  // "press A to play" with a controller
   if (vsync) {
