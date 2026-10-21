@@ -304,6 +304,8 @@ struct Engine {
   web::RenderSide rs;
   bool threaded = false;
   bool every_field = false;  // V1: every field of a batch is presented (the page queues pictures)
+  bool every_field_asked = false;  // ... because the page asked (mvp_present_every_field)
+  bool interp = false;       // V3: in-between frames (mvp_interp): every field presented too
   std::uint32_t xfb = 0;
 
   // Host time spent inside rt::run, for the frame-time numbers.
@@ -1282,7 +1284,26 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_trace_take() {
 
 // V1: present every field of a batch, not only its last (threaded engine; the page shows
 // the pictures from a queue on its own refreshes, presenter.ts).
-EMSCRIPTEN_KEEPALIVE void mvp_present_every_field(int on) { g.every_field = on != 0; }
+EMSCRIPTEN_KEEPALIVE void mvp_present_every_field(int on) {
+  g.every_field_asked = on != 0;
+  g.every_field = g.every_field_asked || g.interp;
+}
+
+// V3: in-between frames (the page's Motion setting; gfx/wgpu/renderer.h): a picture
+// between each two frames of a 60 fps stretch, for displays at 120 Hz. Presentation
+// only: guest state is the same either way. While on, the threaded engine presents
+// every field and the page shows the pictures from its queue (presenter.ts).
+EMSCRIPTEN_KEEPALIVE void mvp_interp(int on) {
+  g.interp = on != 0;
+#ifdef MVP_WEB_THREADS
+  if (g.threaded) {
+    if (web::render_thread_running()) web::render_interp(g.interp);
+    g.every_field = g.every_field_asked || g.interp;
+    return;
+  }
+#endif
+  g.rs.set_interp(g.interp);
+}
 
 // Q1: the renderer's internal resolution, 1-3 times the console's (the page's
 // Picture setting); it applies from the next frame the game starts.

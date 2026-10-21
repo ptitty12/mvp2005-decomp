@@ -87,6 +87,9 @@ void render_flush();
 void render_resize(int width, int height);
 void render_scale(int scale);  // Q1: the internal resolution (render_side.h)
 void render_gpu_load(int passes);  // Q5 (development): extra GPU work per present (render_side.h)
+// V3: in-between frames (render_side.h). While on, every present is shown at once and
+// a new frame with an in-between posts two pictures; the page queues them (presenter.ts).
+void render_interp(bool on);
 void render_trace(bool on);
 void render_digest(bool on, std::uint64_t detail_from, std::uint64_t detail_to);
 // Q1: what the GP sees of memory (gfx/gp_memory.h). The game wrote the data

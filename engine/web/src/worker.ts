@@ -555,6 +555,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
   }
   M._mvp_render_scale(options.scale ?? 1);  // Q1: the Picture setting
   if (mt && options.presentQueue) M._mvp_present_every_field(1);  // V1: each field's picture goes to the page's queue
+  if (options.interp) M._mvp_interp(1);  // V3: in-between frames (the Motion setting)
   if (options.gpuLoad) M._mvp_gpu_load(options.gpuLoad);  // Q5 (development): a GPU that cannot keep up
   if (options.tracePresent) M._mvp_trace(1);
   if (options.digest) M._mvp_digest(1, options.digestDetail?.[0] ?? 1, options.digestDetail?.[1] ?? 0);
@@ -897,6 +898,10 @@ scope.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'scale':
       if (booted) M?._mvp_render_scale(msg.scale);
       if (opts) opts.scale = msg.scale;
+      break;
+    case 'interp':  // V3
+      if (booted) M?._mvp_interp(msg.on ? 1 : 0);
+      if (opts) opts.interp = msg.on;
       break;
     case 'net-open':
       channelOpen(msg.delay);

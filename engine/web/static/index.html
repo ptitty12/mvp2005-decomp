@@ -45,6 +45,12 @@
             <option value="2">2x</option>
             <option value="3">3x</option>
           </select></label>
+        <label class="picture" title="Motion: 120 fps draws a picture between each two frames of the game, every object halfway, for displays that refresh at 120 Hz or more. Auto turns it on where the display is that fast and the computer has room to spare.">Motion
+          <select id="motion">
+            <option value="auto">Auto</option>
+            <option value="120">120 fps (in-between frames)</option>
+            <option value="60">60 fps</option>
+          </select></label>
         <button type="button" id="pad-chip" class="chip" data-state="none" title="Controllers and keys: open the Controls panel">No controller (keyboard)</button>
       </div>
       <p id="hint" class="hint" hidden></p>
