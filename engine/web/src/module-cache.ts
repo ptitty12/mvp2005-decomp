@@ -88,7 +88,11 @@ export async function readCached(key: string, alloc: (size: number) => Uint8Arra
 }
 
 // V4: the file is the parts one after the other (the module's header and its bytes,
-// without joining them into one more copy).
+// without joining them into one more copy), written 4 MiB at a time with a task
+// boundary between pieces: the synchronous writes run on the engine's thread, and
+// the game keeps running between them instead of stopping for the whole module.
+const kWritePiece = 4 << 20;
+const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 async function writeFile(d: FileSystemDirectoryHandle, name: string, parts: Uint8Array[]): Promise<void> {
   const fh = await d.getFileHandle(name, { create: true });
   const sync = (fh as unknown as { createSyncAccessHandle?: () => Promise<SyncHandle> }).createSyncAccessHandle;
@@ -100,9 +104,10 @@ async function writeFile(d: FileSystemDirectoryHandle, name: string, parts: Uint
       for (const bytes of parts) {
         let k = 0;
         while (k < bytes.length) {
-          const wrote = h.write(bytes.subarray(k), { at });
+          const wrote = h.write(bytes.subarray(k, Math.min(bytes.length, k + kWritePiece)), { at });
           k += wrote;
           at += wrote;
+          if (k < bytes.length) await nextTask();
         }
       }
       h.flush();
