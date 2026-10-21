@@ -117,9 +117,14 @@ constexpr u32 kRingBytes = 16u << 20;
 // Tuning (mvp_render_tune): records become visible in batches of kPublishBytes;
 // at a fence the emulation polls kFenceSpinUs before it sleeps; while a batch
 // runs the render thread polls kSpinMs for records before it sleeps.
+// V5: no record poll (was 1 ms): the poll was 15% of a core of the render thread's
+// wall time (`emscripten_get_now` mostly), the browser's CPU 1.24 / 1.30 -> 1.02 /
+// 1.02 cores on the dev PC and 2.08 / 2.07 -> 1.97 / 1.98 on 4 efficiency cores at
+// 120 fps, with the same speed, emulation time and pictures (also on 2 cores).
+// `rtTune=-1,1` brings it back.
 u32 kPublishBytes = 4u << 10;
 double kFenceSpinUs = 300;
-double kSpinMs = 1.0;
+double kSpinMs = 0.0;
 // The guest's GPU sync points (draw done, tokens, ...) as fences too. Off: the
 // writes to memory the render thread still reads wait instead (GpReads), which
 // covers every case the fences cover.
