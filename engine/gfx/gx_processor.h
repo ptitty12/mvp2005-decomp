@@ -55,6 +55,7 @@ struct VertexFormat {
   Attr pos, nrm, color[2], tex[8];
   bool nbt = false, nbt3 = false;  // normal, binormal, tangent; with three indices
   u8 default_pnmtx = 0, default_texmtx[8] = {};
+  u32 matidx_a = 0, matidx_b = 0;  // V5: the CP matrix index registers the defaults come from
   // V5: the same as a loader program (the fast path, GxProcessor::load_vertices):
   // one step per data read, in the vertex's byte order, each with its decoder.
   struct Step {

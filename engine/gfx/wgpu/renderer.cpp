@@ -12,6 +12,15 @@
 #include "gfx/texture_decode.h"
 #include "gfx/wgpu/gpu.h"
 
+// V5: profiling builds (MVP_WEB_NAMES, linked at -O1 so that Binaryen does not
+// inline them back) keep these functions out of line, so a profile attributes
+// the GX path's time to its parts; otherwise nothing.
+#if defined(MVP_WEB_NAMES) && defined(__clang__)
+#define MVP_PROF_NOINLINE __attribute__((noinline))
+#else
+#define MVP_PROF_NOINLINE
+#endif
+
 namespace mvp::gfx {
 
 namespace {
@@ -29,17 +38,57 @@ std::uint64_t mix64(std::uint64_t h) {
   return h ^ (h >> 33);
 }
 
+// V5: XXH64 (Yann Collet's xxHash, 64-bit, BSD-2), for the caches' keys and
+// change checks: palettes, texture memory once per cache epoch (1.4 MB a field
+// in play), pipeline configurations. 2.5 times the speed of the multiply-mix
+// loop before it in the browser (20 against 8 GB/s); the values only ever meet
+// values of the same function.
+inline std::uint64_t rotl64(std::uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
+inline std::uint64_t read64(const std::uint8_t* p) {
+  std::uint64_t w;
+  std::memcpy(&w, p, 8);
+  return w;
+}
+constexpr std::uint64_t kP1 = 0x9E3779B185EBCA87ull, kP2 = 0xC2B2AE3D27D4EB4Full, kP3 = 0x165667B19E3779F9ull,
+                        kP4 = 0x85EBCA77C2B2AE63ull, kP5 = 0x27D4EB2F165667C5ull;
+inline std::uint64_t xxh_round(std::uint64_t acc, std::uint64_t in) { return rotl64(acc + in * kP2, 31) * kP1; }
+inline std::uint64_t xxh_merge(std::uint64_t acc, std::uint64_t v) { return (acc ^ xxh_round(0, v)) * kP1 + kP4; }
+
 std::uint64_t hash_bytes(const std::uint8_t* p, std::size_t n, std::uint64_t seed = 0x9E3779B97F4A7C15ull) {
-  std::uint64_t h = seed ^ (n * 0x100000001B3ull);
-  std::size_t i = 0;
-  for (; i + 8 <= n; i += 8) {
-    std::uint64_t w;
-    std::memcpy(&w, p + i, 8);
-    h = (h ^ mix64(w)) * 0x9E3779B97F4A7C15ull;
+  const std::uint8_t* const end = p + n;
+  std::uint64_t h;
+  if (n >= 32) {
+    std::uint64_t v1 = seed + kP1 + kP2, v2 = seed + kP2, v3 = seed, v4 = seed - kP1;
+    const std::uint8_t* const limit = end - 32;
+    do {
+      v1 = xxh_round(v1, read64(p));
+      v2 = xxh_round(v2, read64(p + 8));
+      v3 = xxh_round(v3, read64(p + 16));
+      v4 = xxh_round(v4, read64(p + 24));
+      p += 32;
+    } while (p <= limit);
+    h = rotl64(v1, 1) + rotl64(v2, 7) + rotl64(v3, 12) + rotl64(v4, 18);
+    h = xxh_merge(h, v1);
+    h = xxh_merge(h, v2);
+    h = xxh_merge(h, v3);
+    h = xxh_merge(h, v4);
+  } else {
+    h = seed + kP5;
   }
-  std::uint64_t tail = 0;
-  for (std::size_t k = 0; i + k < n; ++k) tail |= std::uint64_t(p[i + k]) << (8 * k);
-  return mix64(h ^ tail);
+  h += static_cast<std::uint64_t>(n);
+  for (; p + 8 <= end; p += 8) h = rotl64(h ^ xxh_round(0, read64(p)), 27) * kP1 + kP4;
+  if (p + 4 <= end) {
+    std::uint32_t w;
+    std::memcpy(&w, p, 4);
+    h = rotl64(h ^ (static_cast<std::uint64_t>(w) * kP1), 23) * kP2 + kP3;
+    p += 4;
+  }
+  for (; p < end; ++p) h = rotl64(h ^ (static_cast<std::uint64_t>(*p) * kP5), 11) * kP1;
+  h ^= h >> 33;
+  h *= kP2;
+  h ^= h >> 29;
+  h *= kP3;
+  return h ^ (h >> 32);
 }
 
 wgpu::BlendFactor blend_factor(u8 f, bool is_dst, bool alpha_channel, bool efb_has_alpha) {
@@ -77,6 +126,51 @@ wgpu::AddressMode address(u8 w) {
 }
 
 bool efb_has_alpha(u8 pixel_format) { return pixel_format == 1; }  // RGBA6_Z24
+
+// Vertices packed to a pipeline's layout (tev_wgsl.h: the position, then the
+// attributes `attrs` names). `snap` (Q8, above 1x): a 2D vertex (w exactly 1)
+// goes to a whole console pixel (Renderer::draw says why). V5: the common
+// layouts as constants (the attribute tests folded away).
+template <std::uint32_t kAttrs>
+inline void pack_layout(const OutVertex* v, std::size_t n, std::uint32_t attrs_in, bool snap, std::uint8_t* out) {
+  const std::uint32_t attrs = kAttrs == ~0u ? attrs_in : kAttrs;
+  constexpr float kHalfW = kEfbWidth / 2.0f, kHalfH = kEfbHeight / 2.0f;
+  for (const OutVertex* e = v + n; v != e; ++v) {
+    std::memcpy(out, v->pos, 16);
+    if (snap && v->pos[3] == 1.0f) {
+      const float xy[2] = {std::ceil((v->pos[0] + 1.0f) * kHalfW - 0.5f) / kHalfW - 1.0f,
+                           1.0f - std::ceil((1.0f - v->pos[1]) * kHalfH - 0.5f) / kHalfH};
+      std::memcpy(out, xy, 8);
+    }
+    out += 16;
+    if (attrs & 1u) {
+      std::memcpy(out, v->color[0], 16);
+      out += 16;
+    }
+    if (attrs & 2u) {
+      std::memcpy(out, v->color[1], 16);
+      out += 16;
+    }
+    for (int k = 0; k < 8; ++k)
+      if (attrs & (4u << k)) {
+        std::memcpy(out, v->tex[k], 12);
+        out += 12;
+      }
+  }
+}
+
+MVP_PROF_NOINLINE void pack_vertices(const OutVertex* v, std::size_t n, std::uint32_t attrs, bool snap, std::uint8_t* out) {
+  switch (attrs) {
+    case 0: return pack_layout<0>(v, n, attrs, snap, out);
+    case 1: return pack_layout<1>(v, n, attrs, snap, out);
+    case 4: return pack_layout<4>(v, n, attrs, snap, out);
+    case 1 | 4: return pack_layout<1 | 4>(v, n, attrs, snap, out);
+    case 1 | 4 | 8: return pack_layout<1 | 4 | 8>(v, n, attrs, snap, out);
+    case 1 | 4 | 8 | 16: return pack_layout<1 | 4 | 8 | 16>(v, n, attrs, snap, out);
+    case 4 | 8: return pack_layout<4 | 8>(v, n, attrs, snap, out);
+    default: return pack_layout<~0u>(v, n, attrs, snap, out);
+  }
+}
 
 const char* kClearWgsl = R"(
 struct C { color: vec4f, depth: vec4f };
@@ -457,7 +551,7 @@ void Renderer::flush() {
   pass_open_ = false;
 }
 
-const Renderer::Pipeline& Renderer::pipeline(const PipelineConfig& c) {
+MVP_PROF_NOINLINE const Renderer::Pipeline& Renderer::pipeline(const PipelineConfig& c) {
   auto it = pipelines_.find(c);
   if (it != pipelines_.end()) return it->second;
   std::string wgsl = generate_wgsl(c);
@@ -571,7 +665,7 @@ std::uint64_t Renderer::hash_memory(std::uint32_t addr, std::uint32_t size) {
   return p ? hash_bytes(p, size) : 0;
 }
 
-wgpu::Sampler Renderer::sampler(const TextureDesc& t) {
+MVP_PROF_NOINLINE wgpu::Sampler Renderer::sampler(const TextureDesc& t) {
   const std::uint32_t mip = bits(t.min_filter, 0, 2);
   const std::uint32_t key = t.wrap_s | t.wrap_t << 2 | t.mag_linear << 4 | bits(t.min_filter, 2, 1) << 5 |
                             (mip == 2 ? 1u : 0u) << 6 | (mip ? 1u : 0u) << 7 |
@@ -592,7 +686,7 @@ wgpu::Sampler Renderer::sampler(const TextureDesc& t) {
   return s;
 }
 
-wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std::uint32_t* h) {
+MVP_PROF_NOINLINE wgpu::TextureView Renderer::texture(const TextureDesc& t, std::uint32_t* w, std::uint32_t* h) {
   *w = t.width;
   *h = t.height;
   if (t.tmem) return tmem_texture(t);
@@ -985,34 +1079,9 @@ void Renderer::draw(const DrawCall& d) {
   // for a top or left edge, as the rasterizer's rule has it), so such a 2D edge
   // covers the console pixels it covers at 1x, whole, at every scale. 1x is
   // drawn as is.
-  const bool snap = scale_ > 1;
-  constexpr float kHalfW = kEfbWidth / 2.0f, kHalfH = kEfbHeight / 2.0f;
   const std::size_t voff = vdata_.size();
   vdata_.resize(voff + d.verts.size() * stride);
-  std::uint8_t* out = vdata_.data() + voff;
-  const std::uint32_t attrs = pl.attrs;
-  for (const OutVertex& v : d.verts) {
-    std::memcpy(out, v.pos, 16);
-    if (snap && v.pos[3] == 1.0f) {
-      const float xy[2] = {std::ceil((v.pos[0] + 1.0f) * kHalfW - 0.5f) / kHalfW - 1.0f,
-                           1.0f - std::ceil((1.0f - v.pos[1]) * kHalfH - 0.5f) / kHalfH};
-      std::memcpy(out, xy, 8);
-    }
-    out += 16;
-    if (attrs & 1u) {
-      std::memcpy(out, v.color[0], 16);
-      out += 16;
-    }
-    if (attrs & 2u) {
-      std::memcpy(out, v.color[1], 16);
-      out += 16;
-    }
-    for (int k = 0; k < 8; ++k)
-      if (attrs & (4u << k)) {
-        std::memcpy(out, v.tex[k], 12);
-        out += 12;
-      }
-  }
+  pack_vertices(d.verts.data(), d.verts.size(), pl.attrs, scale_ > 1, vdata_.data() + voff);
   if (recording_) rec_range(d, voff, stride);  // V3: where this geometry's vertices went
   // Indices, relative to the recorded draw's first vertex.
   const std::uint32_t first = pending_.vertices;

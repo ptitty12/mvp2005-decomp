@@ -10,6 +10,15 @@
 #include <cstddef>
 #include <cstring>
 
+// V5: profiling builds (MVP_WEB_NAMES, linked at -O1 so that Binaryen does not
+// inline them back) keep these functions out of line, so a profile attributes
+// the GX path's time to its parts; otherwise nothing.
+#if defined(MVP_WEB_NAMES) && defined(__clang__)
+#define MVP_PROF_NOINLINE __attribute__((noinline))
+#else
+#define MVP_PROF_NOINLINE
+#endif
+
 namespace mvp::gfx {
 
 namespace {
@@ -423,6 +432,8 @@ u32 GxProcessor::vertex_size(int fmt) const {
 VertexFormat GxProcessor::vertex_format(int fmt) const {
   const u32 a = vat_a_[fmt], b = vat_b_[fmt], c = vat_c_[fmt];
   VertexFormat f;
+  f.matidx_a = matidx_a_;
+  f.matidx_b = matidx_b_;
   f.default_pnmtx = static_cast<u8>(bits(matidx_a_, 0, 6));
   for (int k = 0; k < 8; ++k) {
     u32 src = k < 4 ? matidx_a_ : matidx_b_;
@@ -896,7 +907,7 @@ inline float light_factor(const XformSetup::Light& L, u32 diffuse, u32 attn_fn, 
 // V5: transform() with the per-primitive plan of setup_transform: the same
 // arithmetic in the same order (test_vertex_exact compares every bit), without
 // re-deciding per vertex what each pass and generator does.
-void GxProcessor::transform_fast(const InVertex& v, XformSetup& x, OutVertex& o) const {
+MVP_PROF_NOINLINE void GxProcessor::transform_fast(const InVertex& v, XformSetup& x, OutVertex& o) const {
   auto mtx34 = [&](u32 index) -> const float* {
     index &= 0x3F;
     if (!(x.have_pos >> index & 1)) {
@@ -1037,7 +1048,7 @@ void GxProcessor::transform_fast(const InVertex& v, XformSetup& x, OutVertex& o)
 // loader program. The input vertex starts zeroed once: every vertex writes the
 // same fields (or zeroes them when their data is outside memory, where
 // load_vertex leaves its fresh vertex's zeros).
-void GxProcessor::load_fast(const VertexFormat& f, const u8* p, InVertex& v) const {
+MVP_PROF_NOINLINE void GxProcessor::load_fast(const VertexFormat& f, const u8* p, InVertex& v) const {
   static_assert(offsetof(InVertex, nrm) == offsetof(InVertex, pos) + 12 && offsetof(InVertex, bin) == offsetof(InVertex, pos) + 24 &&
                 offsetof(InVertex, tan) == offsetof(InVertex, pos) + 36 &&
                 offsetof(InVertex, color) == offsetof(InVertex, pos) + 48 &&
@@ -1107,7 +1118,7 @@ InVertex GxProcessor::load_vertex_fast(int fmt, const u8* p) const {
   return v;
 }
 
-void GxProcessor::vertices(const VertexFormat& f, const u8* data, u32 count, u32 vsize, OutVertex* out) {
+MVP_PROF_NOINLINE void GxProcessor::vertices(const VertexFormat& f, const u8* data, u32 count, u32 vsize, OutVertex* out) {
   InVertex v;
   v.pnmtx = f.default_pnmtx;
   std::memcpy(v.texmtx, f.default_texmtx, sizeof v.texmtx);
@@ -1117,7 +1128,7 @@ void GxProcessor::vertices(const VertexFormat& f, const u8* data, u32 count, u32
   }
 }
 
-void GxProcessor::snapshot(DrawCall& d) const {
+MVP_PROF_NOINLINE void GxProcessor::snapshot(DrawCall& d) const {
   PipelineConfig& c = d.cfg;
   c = PipelineConfig{};
   std::memset(&c, 0, sizeof c);
@@ -1278,7 +1289,7 @@ void GxProcessor::snapshot(DrawCall& d) const {
   d.scissor[3] = static_cast<u32>(std::clamp(y1, static_cast<int>(d.scissor[1]), static_cast<int>(kEfbHeight)));
 }
 
-void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
+MVP_PROF_NOINLINE void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
   const int fmt = op & 7;
   const u8 kind = op & 0xF8;
   if (!(fmt_valid_ & (1u << fmt))) {
@@ -1287,11 +1298,16 @@ void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
     fmt_valid_ |= static_cast<u8>(1u << fmt);
   }
   VertexFormat& vf = fmt_cache_[fmt];
-  // The default matrix indices come from CP registers written between draws.
-  vf.default_pnmtx = static_cast<u8>(bits(matidx_a_, 0, 6));
-  for (int k = 0; k < 8; ++k) {
-    u32 src = k < 4 ? matidx_a_ : matidx_b_;
-    vf.default_texmtx[k] = static_cast<u8>(bits(src, k < 4 ? 6 + 6 * k : 6 * (k - 4), 6));
+  // The default matrix indices come from CP registers written between draws
+  // (V5: unpacked again only when those changed).
+  if (vf.matidx_a != matidx_a_ || vf.matidx_b != matidx_b_) {
+    vf.default_pnmtx = static_cast<u8>(bits(matidx_a_, 0, 6));
+    for (int k = 0; k < 8; ++k) {
+      u32 src = k < 4 ? matidx_a_ : matidx_b_;
+      vf.default_texmtx[k] = static_cast<u8>(bits(src, k < 4 ? 6 + 6 * k : 6 * (k - 4), 6));
+    }
+    vf.matidx_a = matidx_a_;
+    vf.matidx_b = matidx_b_;
   }
   const u32 vsize = fmt_size_[fmt];
   stats_.vertices += count;
@@ -1372,11 +1388,23 @@ void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
     d.ident = ident_mix(h, tail) | 1u;  // never 0
   }
   std::vector<u32>& ix = d.index;
-  ix.clear();
-  auto tri = [&](u32 a, u32 b, u32 c) {
-    ix.push_back(a);
-    ix.push_back(b);
-    ix.push_back(c);
+  // V5: sized once, then written in place (no push_back per index).
+  u32 nidx;
+  switch (kind) {
+    case cmd::kQuads: case cmd::kQuads2: nidx = count / 4 * 6; break;
+    case cmd::kTriangles: nidx = count / 3 * 3; break;
+    case cmd::kTriStrip: case cmd::kTriFan: nidx = count >= 3 ? (count - 2) * 3 : 0; break;
+    case cmd::kLines: nidx = count / 2 * 2; break;
+    case cmd::kLineStrip: nidx = count >= 2 ? (count - 1) * 2 : 0; break;
+    default: nidx = count; break;
+  }
+  ix.resize(nidx);
+  u32* w = ix.data();
+  auto tri = [&w](u32 a, u32 b, u32 c) {
+    w[0] = a;
+    w[1] = b;
+    w[2] = c;
+    w += 3;
   };
   Topology topo = Topology::Triangles;
   switch (kind) {
@@ -1401,20 +1429,20 @@ void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
     case cmd::kLines:
       topo = Topology::Lines;
       for (u32 k = 0; k + 1 < count; k += 2) {
-        ix.push_back(k);
-        ix.push_back(k + 1);
+        *w++ = k;
+        *w++ = k + 1;
       }
       break;
     case cmd::kLineStrip:
       topo = Topology::Lines;
       for (u32 k = 1; k < count; ++k) {
-        ix.push_back(k - 1);
-        ix.push_back(k);
+        *w++ = k - 1;
+        *w++ = k;
       }
       break;
     default:  // points
       topo = Topology::Points;
-      for (u32 k = 0; k < count; ++k) ix.push_back(k);
+      for (u32 k = 0; k < count; ++k) *w++ = k;
       break;
   }
   d.cfg.topology = static_cast<u8>(topo);
