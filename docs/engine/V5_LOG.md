@@ -13,8 +13,12 @@ WebGPU renderer), made cheaper on the CPU without changing a bit of what it draw
 | Fast vertex path: loader programs, transform plan, GP memory windows | **Done** (`f2b0c4ee`) |
 | Per-draw work: XXH64, hashed caches, packing by layout, indices in place | **Done** (`40f92137`) |
 | Constant-size zeroing, unrolled attribute decoders | **Done** (`4f25767b`) |
-| Render thread, dev PC, the bat scene | **5.22 / 5.21 -> 4.23 / 4.30 ms a field (-18%)** |
-| Render thread, 4 efficiency cores | **9.66 / 10.42 -> 7.95 / 8.34 ms a field (-18 to -20%)** |
+| XF matrix loads: cached matrices dropped once per load | **Done** (`6fe6007c`) |
+| The render thread sleeps on its ring without a 1 ms poll first | **Done** (`de893fdb`) |
+| Render thread, dev PC, the bat scene | **5.17 / 5.21 -> 4.27 / 4.28 ms a field (-18%)** |
+| Render thread, 4 efficiency cores | **10.27 / 10.29 -> 8.14 / 8.14 ms a field (-21%)** |
+| The browser's CPU (all its processes), dev PC / 4 efficiency cores | **1.23 / 1.18 -> 1.00 / 0.99 cores (-17%)**; **1.84 / 1.84 -> 1.70 / 1.67 (-8%)** |
+| 4 efficiency cores at 120 fps (V3's in-betweens) | **14.15 / 14.25 -> 11.89 / 11.81 ms a field (-17%)** (before the last two commits) |
 | Exactness | Renderer digests equal in every field (interp off and on), final pictures byte-equal, `test_vertex_exact` (new) bit for bit |
 
 ## 1. How it was measured
@@ -109,16 +113,42 @@ Scene, dev PC: 5.21 / 5.21 -> 4.53 / 4.55 ms (with 3.1).
 the common shapes (u8 x2/x3, s8 x3, u16 x2, s16 x2/x3, f32 x2/x3, RGBA8) unrolled. Bench:
 46.4 -> 43.0 ns a vertex.
 
-### 3.4 Together (origin/main `251a64fb` against `4f25767b`, interleaved, mlock)
+### 3.4 XF matrix loads (`6fe6007c`)
+
+A load that stays inside the position/texture or the normal matrices (direct or indexed: the game's
+matrix uploads, 42,300 GX commands a field in all) clears the cached matrices it touches in one pass
+instead of word by word. Bench: 43.3 / 43.2 -> 42.3 / 41.8 ns a vertex (a 12-word load every two
+strips).
+
+### 3.5 No record poll before the render thread sleeps (`de893fdb`)
+
+While a run batch was active the render thread polled 1 ms for records before sleeping on the
+ring's futex. The profile showed the poll as 15% of its wall time (`emscripten_get_now` mostly), not
+counted as busy but burning a core. The browser's CPU over the last 43 s of the scene (every Chrome
+process of the run, sampled each second: `cpu_run.sh`), alternated:
+
+| | poll 1 ms | poll 0.1 ms | no poll |
+|---|---:|---:|---:|
+| dev PC | 1.24 / 1.30 cores | 1.08 / 1.12 | 1.02 / 1.10, 1.02 / 1.02 |
+| 4 efficiency cores, 120 fps | 2.08 / 2.07 | - | 1.97 / 1.98 |
+
+Speed, render busy and pictures the same in every pair, on 4 and 2 efficiency cores too (speed
+0.994-1.001x either way); emulation time the same within noise (13.0-13.9 ms on efficiency cores;
+7.3-7.5 on the dev PC, perhaps +0.1 ms without the poll: the publishes wake a sleeping thread).
+`rtTune=-1,1` brings the poll back.
+
+### 3.6 Together (origin/main `251a64fb` against `de893fdb`, interleaved, mlock)
 
 | Machine | base r1 | base r2 | new r1 | new r2 | change |
 |---|---:|---:|---:|---:|---:|
-| Dev PC (i7-14700K) | 5.22 | 5.21 | 4.23 | 4.30 | -18% |
-| 4 efficiency cores (`--affinity F000000`) | 9.66 | 10.42 | 7.95 | 8.34 | -18 to -20% |
+| Render thread, dev PC (i7-14700K) | 5.17 | 5.21 | 4.27 | 4.28 | -18% |
+| Render thread, 4 efficiency cores (`--affinity F000000`) | 10.27 | 10.29 | 8.14 | 8.14 | -21% |
+| Browser CPU, dev PC (cores) | 1.23 | 1.18 | 1.00 | 0.99 | -17% |
+| Browser CPU, 4 efficiency cores (cores) | 1.84 | 1.84 | 1.70 | 1.67 | -8% |
 
-Render thread busy ms per field (run means; medians 5.21 / 5.20 -> 4.23 / 4.30 and 9.65 / 10.23 ->
-7.85 / 8.35). Game speed 1.000x and emulation 7.3 / 12.9 ms a field in every run (unchanged).
-(Interp on, 4 efficiency cores: section 7.)
+Render thread busy ms per field (run means; medians 5.15 / 5.20 -> 4.26 / 4.28 and 10.24 / 10.26 ->
+8.15 / 8.12). Game speed 0.998-1.001x in every run; emulation 7.3 -> 7.4-7.5 ms a field on the dev PC,
+13.0 -> 13.15 on efficiency cores (medians). (Interp on, 4 efficiency cores: section 7.)
 
 ## 4. Tried, not kept
 
@@ -140,13 +170,9 @@ Render thread busy ms per field (run means; medians 5.21 / 5.20 -> 4.23 / 4.30 a
   record): loading 16, per-primitive work 8, position and projection 5, color passes 4.6, two
   texture coordinate generators with post matrices 7, zeroing 2.6 (then removed: 3.3).
 - **A SIMD hash** (xxh32-style, two v128 accumulators): 9-12 GB/s, below scalar XXH64's 12-21.
-- **The render thread's record spin** (`rtTune=-1,0`: no 1 ms poll before sleeping on the futex):
-  the profile shows the spin as 15% of the thread's wall time (`emscripten_get_now`, `now`, the
-  loop), not counted as busy but burning a core. On 4 efficiency cores: speed 0.997 / 1.000x with
-  it, 0.999 / 1.001x without, emulation 13.01 / 13.11 against 13.14 / 13.11 ms, the same pictures;
-  on 2 efficiency cores (`C000000`): 0.994 / 0.997x with, 1.000 / 1.000x without, emulation
-  14.63 / 14.92 against 14.49 / 14.66 ms. No measurable cost either way, a hint of a gain without
-  it on 2 cores. Left as it is (render_thread.cpp's waiting is the lead's design); worth a decision.
+- (The record poll was first measured here without a CPU meter: on 4 efficiency cores speed
+  0.997 / 1.000x with it, 0.999 / 1.001x without; on 2 (`C000000`) 0.994 / 0.997x with, 1.000 /
+  1.000x without. The CPU meter then showed what it costs: section 3.5, kept.)
 
 ## 5. Exactness
 
@@ -203,8 +229,8 @@ Render thread busy per field (-17%); 119-121 pictures a second in every run; emu
 Scripts in the session's scratch folder, `v5/`: `build_web.cmd`, `build_native.cmd TARGETS`,
 `build_prof_o1.cmd` (the named build at -O1), `run_scene.sh TAG "params" [args]`,
 `time_pair.sh TAG ROUNDS [args]` (BASESITE / NEWSITE), `digest_pair.sh TAG "params"`,
-`digest_cmp.py`, `busy.py`, `gpu.py`, `bench_pair.sh` / `bench_ab.sh` (Node benches),
-`ctest_native.cmd`. A baseline site is a copy of `build/engine/emscripten/web/site` built from
+`digest_cmp.py`, `busy.py`, `gpu.py`, `bench_pair.sh` / `bench_ab.sh` / `bench_exp.sh` (Node benches),
+`ctest_native.cmd`, `cpu_sample.ps1` + `cpu_run.sh` + `final_pair.sh` (runs with the browser's CPU). A baseline site is a copy of `build/engine/emscripten/web/site` built from
 origin/main (`git checkout <rev> -- engine/`, build, copy, `git checkout HEAD -- engine/`).
 
 ## 9. Commits (branch `engine/render-speed`, not pushed)
@@ -213,3 +239,7 @@ origin/main (`git checkout <rev> -- engine/`, build, copy, `git checkout HEAD --
 - `9acbe90a` merge origin/main (V3)
 - `40f92137` engine(gfx): cheaper per-draw work on the render thread
 - `4f25767b` engine(gfx): constant-size zeroing, unrolled decoders
+- `e72b5357` docs: this log
+- `6fe6007c` engine(gfx): XF matrix loads drop cached matrices once per load
+- `08a48c7e` engine(web): the render status's gx counts include commands, passes, copies, clears
+- `de893fdb` engine(web): the render thread sleeps on its ring without polling first
