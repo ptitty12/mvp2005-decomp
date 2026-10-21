@@ -209,7 +209,11 @@ class Renderer : public Backend {
   // per pass before).
   static constexpr std::uint32_t kUniformSlot = 512;           // DrawUniforms (416 bytes), 256-aligned
   static constexpr std::uint64_t kVertexCapacity = 16u << 20;
-  static constexpr std::uint64_t kIndexCapacity = 8u << 20;    // 2 Mi indices
+  static constexpr std::uint64_t kIndexCapacity = 8u << 20;    // 4 Mi indices
+  // V6: indices are 16-bit (half the bytes to upload): a draw's vertices are at most
+  // this many (a draw that would merge past it starts a new WebGPU draw; one GX
+  // primitive has at most 65,535 vertices).
+  static constexpr std::uint32_t kMaxDrawVertices = 65536;
   static constexpr std::uint64_t kUniformCapacity = 2u << 20;  // 4,096 draws, clears and copies
 
   void begin_batch();  // V6: the command encoder that the next passes, clears and copies go into
@@ -240,10 +244,11 @@ class Renderer : public Backend {
 
   wgpu::Texture efb_color_, efb_depth_;
   wgpu::TextureView efb_color_view_, efb_depth_view_;
-  wgpu::BindGroupLayout bgl_uniforms_, bgl_textures_;
+  // The draws' one bind group (V6; the constants were a group of their own): the 8
+  // textures, their 8 samplers and the constants (dynamic offset into ubuf_).
+  wgpu::BindGroupLayout bgl_textures_;
   wgpu::PipelineLayout layout_;
   wgpu::Buffer vbuf_, ubuf_, ibuf_;
-  wgpu::BindGroup uniform_group_;
   wgpu::Texture dummy_tex_;
   wgpu::TextureView dummy_view_;
   wgpu::Sampler dummy_sampler_;
@@ -257,7 +262,7 @@ class Renderer : public Backend {
   bool pass_open_ = false;
   std::uint64_t pass_serial_ = 0;
   std::vector<std::uint8_t> vdata_, udata_;
-  std::vector<std::uint32_t> idata_;
+  std::vector<std::uint16_t> idata_;  // V6: 16-bit (32 before)
   // V6: how much of them flush() has uploaded (they start over with each batch, or with
   // each frame while keep_frame_: a recorded frame's data stays where its draws read it).
   std::size_t vup_ = 0, iup_ = 0, uup_ = 0;

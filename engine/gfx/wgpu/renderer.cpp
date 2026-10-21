@@ -283,18 +283,10 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
   create_efb();
   wgpu::TextureDescriptor td{};
 
-  // Uniforms: one slot per draw, dynamic offset.
-  wgpu::BindGroupLayoutEntry ue{};
-  ue.binding = 0;
-  ue.visibility = wgpu::ShaderStage::Fragment | wgpu::ShaderStage::Vertex;
-  ue.buffer.type = wgpu::BufferBindingType::Uniform;
-  ue.buffer.hasDynamicOffset = true;
-  ue.buffer.minBindingSize = kUniformSize;
+  // Textures, samplers and the draw's constants (one slot per draw, dynamic offset): one
+  // group (V6: the constants were group 0 of their own, set again by nearly every draw).
   wgpu::BindGroupLayoutDescriptor bd{};
-  bd.entryCount = 1;
-  bd.entries = &ue;
-  bgl_uniforms_ = dev.CreateBindGroupLayout(&bd);
-  wgpu::BindGroupLayoutEntry te[16]{};
+  wgpu::BindGroupLayoutEntry te[17]{};
   for (int k = 0; k < 8; ++k) {
     te[k].binding = static_cast<std::uint32_t>(k);
     te[k].visibility = wgpu::ShaderStage::Fragment;
@@ -304,13 +296,17 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
     te[8 + k].visibility = wgpu::ShaderStage::Fragment;
     te[8 + k].sampler.type = wgpu::SamplerBindingType::Filtering;
   }
-  bd.entryCount = 16;
+  te[16].binding = 16;
+  te[16].visibility = wgpu::ShaderStage::Fragment | wgpu::ShaderStage::Vertex;
+  te[16].buffer.type = wgpu::BufferBindingType::Uniform;
+  te[16].buffer.hasDynamicOffset = true;
+  te[16].buffer.minBindingSize = kUniformSize;
+  bd.entryCount = 17;
   bd.entries = te;
   bgl_textures_ = dev.CreateBindGroupLayout(&bd);
-  wgpu::BindGroupLayout layouts[2] = {bgl_uniforms_, bgl_textures_};
   wgpu::PipelineLayoutDescriptor pl{};
-  pl.bindGroupLayoutCount = 2;
-  pl.bindGroupLayouts = layouts;
+  pl.bindGroupLayoutCount = 1;
+  pl.bindGroupLayouts = &bgl_textures_;
   layout_ = dev.CreatePipelineLayout(&pl);
 
   wgpu::BufferDescriptor b{};
@@ -326,15 +322,6 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
   b.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   b.label = "uniforms";
   ubuf_ = dev.CreateBuffer(&b);
-  wgpu::BindGroupEntry be{};
-  be.binding = 0;
-  be.buffer = ubuf_;
-  be.size = kUniformSize;
-  wgpu::BindGroupDescriptor bgd{};
-  bgd.layout = bgl_uniforms_;
-  bgd.entryCount = 1;
-  bgd.entries = &be;
-  uniform_group_ = dev.CreateBindGroup(&bgd);
 
   // A 1x1 texture and a sampler for unused bindings.
   td.size = {1, 1, 1};
@@ -488,7 +475,7 @@ void Renderer::begin_batch() {
 
 void Renderer::make_room(std::size_t vbytes, std::size_t ibytes, std::size_t ubytes) {
   if (!batch_open_ && !keep_frame_) return;  // they start over with the next batch
-  if (vdata_.size() + vbytes <= kVertexCapacity && idata_.size() * 4 + ibytes <= kIndexCapacity &&
+  if (vdata_.size() + vbytes <= kVertexCapacity && idata_.size() * 2 + 2 + ibytes <= kIndexCapacity &&
       udata_.size() + ubytes <= kUniformCapacity)
     return;
   flush();
@@ -532,20 +519,17 @@ void Renderer::emit_pending() {
     pass_.SetPipeline(pending_.pipeline);
     bound_pipeline_ = pending_.pipeline.Get();
   }
-  if (bound_uoff_ != pending_.uoff) {
-    pass_.SetBindGroup(0, uniform_group_, 1, &pending_.uoff);
-    bound_uoff_ = pending_.uoff;
-  }
-  if (bound_textures_ != pending_.textures.Get()) {
-    pass_.SetBindGroup(1, pending_.textures);
+  if (bound_textures_ != pending_.textures.Get() || bound_uoff_ != pending_.uoff) {
+    pass_.SetBindGroup(0, pending_.textures, 1, &pending_.uoff);
     bound_textures_ = pending_.textures.Get();
+    bound_uoff_ = pending_.uoff;
   }
   if (!bound_vbuf_) {
     pass_.SetVertexBuffer(0, vbuf_, 0, kVertexCapacity);
     bound_vbuf_ = true;
   }
   if (!bound_ibuf_) {
-    pass_.SetIndexBuffer(ibuf_, wgpu::IndexFormat::Uint32, 0, kIndexCapacity);
+    pass_.SetIndexBuffer(ibuf_, wgpu::IndexFormat::Uint16, 0, kIndexCapacity);
     bound_ibuf_ = true;
   }
   if (std::memcmp(bound_scissor_, pending_.scissor, sizeof bound_scissor_) != 0) {
@@ -573,10 +557,11 @@ void Renderer::flush() {
   // The batch's draws read the bytes at these offsets: written before its submit (what
   // the batch added; V6).
   if (vdata_.size() > vup_) gpu_.queue().WriteBuffer(vbuf_, vup_, vdata_.data() + vup_, vdata_.size() - vup_);
-  if (idata_.size() > iup_) gpu_.queue().WriteBuffer(ibuf_, iup_ * 4, idata_.data() + iup_, (idata_.size() - iup_) * 4);
+  if (idata_.size() & 1) idata_.push_back(0);  // writes are whole 4-byte words (no draw reads it)
+  if (idata_.size() > iup_) gpu_.queue().WriteBuffer(ibuf_, iup_ * 2, idata_.data() + iup_, (idata_.size() - iup_) * 2);
   if (udata_.size() > uup_) gpu_.queue().WriteBuffer(ubuf_, uup_, udata_.data() + uup_, udata_.size() - uup_);
   stats_.vertex_bytes += vdata_.size() - vup_;
-  stats_.index_bytes += (idata_.size() - iup_) * 4;
+  stats_.index_bytes += (idata_.size() - iup_) * 2;
   vup_ = vdata_.size();
   iup_ = idata_.size();
   uup_ = udata_.size();
@@ -984,8 +969,8 @@ void Renderer::draw(const DrawCall& d) {
   }
   // Room for the largest layout (144 bytes per vertex, plus alignment).
   const std::size_t vmax = (d.verts.size() + 1) * sizeof(OutVertex);
-  const std::size_t ibytes = d.index.size() * sizeof(std::uint32_t);
-  if (vmax > kVertexCapacity || ibytes > kIndexCapacity) {
+  const std::size_t ibytes = d.index.size() * sizeof(std::uint16_t);
+  if (vmax > kVertexCapacity || ibytes > kIndexCapacity || d.verts.size() > kMaxDrawVertices) {
     ++stats_.skipped;
     return;
   }
@@ -1003,7 +988,7 @@ void Renderer::draw(const DrawCall& d) {
     // V6: this draw's serial marks the textures it samples (see sample_serial_).
     ++sample_serial_;
     resolving_ = true;
-    wgpu::BindGroupEntry te[16]{};
+    wgpu::BindGroupEntry te[17]{};
     for (int k = 0; k < 8; ++k) {
       te[k].binding = static_cast<std::uint32_t>(k);
       te[k].textureView = dummy_view_;
@@ -1042,9 +1027,12 @@ void Renderer::draw(const DrawCall& d) {
     }
     BindEntry& be = bind_groups_[key];
     if (!be.group) {
+      te[16].binding = 16;  // the constants (always the same buffer: not in the key)
+      te[16].buffer = ubuf_;
+      te[16].size = kUniformSize;
       wgpu::BindGroupDescriptor bgd{};
       bgd.layout = bgl_textures_;
-      bgd.entryCount = 16;
+      bgd.entryCount = 17;
       bgd.entries = te;
       be.group = gpu_.device().CreateBindGroup(&bgd);
       for (int k = 0; k < 8; ++k) {
@@ -1073,6 +1061,7 @@ void Renderer::draw(const DrawCall& d) {
   // draw whose vertices start at a multiple of its stride.
   const bool merge = pending_.active && pending_.pipeline.Get() == pl.pipe.Get() &&
                      pending_.textures.Get() == last_.textures.Get() &&
+                     pending_.vertices + d.verts.size() <= kMaxDrawVertices &&  // V6: 16-bit indices
                      ((d.state != 0 && pending_.state == d.state) ||
                       (std::memcmp(pending_.scissor, d.scissor, sizeof pending_.scissor) == 0 &&
                        std::memcmp(&pending_.u, &d.u, sizeof d.u) == 0));
@@ -1127,7 +1116,7 @@ void Renderer::draw(const DrawCall& d) {
   const std::uint32_t first = pending_.vertices;
   const std::size_t ioff = idata_.size();
   idata_.resize(ioff + d.index.size());
-  for (std::size_t k = 0; k < d.index.size(); ++k) idata_[ioff + k] = first + d.index[k];
+  for (std::size_t k = 0; k < d.index.size(); ++k) idata_[ioff + k] = static_cast<std::uint16_t>(first + d.index[k]);
   pending_.index_count += static_cast<std::uint32_t>(d.index.size());
   pending_.vertices += static_cast<std::uint32_t>(d.verts.size());
 }

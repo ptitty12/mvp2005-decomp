@@ -18,23 +18,23 @@ struct U {
   dst_alpha: vec4i,
   lod_bias: array<vec4f, 2>,
 };
-@group(0) @binding(0) var<uniform> u: U;
-@group(1) @binding(0) var tex0: texture_2d<f32>;
-@group(1) @binding(1) var tex1: texture_2d<f32>;
-@group(1) @binding(2) var tex2: texture_2d<f32>;
-@group(1) @binding(3) var tex3: texture_2d<f32>;
-@group(1) @binding(4) var tex4: texture_2d<f32>;
-@group(1) @binding(5) var tex5: texture_2d<f32>;
-@group(1) @binding(6) var tex6: texture_2d<f32>;
-@group(1) @binding(7) var tex7: texture_2d<f32>;
-@group(1) @binding(8) var samp0: sampler;
-@group(1) @binding(9) var samp1: sampler;
-@group(1) @binding(10) var samp2: sampler;
-@group(1) @binding(11) var samp3: sampler;
-@group(1) @binding(12) var samp4: sampler;
-@group(1) @binding(13) var samp5: sampler;
-@group(1) @binding(14) var samp6: sampler;
-@group(1) @binding(15) var samp7: sampler;
+@group(0) @binding(0) var tex0: texture_2d<f32>;
+@group(0) @binding(1) var tex1: texture_2d<f32>;
+@group(0) @binding(2) var tex2: texture_2d<f32>;
+@group(0) @binding(3) var tex3: texture_2d<f32>;
+@group(0) @binding(4) var tex4: texture_2d<f32>;
+@group(0) @binding(5) var tex5: texture_2d<f32>;
+@group(0) @binding(6) var tex6: texture_2d<f32>;
+@group(0) @binding(7) var tex7: texture_2d<f32>;
+@group(0) @binding(8) var samp0: sampler;
+@group(0) @binding(9) var samp1: sampler;
+@group(0) @binding(10) var samp2: sampler;
+@group(0) @binding(11) var samp3: sampler;
+@group(0) @binding(12) var samp4: sampler;
+@group(0) @binding(13) var samp5: sampler;
+@group(0) @binding(14) var samp6: sampler;
+@group(0) @binding(15) var samp7: sampler;
+@group(0) @binding(16) var<uniform> u: U;  // V6: with the textures (one bind group per draw)
 
 struct VOut {
   @builtin(position) pos: vec4f,

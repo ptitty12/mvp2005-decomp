@@ -257,7 +257,10 @@ const wgpu::BindGroup& Renderer::interp_bind(const RecBind& b) {
   if (ibind_.size() > 1024) ibind_.clear();
   BindEntry& e = ibind_[key];
   if (!e.group) {
-    wgpu::BindGroupEntry te[16]{};
+    wgpu::BindGroupEntry te[17]{};
+    te[16].binding = 16;  // V6: the live constants, as in the live groups
+    te[16].buffer = ubuf_;
+    te[16].size = kUniformSize;
     for (std::size_t k = 0; k < 8; ++k) {
       auto it = subst_.find(b.views[k].Get());
       e.views[k] = it != subst_.end() ? it->second : b.views[k];
@@ -269,7 +272,7 @@ const wgpu::BindGroup& Renderer::interp_bind(const RecBind& b) {
     }
     wgpu::BindGroupDescriptor bgd{};
     bgd.layout = bgl_textures_;
-    bgd.entryCount = 16;
+    bgd.entryCount = 17;
     bgd.entries = te;
     e.group = gpu_.device().CreateBindGroup(&bgd);
   }
@@ -592,7 +595,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
         if (op.begin >= op.end) break;
         begin();
         if (!bib) {
-          pass.SetIndexBuffer(ibuf_, wgpu::IndexFormat::Uint32, 0, kIndexCapacity);
+          pass.SetIndexBuffer(ibuf_, wgpu::IndexFormat::Uint16, 0, kIndexCapacity);
           bib = true;
         }
         for (std::uint32_t k = op.begin; k < op.end; ++k) {
@@ -607,15 +610,11 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
             pass.SetPipeline(d.pipe->pipe);
             bpipe = d.pipe;
           }
-          const std::uint32_t uo = d.uoff;
-          if (buoff != uo) {
-            pass.SetBindGroup(0, uniform_group_, 1, &uo);
-            buoff = uo;
-          }
           const wgpu::BindGroup& g = interp_bind(cur.binds[d.bind]);
-          if (btex != g.Get()) {
-            pass.SetBindGroup(1, g);
+          if (btex != g.Get() || buoff != d.uoff) {  // V6: textures and constants, one group
+            pass.SetBindGroup(0, g, 1, &d.uoff);
             btex = g.Get();
+            buoff = d.uoff;
           }
           if (std::memcmp(bsc, d.scissor, sizeof bsc) != 0) {
             pass.SetScissorRect(d.scissor[0] * s, d.scissor[1] * s, (d.scissor[2] - d.scissor[0]) * s,
