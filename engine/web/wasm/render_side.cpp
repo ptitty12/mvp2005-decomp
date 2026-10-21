@@ -230,12 +230,13 @@ std::string RenderSide::status_json() const {
     const gfx::Renderer::InterpStats& is = renderer_->interp_stats();
     std::snprintf(b, sizeof b,
                   ",\"interp\":{\"on\":%s,\"frames\":%llu,\"made\":%llu,\"gap\":%llu,\"cut_match\":%llu,"
-                  "\"cut_shift\":%llu,\"other\":%llu,\"shown\":%llu,\"retextured\":%llu,\"early_copies\":%llu,"
+                  "\"cut_shift\":%llu,\"still\":%llu,\"other\":%llu,\"shown\":%llu,\"retextured\":%llu,\"early_copies\":%llu,"
                   "\"reordered\":%llu,\"match\":%.3f,\"shift\":%.4f,\"ms\":%.1f,\"ms_match\":%.1f,\"ranges\":%llu,"
                   "\"vertices\":%llu,\"replayed\":%llu}",
                   interp_ ? "true" : "false", static_cast<unsigned long long>(is.frames),
                   static_cast<unsigned long long>(is.made), static_cast<unsigned long long>(is.gap),
                   static_cast<unsigned long long>(is.cut_match), static_cast<unsigned long long>(is.cut_shift),
+                  static_cast<unsigned long long>(is.still),
                   static_cast<unsigned long long>(is.other), static_cast<unsigned long long>(presents_between_),
                   static_cast<unsigned long long>(is.retextured), static_cast<unsigned long long>(is.early_copies),
                   static_cast<unsigned long long>(is.reordered), is.last_match, is.last_shift, is.ms, is.ms_match,

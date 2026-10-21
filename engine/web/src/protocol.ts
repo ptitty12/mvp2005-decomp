@@ -220,7 +220,7 @@ export interface Status {
   // V3: in-between frames (gfx/wgpu/renderer.h): on, frames recorded, in-betweens made, not made (the frame
   // before not one field earlier, a cut by too few matched vertices or too far a move, other), shown, the
   // statistics of what they cannot show as drawn, the last frame's matched share and mean move, CPU ms in all.
-  interp?: { on: boolean; frames: number; made: number; gap: number; cut_match: number; cut_shift: number;
+  interp?: { on: boolean; frames: number; made: number; gap: number; cut_match: number; cut_shift: number; still?: number;
              other: number; shown: number; retextured: number; early_copies: number; reordered: number;
              match: number; shift: number; ms: number; ms_match?: number; ranges?: number; vertices?: number;
              replayed?: number; shift_hist?: number[]; match_hist?: number[] };
