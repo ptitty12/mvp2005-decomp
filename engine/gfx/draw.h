@@ -117,6 +117,13 @@ struct DrawCall {
   // same cfg (topology aside), u, tex and scissor, because no register they come
   // from was written in between. A backend may skip its lookups then. 0: unknown.
   std::uint64_t state = 0;
+  // Geometry identity (V3, in-between frames; 0 unless the processor is asked for it:
+  // GxProcessor::set_identify): a hash of what stays the same when the game draws
+  // "the same object" again in the next frame: the primitive and its vertex format
+  // (VCD, VAT), the vertex count, the array bases of the indexed attributes and the
+  // first vertex's bytes as the stream holds them (its indices, or its direct data).
+  // Matrices are not in it, so an object that moves keeps its identity.
+  std::uint64_t ident = 0;
 
   // The triangle (line, point) list with the vertices repeated, as in E1.
   std::vector<OutVertex> expanded() const {

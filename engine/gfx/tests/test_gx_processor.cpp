@@ -159,6 +159,38 @@ TEST_CASE("draws carry each vertex once, with indices, and a pixel-state identit
   CHECK(p.stats().snapshots == 2);
 }
 
+TEST_CASE("geometry identity: the same across matrices, another for other arrays or vertices (V3)") {
+  std::vector<std::uint8_t> mem(0x10000, 0);
+  Capture cap;
+  GxProcessor p(&cap);
+  p.set_memory(mem.data(), static_cast<u32>(mem.size()));
+  Stream s = setup_2d();
+  s.cp(cp::kVcdLo, 2u << 9);  // position: 8-bit index
+  s.cp(cp::kVatA, 0u | 4u << 1);
+  s.cp(cp::kArrayBase + 0, 0x1000);
+  s.cp(cp::kArrayStride + 0, 8);
+  const std::vector<std::uint8_t> idx{0, 1, 2, 3}, idx2{4, 5, 6, 7};
+  s.prim(cmd::kQuads, 4, idx);                              // 0
+  s.xff(0x000, {1, 0, 0, 50, 0, 1, 0, 0, 0, 0, 1, 0});
+  s.prim(cmd::kQuads, 4, idx);                              // 1: another matrix
+  s.prim(cmd::kQuads, 4, idx2);                             // 2: other indices
+  s.cp(cp::kArrayBase + 0, 0x2000);
+  s.prim(cmd::kQuads, 4, idx);                              // 3: another array
+  s.prim(cmd::kTriFan, 4, idx);                             // 4: another primitive
+  s.run(p);
+  REQUIRE(cap.raw.size() == 5);
+  CHECK(cap.raw[0].ident == 0);  // off by default
+  p.set_identify(true);
+  cap.raw.clear();
+  s.run(p);
+  REQUIRE(cap.raw.size() == 5);
+  CHECK(cap.raw[0].ident != 0);
+  CHECK(cap.raw[1].ident == cap.raw[0].ident);
+  CHECK(cap.raw[2].ident != cap.raw[0].ident);
+  CHECK(cap.raw[3].ident != cap.raw[0].ident);
+  CHECK(cap.raw[4].ident != cap.raw[3].ident);
+}
+
 TEST_CASE("indexed attributes from arrays, fixed-point formats, matrix indices") {
   std::vector<std::uint8_t> mem(0x10000, 0);
   // Positions at 0x1000: s16 xyz with 4 fractional bits, stride 6.

@@ -133,6 +133,7 @@ export interface RunOptions {
   pacing?: 'chase' | 'raf';  // P1: 'raf' = batches of up to 4 fields per animation frame (the earlier loop)
   slowMotion?: boolean;  // Q2: true = even slow motion (every frame shown) when the machine cannot keep up
   presentQueue?: boolean;  // V1: the page shows the threaded engine's pictures from a queue (presenter.ts)
+  interp?: boolean;        // V3: in-between frames from the start (the Motion setting; changed later by 'interp')
   ioLog?: boolean;     // development: log every guest DVD read with its host timing (P1)
   inputLog?: boolean;  // development (Q3): the inputs the guest consumed, as an mvp-input script, in `stopped`
   threads?: boolean;   // P2: false = the inline renderer even where the threaded engine could run
@@ -170,6 +171,7 @@ export type ToWorker =
   | { type: 'tick'; now: number }  // the page's animation frame, when the Worker has no requestAnimationFrame
   | { type: 'resize'; width: number; height: number }
   | { type: 'scale'; scale: number }  // Q1: the internal resolution (the Picture setting)
+  | { type: 'interp'; on: boolean }  // V3: in-between frames (the Motion setting)
   | { type: 'pause'; paused: boolean }
   | { type: 'audio-port'; port: MessagePort }  // the AudioWorklet's channel (after the first user gesture)
   | { type: 'net-open'; delay?: number }    // the data channel to the other player is open (Q5: the delay chosen)
@@ -212,6 +214,16 @@ export interface Status {
   gpu_errors?: number;
   gfx_error?: string;
   scale?: number;  // Q1: the renderer's internal resolution
+  // P2, threaded: the render thread's tasks, presents held for the next refresh, whether it follows the
+  // page's refresh count, and its working time so far (ms).
+  render?: { tasks: number; held: number; vsync: boolean; busy_ms: number };
+  // V3: in-between frames (gfx/wgpu/renderer.h): on, frames recorded, in-betweens made, not made (the frame
+  // before not one field earlier, a cut by too few matched vertices or too far a move, other), shown, the
+  // statistics of what they cannot show as drawn, the last frame's matched share and mean move, CPU ms in all.
+  interp?: { on: boolean; frames: number; made: number; gap: number; cut_match: number; cut_shift: number; still?: number;
+             other: number; shown: number; retextured: number; early_copies: number; reordered: number;
+             match: number; shift: number; ms: number; ms_match?: number; ranges?: number; vertices?: number;
+             replayed?: number; shift_hist?: number[]; match_hist?: number[] };
   disc_reads?: number;
   disc_bytes?: number;
   heap_mb?: number;  // the engine's WebAssembly memory

@@ -198,6 +198,8 @@ class GxProcessor {
   // vertex at a time) instead of the fast one; the two give the same bits
   // (test_vertex_exact). For tests.
   void set_reference_vertices(bool on) { ref_vertices_ = on; }
+  // V3: compute DrawCall::ident for every draw (in-between frames; off by default).
+  void set_identify(bool on) { identify_ = on; }
 
  private:
   template <class Ar>
@@ -257,6 +259,7 @@ class GxProcessor {
   bool keep_prim_info_ = false;
   bool ref_vertices_ = false;
   mutable GpMemory::Window win_[12];  // V5: the loader's windows, per array (fetch)
+  bool identify_ = false;  // V3
   // Vertex formats 0-7 unpacked, and their sizes, valid until a VCD or VAT write (E3c).
   VertexFormat fmt_cache_[8];
   u32 fmt_size_[8] = {};

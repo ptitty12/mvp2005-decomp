@@ -34,6 +34,7 @@ export interface MvpEngine {
   _mvp_gp_view(on: number): void;
   _mvp_render_scale(scale: number): void;  // Q1: the internal resolution, 1-3
   _mvp_present_every_field(on: number): void;  // V1: every field of a batch presented (the page queues pictures)
+  _mvp_interp(on: number): void;  // V3: in-between frames (the Motion setting)
   _mvp_gpu_load(passes: number): void;  // Q5 (development): extra GPU work per present
   _mvp_gpu_timing(on: number): void;  // Q5 (development): 0 = no GPU timestamps (before mvp_gfx_init)
   _mvp_mod_enable(spec: number): number;
