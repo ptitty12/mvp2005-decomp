@@ -73,7 +73,7 @@ if(MVP_GFX_WEBGPU AND EMSCRIPTEN)
   set(MVP_EMDAWNWEBGPU_DIR "${_mvp_emdawn_default}" CACHE PATH "emdawnwebgpu_pkg of the pinned Dawn release (the directory holding emdawnwebgpu.port.py)")
   if(EXISTS "${MVP_EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
     message(STATUS "gfx: WebGPU renderer with emdawnwebgpu ${MVP_DAWN_RELEASE} (browser)")
-    add_library(engine_gfx_wgpu STATIC wgpu/gpu.cpp wgpu/gpu_timer.cpp wgpu/window.cpp wgpu/renderer.cpp)
+    add_library(engine_gfx_wgpu STATIC wgpu/gpu.cpp wgpu/gpu_timer.cpp wgpu/window.cpp wgpu/renderer.cpp wgpu/interp.cpp)
     set(_mvp_emdawn_port "--use-port=${MVP_EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
     target_compile_options(engine_gfx_wgpu PUBLIC ${_mvp_emdawn_port})
     target_link_options(engine_gfx_wgpu INTERFACE ${_mvp_emdawn_port})
@@ -98,7 +98,7 @@ if(MVP_HAVE_WEBGPU)
   find_package(SDL3 CONFIG REQUIRED PATHS "${MVP_SDL3_DIR}/cmake" NO_DEFAULT_PATH)
   message(STATUS "gfx: WebGPU renderer with Dawn ${MVP_DAWN_RELEASE} and SDL3 ${MVP_SDL3_VERSION}")
 
-  set(_mvp_wgpu_sources wgpu/gpu.cpp wgpu/gpu_timer.cpp wgpu/window.cpp wgpu/renderer.cpp)
+  set(_mvp_wgpu_sources wgpu/gpu.cpp wgpu/gpu_timer.cpp wgpu/window.cpp wgpu/renderer.cpp wgpu/interp.cpp)
   # The prebuilt Dawn may come from a newer MSVC STL than the installed one
   # (wgpu/msvc_stl_compat.cpp explains); add the forwarding shim only when
   # the toolset lacks the split min/max_element entry points.

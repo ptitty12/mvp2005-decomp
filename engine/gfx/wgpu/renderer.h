@@ -97,6 +97,67 @@ class Renderer : public Backend {
   // Reads the EFB color back (640 x 528 RGBA8, times the scale).
   std::vector<std::uint8_t> read_efb();
 
+  // ---- In-between frames (V3, interp.cpp) ----
+  // On a display that refreshes at 120 Hz the game's 60 frames a second can be shown
+  // with a picture between each two: the frame drawn again with every object halfway
+  // between where it was in the frame before and where it is now. While on, the
+  // renderer records each frame from one XFB copy to the next (its passes' vertices,
+  // indices, constants and draws, its clears and EFB-to-texture copies, and per
+  // DrawCall the vertex range and the geometry's identity, DrawCall::ident). At the
+  // XFB copy of frame N, if frame N-1 was recorded and ended exactly one VI field
+  // before, it matches N's draws with N-1's (the same identity, the same occurrence
+  // of that identity in the frame and the same vertex count; among several of one
+  // identity the nearest when the order changed), replays N's record with each
+  // matched vertex at the mean of its two clip-space positions (exactly the frame
+  // drawn with the mean of the two frames' matrices: the transform is linear in
+  // them), into a private EFB, private copy textures and a private frame, and keeps
+  // that picture. Nothing the live frame draws changes. Not made on a scene cut
+  // (too few vertices matched, or the matched ones moved too far on average).
+  // Decoded textures are sampled as they are at the end of frame N (a texture the
+  // game changed in the middle of the frame shows its last contents). The GX
+  // processor must fill DrawCall::ident (GxProcessor::set_identify) while it is on.
+  void set_interp(bool on);
+  bool interp() const { return interp_on_; }
+  // The game jumped (a save state loaded, a review restored): the frames recorded so far
+  // are not the ones before the next, so the next frame gets no in-between.
+  void interp_reset() {
+    if (recording_) rec_[rec_cur_].valid = false;
+    rec_[rec_cur_ ^ 1].valid = false;
+  }
+  // The in-between picture to show before the new frame `to` (XFB serial) when the
+  // frame shown before it is `from`; scan-mixed like scanout() when the frames
+  // around it alternate. Null if there is none.
+  const Frame* between(std::uint64_t from, std::uint64_t to);
+  struct InterpTune {
+    float min_match = 0.6f;     // a cut below this share of the frame's vertices matched
+    float cut_shift = 0.2f;     // ... or above this mean shift of matched 3D vertices (NDC units: the screen is 2 wide)
+    float range_shift = 0.5f;   // a matched draw whose vertices moved more than this on average is not lerped
+    // Order pairs of one identity farther apart than this: pair by nearest instead, if that
+    // moves them less than half as far in all (the game drew them in another order).
+    float reorder_shift = 0.1f;
+  } interp_tune;
+  struct InterpStats {
+    std::uint64_t frames = 0;      // frames recorded and ended
+    std::uint64_t made = 0;        // in-between pictures made
+    std::uint64_t gap = 0;         // not made: the frame before was not one field earlier (or not recorded)
+    std::uint64_t cut_match = 0;   // not made: too few vertices matched
+    std::uint64_t cut_shift = 0;   // not made: matched vertices moved too far
+    std::uint64_t still = 0;       // not needed: nothing moved (the in-between would be the frame)
+    std::uint64_t other = 0;       // not made: another scale, too large, nothing drawn
+    std::uint64_t shown = 0;       // pictures handed out by between()
+    std::uint64_t retextured = 0;  // textures re-decoded after the frame had sampled them (shown with their last contents)
+    std::uint64_t early_copies = 0;  // EFB copies sampled in a frame before it redid them (shown with their last contents)
+    std::uint64_t reordered = 0;   // draws paired by nearest position instead of order
+    double last_match = 0, last_shift = 0;  // the last frame's matched share and mean 3D shift
+    double ms = 0;                 // CPU time in matching and replaying, in all
+    double ms_match = 0;           // ... of which matching, the cut test and the halfway positions
+    std::uint64_t ranges = 0, vertices = 0, replayed = 0;  // DrawCalls and vertices matched for, draws replayed
+    // Frames matched (cut or not), by their mean 3D move (NDC: under 0.01, 0.02, 0.05, 0.1, 0.2,
+    // 0.4, more) and by their matched share (under 0.6, 0.8, 0.9, 0.95, 0.99, more): for tuning.
+    std::uint64_t shift_hist[7] = {}, match_hist[6] = {};
+  };
+  const InterpStats& interp_stats() const { return istats_; }
+
   struct Stats {
     std::uint64_t draws = 0, skipped = 0, passes = 0, pipelines = 0, textures_decoded = 0, texture_hits = 0;
     std::uint64_t copy_textures_used = 0, xfb_copies = 0, tex_copies = 0, clears = 0;
@@ -134,6 +195,7 @@ class Renderer : public Backend {
   wgpu::TextureView tall_copy(CopyEntry& e, const TextureDesc& t);
   void clear_efb(const EfbCopy& c);
   void copy_to_texture(const EfbCopy& c);
+  void ensure_mix_pipe();  // the scan-out mix's pipeline (scanout(), between())
   std::uint64_t hash_memory(std::uint32_t addr, std::uint32_t size);
   // [addr, addr + size) of guest memory as the GP sees it, null if outside.
   const std::uint8_t* guest(std::uint32_t addr, std::uint32_t size);
@@ -174,6 +236,8 @@ class Renderer : public Backend {
     std::uint32_t scissor[4] = {};
     std::uint64_t state = 0;
     DrawUniforms u;
+    const void* pipe = nullptr;  // V3: the Pipeline (for the frame record)
+    std::uint32_t bind = 0;      // V3: its texture bind group in the frame record
   } pending_;
   // The previous draw's resolved state (E3c): a draw with the same nonzero
   // DrawCall::state and topology, in the same open pass and texture epoch,
@@ -184,6 +248,8 @@ class Renderer : public Backend {
     const Pipeline* pipe = nullptr;
     wgpu::BindGroup textures;
     bool indirect = false, fog = false;
+    std::uint32_t bind = 0;       // V3: `textures` in the frame record (rec_bind)
+    std::uint64_t bind_rec = 0;   // ... of this record (Record::id)
   } last_;
   // What the open pass has bound, to skip repeated state.
   const void* bound_pipeline_ = nullptr;
@@ -241,6 +307,134 @@ class Renderer : public Backend {
   std::uint64_t serial_ = 0;
   std::uint64_t copy_serial_ = 0;  // EFB copies to textures (CopyEntry::serial)
   Stats stats_;
+
+  // ---- V3: in-between frames (interp.cpp) ----
+  // One encoded draw of a recorded pass, as emit_pending() encoded it.
+  struct RecDraw {
+    const Pipeline* pipe;
+    std::uint32_t bind, uoff, first_index, index_count, base;
+    std::uint32_t scissor[4];
+  };
+  // A recorded draw pass: what flush() uploaded and the draws it encoded.
+  struct RecPass {
+    std::vector<std::uint8_t> v, u;
+    std::vector<std::uint32_t> i;
+    std::vector<RecDraw> draws;
+    bool filled = false;
+  };
+  // A DrawCall's vertices in a recorded pass: `count` vertices of `stride` bytes at
+  // byte `voff` of pass `pass`; their clip-space positions before the 2D snap at
+  // Record::pos[4 * pos ...].
+  struct RecRange {
+    std::uint64_t ident;
+    std::uint32_t pass, voff, count, stride, pos;
+    std::uint32_t n3;  // vertices in front of the camera that are not 2D (w is not exactly 1)
+  };
+  struct RecClear {
+    int m;
+    float data[8];
+    std::uint32_t rect[4];  // EFB pixels at the scale: x, y, width, height
+  };
+  struct RecCopy {
+    wgpu::TextureView live;  // the copy's texture at the time (draws that sample it bind this view)
+    std::uint32_t pw, ph;
+    std::int32_t params[8];  // the conversion's
+  };
+  struct RecBind {
+    wgpu::BindGroup group;
+    std::array<wgpu::TextureView, 8> views;
+    std::array<wgpu::Sampler, 8> samplers;
+  };
+  enum class RecKind : std::uint8_t { Pass, Clear, Copy };
+  struct RecOp {
+    RecKind kind;
+    std::uint32_t index;
+  };
+  struct Record {
+    bool valid = false;
+    std::uint64_t id = 0;             // never reused (last_.bind_rec)
+    std::uint64_t field = 0;          // the VI field count at the XFB copy that ended it
+    std::uint64_t serial = 0;         // that copy's frame serial
+    std::uint32_t scale = 1;
+    std::uint32_t xfb[4] = {};        // the XFB copy's EFB rectangle (console pixels)
+    std::vector<RecOp> ops;
+    std::vector<RecPass> passes;      // [0, npasses) in use; the rest keep their buffers
+    std::size_t npasses = 0;
+    std::vector<RecClear> clears;
+    std::vector<RecCopy> copies;
+    std::vector<RecBind> binds;
+    std::unordered_map<const void*, std::uint32_t> bind_index;
+    std::vector<RecRange> ranges;
+    std::vector<float> pos;
+    std::uint64_t pass_serial = 0;    // the live pass being recorded into passes[npasses - 1]
+  };
+  void rec_begin(const EfbCopy& c);   // at an XFB copy, before its clear
+  // At an XFB copy of the EFB rectangle (x0, y0, w, h): ends the record, makes the in-between.
+  void rec_end(std::uint32_t x0, std::uint32_t y0, std::uint32_t w, std::uint32_t h, std::uint64_t serial);
+  void rec_drop();
+  std::uint32_t rec_bind(const BindEntry& be);
+  void rec_range(const DrawCall& d, std::size_t voff, std::uint32_t stride);
+  void rec_pass_end();                // flush() of a recorded pass: its data moves into the record
+  void rec_draw();                    // emit_pending() of a recorded pass
+  void rec_clear(int m, const float* data, const std::uint32_t* rect);
+  void rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph, const std::int32_t* params);
+  bool interp_make(Record& cur, Record& prev);  // matching and the replay; false: not made
+  void interp_targets();              // the private EFB at the current scale
+  const wgpu::BindGroup& interp_bind(const RecBind& b);
+  wgpu::Buffer interp_buffer(wgpu::Buffer& buf, std::uint64_t& cap, std::uint64_t need, wgpu::BufferUsage usage,
+                             const char* label);
+  // Frame record or not: whether this pass, these draws are being recorded.
+  bool rec_on() const { return recording_; }
+
+  bool interp_on_ = false;            // asked for
+  bool recording_ = false;            // a record is open (from an XFB copy on)
+  Record rec_[2];
+  int rec_cur_ = 0;                   // rec_[rec_cur_] is being recorded, the other is the frame before
+  std::uint64_t rec_ids_ = 0;
+  std::uint64_t fields_ = 0;          // VI fields so far (scan_field)
+  InterpStats istats_;
+  // Private targets: the EFB (color, depth) at iefb_scale_, the copies redone by the
+  // replay (by the live copy view they stand for), the in-between pictures.
+  wgpu::Texture iefb_color_, iefb_depth_;
+  wgpu::TextureView iefb_color_view_, iefb_depth_view_;
+  std::uint32_t iefb_scale_ = 0;
+  struct PrivCopy {
+    wgpu::TextureView live;  // keeps the key's view alive
+    wgpu::Texture tex;
+    wgpu::TextureView view;
+    std::uint32_t pw = 0, ph = 0;
+    std::uint64_t used = 0;  // the replay that last used it
+  };
+  std::map<const void*, PrivCopy> priv_copies_;
+  std::unordered_map<const void*, wgpu::TextureView> subst_;  // this replay: live copy view -> private view
+  std::map<std::array<const void*, 16>, BindEntry> ibind_;    // substitute bind groups
+  wgpu::Buffer ivbuf_, iibuf_, iubuf_, iclear_buf_, iconv_buf_;
+  std::uint64_t ivcap_ = 0, iicap_ = 0, iucap_ = 0, iclear_cap_ = 0, iconv_cap_ = 0;
+  wgpu::BindGroup iuniform_group_;
+  std::uint64_t replays_ = 0;
+  struct Between {
+    Frame frame;
+    std::uint64_t from = 0, to = 0;
+  };
+  Between between_[3];
+  int between_next_ = 0;
+  Frame between_mixed_;
+  std::uint64_t between_mixed_key_ = ~0ull;
+  // Matching scratch (reused).
+  struct Pair {
+    std::uint32_t cur, prev;
+  };
+  std::vector<Pair> near_;
+  // An identity of the frame before: its draws there (a chain in order), this frame's.
+  struct Slot {
+    std::uint64_t ident = 0;
+    std::uint32_t phead = ~0u, ptail = ~0u, cursor = ~0u, np = 0;
+    std::uint32_t chead = ~0u, ctail = ~0u, nc = 0;
+    std::uint8_t far = 0;
+  };
+  std::vector<Slot> slots_;
+  std::vector<std::uint32_t> pnext_, cnext_, match_, far_;
+  std::vector<std::uint8_t> taken_;
 };
 
 }  // namespace mvp::gfx

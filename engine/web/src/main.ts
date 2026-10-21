@@ -34,6 +34,8 @@
 //                   threads spin N - 1 times their working time; host timing only)
 //   gpview=0        the renderer reads guest memory as it is, without the data-cache model (Q1 comparisons)
 //   scale=1|2|3     the internal resolution, instead of the Picture setting (Q1)
+//   interp=0|1      V3: in-between frames off (60 fps) or on (120 fps), instead of the Motion setting
+//   fakeHz=N        V3 (development): the picture presenter steps at N Hz from a timer, as on an N Hz display
 //   gpuLoad=N       development (Q5): extra GPU work per present, in proportion to the picture's pixels
 //                   (N passes), to try the Picture setting's Auto on a GPU that cannot keep up
 //   gpuTimer=0      development (Q5): the render passes are not timed on the GPU (Auto then goes by size alone)
@@ -60,6 +62,7 @@ import { PackPanel, type PacksState } from './packs.js';
 import { States, describeNeeds, fetchNamedState, type GameSetup, type StateHeader } from './states.js';
 import { MemoryCards } from './card.js';
 import { Presenter, type DisplayStats } from './presenter.js';
+import { MotionAuto, motionSetting, type MotionSetting } from './motion.js';
 import type { CacheReport, DiscSource, FromWorker, NetStatus, Pad, PaceState, RunOptions, Status, ToWorker } from './protocol.js';
 
 // The server's image in this browser's storage (P1): found there, or downloaded now.
@@ -107,6 +110,10 @@ interface PageState {
   pace?: PaceState;   // Q5: the pace (pacer.ts), as the Worker reports it
   overlay?: { shown: boolean; local: StatsSummary; peer: StatsSummary | null; text: string };  // Q5 (netstats.ts)
   display?: () => DisplayStats;  // V1: what reached the screen (presenter.ts), threaded engine only
+  // V3: the Motion setting, whether in-between frames are on, and Auto's reason and numbers (motion.ts)
+  motion?: { setting: MotionSetting; on: boolean; reason: string; last: unknown; changes: unknown[] };
+  // Development (V3): the next `n` pictures the render thread sends, as PNG data URLs (browser_check --grab).
+  grab?: (n: number) => Promise<{ between: boolean; url: string }[]>;
   hint?: { shown: boolean; text: string; dismissed: boolean };  // Q5: the note for a machine that cannot keep up
   autoScale?: { ceiling: number; steps: unknown[]; lastBusy: number | null };  // Q5: the Picture's Auto and the GPU
   card?: { inserted: 'kept' | 'new' | 'none'; writes: number; sent: number };  // the memory card (card.ts)
@@ -128,6 +135,7 @@ const fullscreenBtn = $<HTMLButtonElement>('fullscreen');
 const soundBtn = $<HTMLButtonElement>('sound');
 const pauseBtn = $<HTMLButtonElement>('pause');
 const pictureSel = document.getElementById('picture') as HTMLSelectElement | null;
+const motionSel = document.getElementById('motion') as HTMLSelectElement | null;
 const startBox = $<HTMLElement>('start-box');
 const streamBox = $<HTMLElement>('stream-box');
 const playBtn = $<HTMLButtonElement>('play');
@@ -306,6 +314,7 @@ function updateHint(): void {
 
 let worker: Worker | null = null;
 let presenter: Presenter | null = null;  // V1: the threaded engine's pictures (presenter.ts)
+let presenterBase: 'now' | 'queue' = 'now';  // V3: its mode while in-between frames are off
 let pendingAudioPort: MessagePort | null = null;
 // Controllers and keyboard (Q3): ports 0 and 1 are players 1 and 2 (online: only this page's player, port 0).
 const input = new HostInput(window, (pad: Pad, port: number) => {
@@ -367,7 +376,10 @@ function onWorker(msg: FromWorker): void {
       state.phases[msg.name] = msg.ms;
       // V1: the single-threaded engine (no render thread) sends its pictures unevenly: queue them.
       if (msg.name === 'engine' && presenter && !params.has('present') &&
-          (msg.detail as { threads?: boolean } | undefined)?.threads === false) presenter.setMode('queue');
+          (msg.detail as { threads?: boolean } | undefined)?.threads === false) {
+        presenterBase = 'queue';
+        presenter.setMode('queue');
+      }
       if (msg.name === 'translate') state.translate = msg.detail;
       showPhases();
       break;
@@ -425,6 +437,7 @@ function onWorker(msg: FromWorker): void {
         `${w.fields} fields in ${(w.wallMs / 1000).toFixed(2)} s (${(w.fields / (w.wallMs / 1000)).toFixed(1)}/s), ` +
         `${perField.toFixed(2)} ms per field | draws ${s.draws ?? 0}, GPU errors ${s.gpu_errors ?? 0}` +
         (s.scale ? `, picture ${s.scale}x` : '') +
+        (s.interp?.on ? `, motion 120 (${s.interp.shown} in-betweens shown, ${s.interp.made} made)` : '') +
         (a ? ` | sound ${(a.fill / a.inRate * 1000).toFixed(0)} ms buffered, ${a.underruns} underruns` : '') +
         (s.net ? ` | server reads ${s.net.requests} (+${s.net.prefetched} ahead), waited ${s.net.blocked_ms.toFixed(0)} ms` : '') +
         (s.io ? ` | disc reads ${s.io.reads}, ${s.io.ms.toFixed(0)} ms in all, longest ${s.io.max_ms.toFixed(0)} ms` : '');
@@ -494,6 +507,8 @@ function startEngine(disc: DiscSource): void {
   worker.onerror = (ev) => showError('worker', ev.message || 'the engine Worker failed to start (out of memory?)');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const width = Math.round(canvas.clientWidth * dpr), height = Math.round(canvas.clientHeight * dpr);
+  options.interp = motionWanted();  // V3: the Motion setting (Auto starts off: the display is not measured yet)
+  interpOn = options.interp;
   let off: OffscreenCanvas | null = null;
   let frames: MessagePort | undefined;
   if (vsync && options.render && options.threads !== false && params.get('bitmaps') !== '0') {
@@ -510,10 +525,34 @@ function startEngine(disc: DiscSource): void {
       const chan = new MessageChannel();
       presenter = new Presenter(ctx, params.get('present') === 'queue' ? 'queue' : 'now');
       options.presentQueue = presenter.s.mode === 'queue';
+      presenterBase = presenter.s.mode;
+      // V3: with in-between frames the pictures are shown from the queue, one per refresh.
+      if (options.interp) presenter.setMode('queue');
       const p = presenter;
-      chan.port1.onmessage = (ev: MessageEvent<ImageBitmap>) => p.push(ev.data);
+      chan.port1.onmessage = (ev: MessageEvent<ImageBitmap | { bitmap: ImageBitmap; between: boolean }>) => {
+        const d = ev.data;
+        if (d instanceof ImageBitmap) p.push(d);
+        else p.push(d.bitmap, d.between);  // V3: an in-between picture
+      };
       frames = chan.port2;
       state.display = () => p.stats();
+      state.grab = (n) => new Promise((done) => {  // V3 (development): copies of the next n pictures
+        const got: { between: boolean; canvas: OffscreenCanvas }[] = [];
+        p.onPicture = (bmp, between) => {
+          const c = new OffscreenCanvas(bmp.width, bmp.height);
+          c.getContext('2d')!.drawImage(bmp, 0, 0);
+          got.push({ between, canvas: c });
+          if (got.length < n) return;
+          p.onPicture = null;
+          void Promise.all(got.map(async (g) => {
+            const blob = await g.canvas.convertToBlob({ type: 'image/png' });
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            let bin = '';
+            for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+            return { between: g.between, url: 'data:image/png;base64,' + btoa(bin) };
+          })).then(done);
+        };
+      });
     }
   } else if (hasOffscreen && options.render) {
     canvas.width = width;
@@ -635,6 +674,48 @@ if (pictureSel) {
       // storage blocked: this visit only
     }
     applyPicture();
+    canvas.focus();
+  });
+}
+
+// ---- the motion (V3): in-between frames, for displays at 120 Hz (motion.ts) ----
+const MOTION_KEY = 'mvp.motion.v1';
+const motionAuto = new MotionAuto();
+let interpOn = false;  // what the engine was told
+function currentMotion(): MotionSetting {
+  let stored: string | null = null;
+  try {
+    stored = window.localStorage.getItem(MOTION_KEY);
+  } catch {
+    // storage blocked: the default
+  }
+  return motionSetting(params.get('interp'), stored);
+}
+function motionWanted(): boolean {
+  const m = currentMotion();
+  return m === '120' ? true : m === '60' ? false : motionAuto.on;
+}
+function applyMotion(): void {
+  const on = motionWanted();
+  const setting = currentMotion();
+  state.motion = { setting, on, reason: setting === 'auto' ? motionAuto.reason : 'the setting', last: motionAuto.last,
+                   changes: motionAuto.changes };
+  if (!worker || on === interpOn) return;
+  interpOn = on;
+  send({ type: 'interp', on });
+  presenter?.setMode(on ? 'queue' : presenterBase);
+  log(`motion: ${on ? '120 fps (in-between frames)' : '60 fps'} (${state.motion.reason})`);
+}
+if (motionSel) {
+  motionSel.value = currentMotion();
+  if (params.has('interp')) motionSel.disabled = true;
+  motionSel.addEventListener('change', () => {
+    try {
+      window.localStorage.setItem(MOTION_KEY, motionSel.value);
+    } catch {
+      // storage blocked: this visit only
+    }
+    applyMotion();
     canvas.focus();
   });
 }
@@ -801,6 +882,15 @@ function onStats(s: Status, w: { fields: number; ms: number; wallMs: number; cap
   }
   if (!overlayEl.hidden) renderOverlay();
   updateSlowHint(local);
+  // V3: the Motion setting's Auto, from the display's rate and the machine's room to spare.
+  if (currentMotion() === 'auto') {
+    motionAuto.update({
+      now, hz: presenter?.s.hz ?? 0, threaded: !!s.threaded, fields: s.fields, busyMs: s.render?.busy_ms ?? null,
+      gpu: s.gpu?.timed ? { n: s.gpu.n, ms: s.gpu.ms, dropped: s.gpu.dropped } : null,
+      speed: w.wallMs > 0 ? w.fields / (w.wallMs / 1000) / 59.94 : null, paused: state.paused,
+    });
+  }
+  applyMotion();
   // Auto and the GPU: a ceiling for the picture's scale while the GPU cannot keep up.
   // Only with the GPU's time from timestamp queries, and only for the Auto setting.
   if (s.gpu?.timed && s.scale && pictureSetting() === 'auto' && !state.paused) {
@@ -886,13 +976,36 @@ window.addEventListener('keydown', (e) => {
 const vsync = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated === true &&
               typeof SharedArrayBuffer !== 'undefined' ? new Int32Array(new SharedArrayBuffer(4)) : null;
 
-// V1: the display's refresh rate as this page sees it (its animation frames), smoothed.
-let lastTickAt = 0, refreshHz = 0;
+// V1: the display's refresh rate as this page sees it (its animation frames): the mean interval,
+// smoothed (a mean of 1000/dt would be biased by uneven intervals).
+let lastTickAt = 0, tickDt = 0, refreshHz = 0;
+
+// V3 (development): `fakeHz=N` drives the presenter from a timer at N Hz instead of the animation
+// frames, as a display at N Hz would (the stats of what reaches the screen at 120 Hz on a 60 Hz
+// monitor; the composited screen itself still changes at the monitor's rate).
+const fakeHz = Number(params.get('fakeHz') ?? 0) || 0;
+if (fakeHz > 0) {
+  const period = 1000 / fakeHz;
+  let next = performance.now() + period;
+  const step = (): void => {
+    const now = performance.now();
+    if (now >= next) {
+      presenter?.tick(now);
+      next += period;
+      if (now - next > 4 * period) next = now + period;  // a long stall: start the schedule over
+    }
+    setTimeout(step, Math.max(0, next - performance.now() - 0.5));
+  };
+  setTimeout(step, period);
+}
 
 function tick(now: number): void {
-  presenter?.tick(now);  // V1: first, so the picture goes with this refresh
+  if (!fakeHz) presenter?.tick(now);  // V1: first, so the picture goes with this refresh
   const dt = now - lastTickAt;
-  if (lastTickAt > 0 && dt > 2 && dt < 100 && !document.hidden) refreshHz += 0.05 * (1000 / dt - refreshHz);
+  if (lastTickAt > 0 && dt > 2 && dt < 100 && !document.hidden) {
+    tickDt = tickDt ? tickDt + 0.05 * (dt - tickDt) : dt;
+    refreshHz = 1000 / tickDt;
+  }
   lastTickAt = now;
   input.poll();
   if (!startBox.hidden && !input.capture && input.manager.confirmPressed()) playBtn.click();  // "press A to play" with a controller

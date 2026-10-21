@@ -110,6 +110,7 @@ enum : u32 {
   kViewImport,  // save states: {pointer, length} (Ref): the GX processor's state (the emulation waits until it is done)
   kViewSave,    // V2, gameplay mods' timeline: u32 slot: the GX processor's state saved with that snapshot slot
   kViewLoad,    // V2: u32 slot: ... and restored from it (textures and the GP's snapshots start over)
+  kInterp,      // V3: u32 on: in-between frames (render_side.h); while on, every present is shown at once
 };
 
 constexpr u32 kRingBytes = 16u << 20;
@@ -166,6 +167,7 @@ struct Shared {
   RenderSide side;
   bool have_canvas = false, gpu_done = false;
   bool vsync = false;       // present once per display refresh (the page's count), else after each batch
+  bool interp = false;      // V3: in-between frames: every present is shown at once (the page queues the pictures)
   int shown_at = -1;        // the refresh count at the last present
   bool frame_due = false;   // a batch ended since the last present
   u64 due_polls = 0;
@@ -525,7 +527,7 @@ void handle(const gfx::RenderRing::Record& r) {
       return;
     }
     case kPresent: {
-      if (!S->vsync) {
+      if (!S->vsync || S->interp) {
         // V1: the page shows pictures from a queue on its own refreshes (presenter.ts), so
         // each present is shown here and now: none replaces another, and the picture is
         // the one at this point of the stream (the next field's copy has not run yet).
@@ -619,6 +621,14 @@ void handle(const gfx::RenderRing::Record& r) {
       u32 slot;
       std::memcpy(&slot, r.data, sizeof slot);
       S->side.load_view(static_cast<int>(slot));
+      return;
+    }
+    case kInterp: {  // V3
+      u32 on;
+      std::memcpy(&on, r.data, sizeof on);
+      S->interp = on != 0;
+      S->side.set_interp(on != 0);
+      if (S->interp && S->frame_due) show();  // a frame held for the refresh count: shown now, as the next ones
       return;
     }
     case kViewExport: {
@@ -1099,6 +1109,11 @@ void render_scale(int scale) {
 
 void render_gpu_load(int passes) {
   put(kGpuLoad, static_cast<u32>(passes < 0 ? 0 : passes));
+  publish_and_kick();
+}
+
+void render_interp(bool on) {
+  put(kInterp, u32{on ? 1u : 0u});
   publish_and_kick();
 }
 

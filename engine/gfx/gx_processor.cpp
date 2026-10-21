@@ -36,6 +36,13 @@ inline u32 color_size(u32 fmt) {
 
 inline u32 index_size(u32 type) { return type == 2 ? 1u : type == 3 ? 2u : 0u; }
 
+// V3: one word into a geometry identity (DrawCall::ident).
+inline std::uint64_t ident_mix(std::uint64_t h, std::uint64_t v) {
+  h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+  h *= 0xFF51AFD7ED558CCDull;
+  return h ^ (h >> 29);
+}
+
 inline float read_comp(const u8* p, u32 fmt, float scale) {
   switch (fmt) {
     case kU8: return static_cast<float>(p[0]) * scale;
@@ -1006,6 +1013,32 @@ void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
     ++stats_.snapshots;
   }
   d.state = state_serial_;
+  // V3: the geometry's identity across frames (in-between frames): the format, the
+  // count, where its indexed attributes' arrays are, and its first vertex as sent.
+  d.ident = 0;
+  if (identify_) {
+    std::uint64_t h = ident_mix(op, count);
+    h = ident_mix(h, std::uint64_t(vcd_lo_) << 32 | vcd_hi_);
+    h = ident_mix(h, std::uint64_t(vat_a_[fmt]) << 32 | vat_b_[fmt]);
+    h = ident_mix(h, vat_c_[fmt]);
+    auto arr = [&](const VertexFormat::Attr& a, int k) {
+      if (a.type >= 2) h = ident_mix(h, std::uint64_t(array_base_[static_cast<std::size_t>(k)]) << 8 | static_cast<u32>(k));
+    };
+    arr(vf.pos, 0);
+    arr(vf.nrm, 1);
+    arr(vf.color[0], 2);
+    arr(vf.color[1], 3);
+    for (int k = 0; k < 8; ++k) arr(vf.tex[k], 4 + k);
+    u32 k = 0;
+    for (; k + 8 <= vsize; k += 8) {
+      std::uint64_t w;
+      std::memcpy(&w, data + k, 8);
+      h = ident_mix(h, w);
+    }
+    std::uint64_t tail = 0;
+    for (u32 j = 0; k + j < vsize; ++j) tail |= std::uint64_t(data[k + j]) << (8 * j);
+    d.ident = ident_mix(h, tail) | 1u;  // never 0
+  }
   std::vector<u32>& ix = d.index;
   ix.clear();
   auto tri = [&](u32 a, u32 b, u32 c) {

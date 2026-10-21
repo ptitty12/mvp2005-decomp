@@ -31,6 +31,8 @@
 //   --fast     unpaced (as fast as possible); default paced to 59.94 fields/s
 //   --shots    VI fields at which to screenshot the canvas (approximately: the
 //              page reports progress twice a second)
+//   --grab     F:N,... (V3): from VI field F, the next N pictures the render thread sends
+//              (in-between pictures too), as PNGs (game-derived: keep them under build/)
 //   --keys     live keyboard input: press KEY (a KeyboardEvent key name, e.g.
 //              Enter, x, ArrowDown; KEY+KEY holds several together, e.g. q+e+Space for the
 //              ABS challenge) for 150 ms (--hold MS) once the run reaches field F
@@ -187,6 +189,10 @@ const packPaths = opt('--packs', '').split(',').filter(Boolean).map((p) => resol
 const serverPacks = opt('--server-packs', '').split(',').filter(Boolean);
 const packsDir = opt('--packs-dir', '');
 const shots = opt('--shots', '').split(',').filter(Boolean).map(Number).sort((a, b) => a - b);
+// V3: --grab F:N,...: from field F, the next N pictures the render thread sends (in-between pictures
+// included, threaded engine with ImageBitmaps), as OUT/LABEL-rR-grab-F-K-{between|frame}.png.
+const grabs = opt('--grab', '').split(',').filter(Boolean).map((g) => g.split(':').map(Number))
+  .sort((a, b) => a[0] - b[0]);
 const keys = opt('--keys', '').split(',').filter(Boolean).map((k) => {
   const [f, key] = k.split(':');
   return { field: Number(f), key };
@@ -453,14 +459,15 @@ async function runOnce(context, run) {
              paused: s.paused, pad: s.pad, probe: s.audioProbe(), discTrace: s.discTrace,
              packs: s.packs?.mounted ?? null, ioLog: s.ioLog, digest: s.digest,
              hint: s.hint ?? null, autoScale: s.autoScale ?? null,
-             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time|^mvp: /.test(l)).slice(0, 20),
+             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time|^mvp: |^motion: /.test(l)).slice(0, 20),
              stateLog: s.log.filter((l) => /^state: /.test(l)).slice(0, 40),
              card: s.card ?? null, cardLog: s.log.filter((l) => /^card: /.test(l)).slice(0, 20),
-             display: s.display ? s.display() : null };  // V1: what reached the screen (presenter.ts)
+             display: s.display ? s.display() : null,  // V1: what reached the screen (presenter.ts)
+             motion: s.motion ?? null };  // V3: the Motion setting and Auto's decision
   });
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
-  let lastWindow = '', state = await mvp(), shotIndex = 0, keyIndex = 0, padIndex = 0, hidden = null;
+  let lastWindow = '', state = await mvp(), shotIndex = 0, keyIndex = 0, padIndex = 0, hidden = null, grabIndex = 0;
   let actionIndex = 0;
   summary.actions = [];
   summary.keysPressed = [];
@@ -624,6 +631,21 @@ async function runOnce(context, run) {
                  paused: mid.paused, audio: mid.audio?.state };
       console.log(`hidden for ${hidden.ms} ms at field ${before}: ${hidden.fieldsWhileHidden} fields ran meanwhile`);
     }
+    while (grabIndex < grabs.length && field >= grabs[grabIndex][0]) {  // V3
+      const [at, n] = grabs[grabIndex++];
+      const pics = await page.evaluate((k) => window.mvp.grab ? window.mvp.grab(k) : null, n);
+      if (!pics) {
+        console.log(`grab at field ${field}: no pictures (not the threaded engine with ImageBitmaps)`);
+        continue;
+      }
+      summary.grabs ??= [];
+      summary.grabs.push({ at, field, kinds: pics.map((p) => (p.between ? 'between' : 'frame')) });
+      pics.forEach((p, k) => {
+        const path = join(out, `${label}-r${run}-grab-${at}-${String(k).padStart(3, '0')}-${p.between ? 'between' : 'frame'}.png`);
+        writeFileSync(path, Buffer.from(p.url.slice(p.url.indexOf(',') + 1), 'base64'));
+      });
+      console.log(`grab at field ${field}: ${pics.map((p) => (p.between ? 'B' : 'F')).join('')}`);
+    }
     while (shotIndex < shots.length && field >= shots[shotIndex]) {
       const path = join(out, `${label}-r${run}-field-${String(field).padStart(5, '0')}.png`);
       await page.locator('#screen').screenshot({ path });
@@ -632,7 +654,7 @@ async function runOnce(context, run) {
     }
     const wantStop = fields || frames;
     if (wantStop ? state.stopped
-                 : (state.firstFrameMs !== undefined && shotIndex >= shots.length && keyIndex >= keys.length &&
+                 : (state.firstFrameMs !== undefined && shotIndex >= shots.length && grabIndex >= grabs.length && keyIndex >= keys.length &&
                     padIndex >= pads.length && actionIndex >= actions.length && (!hide || hidden) && (!audio || audioSamples.nonsilent > 0) &&
                     (!screencast || summary.screencast) && (!traceAt || summary.trace))) break;
     await page.waitForTimeout(200);

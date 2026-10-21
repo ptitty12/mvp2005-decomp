@@ -99,7 +99,10 @@ Everything below is run by agents; the owner never runs commands.
    `resize:WxH`, `picture:auto|1|2|3`, `fullscreen` on and off, `stats`) and
    `--compare PNG` with `--compare-region x0,y0,x1,y1` (console pixels, default
    the top-left 128 x 128 block) and `--compare-max N` (the final picture against
-   another run's, failing above N; the scale-change check below);
+   another run's, failing above N; the scale-change check below); V3 adds
+   `--grab F:N,...` (from field F, the next N pictures the render thread sends,
+   in-between pictures included, as PNGs; game-derived, so under `build/` or a scratch
+   folder) and the summary's `display.between` and `motion`;
    `netplay_check.mjs` (Q5) takes `--params1/2`, `--host-slow1/2 N[@F]` (one
    player's machine slower), `--audio`, `--trace-present`, `--fast-until F`,
    `--measure-from/to`, `--separate` (two browser instances, each with its own GPU
@@ -518,6 +521,26 @@ Everything below is run by agents; the owner never runs commands.
   Q7 the game's top-left 128 x 128 block (saved and restored by the game in every
   frame of play), its shadows and the video board stayed frozen after any mid-game
   change of scale (`docs/engine/Q7_LOG.md`).
+- **Motion: in-between frames** (V3; `gfx/wgpu/interp.cpp`, `src/motion.ts`,
+  `docs/engine/V3_LOG.md`). The page's **Motion** setting (next to Picture): Auto,
+  120 fps (in-between frames), 60 fps, kept in `localStorage["mvp.motion.v1"]`;
+  `interp=0|1` in the URL overrides it. With in-between frames on, the renderer
+  records each frame (its passes, clears, EFB copies, and per draw the vertex range and
+  the geometry's identity, `DrawCall::ident`) and, at the XFB copy of a frame that
+  follows the one before by exactly one field, replays it into private targets with
+  every matched vertex at the mean of its two clip-space positions: a picture between
+  the two frames, every object halfway. The render thread presents that picture first
+  and then the frame, and the page shows them from its queue (`src/presenter.ts`), one
+  per refresh: 120 pictures a second on a 120 Hz display. No in-between on a scene
+  cut (under 60 % of the vertices matched, or a mean move of the 3D vertices over a
+  tenth of the screen's width), at 30 fps or after a gap, nor in the
+  single-threaded engine. Presentation only: the frames the game draws, the renderer
+  digests and guest state are the same with it on and off, online games included.
+  Auto turns it on only in the threaded engine, on a display measured at 100 Hz or
+  more, with room to spare (render thread at most 8.5 ms per field, GPU at most 40 %
+  busy, the game at full speed), and off again when that stops (13.5 ms, 80 %,
+  0.95x, or the display under 90 Hz). `fakeHz=N` (development) steps the page's
+  presenter at N Hz from a timer, to measure the 120 Hz queue on a 60 Hz monitor.
 - **The statistics overlay** (Q5; `src/netstats.ts`). The **Stats** button in the
   toolbar or the backquote key (left of 1; refused as a game binding) shows,
   over the picture, live numbers for this computer and, online, for the other

@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 
 #include "common/bytes.h"
@@ -557,6 +558,308 @@ TEST_CASE("an EFB copy redone at a new scale is the one sampled (Q7)") {
     drawn_at = sc.r.scale();  // the next frame's
   }
   CHECK(sc.r.stats().copy_textures_used == 6);
+  CHECK(gpu().errors() == 0);
+}
+
+// ---- V3: in-between frames ----
+//
+// Frames end with an XFB copy; scan_field() stands for the VI field between them.
+// The geometry keeps its identity when only its matrix changes (the vertex bytes
+// stay the same), as the game's models do.
+namespace {
+
+struct InterpScene : Scene {
+  explicit InterpScene(u32 scale = 1, bool on = true) : Scene(scale) {
+    p.set_identify(on);
+    r.set_interp(on);
+    // The scan-out mix (P1) takes a pixel that is background, then covered, then
+    // background again over three fields for a 30 Hz alternation: these frames
+    // jump that far. Its own case is below.
+    r.scan_mix = false;
+    Stream s = base();
+    copy_xfb(s, 0x000000FF);  // the first frame starts here
+    s.run(p);
+    r.scan_field(0x80000);
+  }
+  // A frame: position matrix 0 translated by (tx, 0), then `body`, then the XFB
+  // copy (clearing to black) and `fields` VI fields. Returns the frame's serial.
+  template <class F>
+  std::uint64_t frame(float tx, F&& body, int fields = 1) {
+    Stream s = base();
+    s.xff(0x000, {1, 0, 0, tx, 0, 1, 0, 0, 0, 0, 1, 0});
+    body(s);
+    copy_xfb(s, 0x000000FF);
+    s.run(p);
+    const std::uint64_t serial = r.xfb(0x80000)->serial;
+    for (int k = 0; k < fields; ++k) r.scan_field(0x80000);
+    return serial;
+  }
+};
+
+void red_quad(Stream& s) { quad(s, 100, 100, 200, 200, 0xFF0000FF); }
+
+// A perspective projection (w = -z) and position matrix 0 at depth z = -2: one
+// view-space unit in x is 160 pixels.
+void persp(Stream& s, float tx) {
+  s.xff(0x000, {1, 0, 0, tx, 0, 1, 0, 0, 0, 0, 1, -2});
+  s.xff(0x1020, {1, 0, 1, 0, 0, 0});
+  s.xf(0x1026, {0});
+  s.xff(0x101A, {320.0f, -240.0f, 16777215.0f, 342.0f + 320, 342.0f + 240, 8388607.5f});
+}
+void persp_quad(Stream& s) { quad(s, -0.5f, -0.5f, 0.5f, 0.5f, 0x00FF00FF); }  // window x 240-400
+
+}  // namespace
+
+TEST_CASE("in-between frames: a quad that moves between two frames is drawn halfway (V3)") {
+  InterpScene sc;
+  const std::uint64_t a = sc.frame(0, red_quad);    // x 100-200
+  const std::uint64_t b = sc.frame(100, red_quad);  // x 200-300
+  const Renderer::Frame* ib = sc.r.between(a, b);
+  REQUIRE(ib != nullptr);
+  CHECK(sc.r.between(b, a) == nullptr);
+  CHECK(ib->width == 640);
+  CHECK(ib->height == 480);
+  auto img = sc.r.read_frame(*ib);
+  CHECK(near(px(img, 640, 145, 150), 0, 0, 0));    // halfway: x 150-250
+  CHECK(near(px(img, 640, 155, 150), 255, 0, 0));
+  CHECK(near(px(img, 640, 245, 150), 255, 0, 0));
+  CHECK(near(px(img, 640, 255, 150), 0, 0, 0));
+  auto live = sc.r.read_frame(*sc.r.xfb(0x80000));  // the frame itself, as drawn
+  CHECK(near(px(live, 640, 195, 150), 0, 0, 0));
+  CHECK(near(px(live, 640, 205, 150), 255, 0, 0));
+  CHECK(near(px(live, 640, 295, 150), 255, 0, 0));
+  const Renderer::InterpStats& st = sc.r.interp_stats();
+  CHECK(st.made == 1);
+  CHECK(st.last_match == doctest::Approx(1.0));
+  // A 3D quad, perspective: halfway on screen too.
+  const std::uint64_t c = sc.frame(0, [](Stream& s) { persp(s, 0); persp_quad(s); });
+  const std::uint64_t d = sc.frame(0, [](Stream& s) { persp(s, 0.25f); persp_quad(s); });  // 40 pixels right
+  ib = sc.r.between(c, d);
+  REQUIRE(ib != nullptr);
+  img = sc.r.read_frame(*ib);
+  CHECK(near(px(img, 640, 255, 240), 0, 0, 0));    // halfway: x 260-420
+  CHECK(near(px(img, 640, 265, 240), 0, 255, 0));
+  CHECK(near(px(img, 640, 415, 240), 0, 255, 0));
+  CHECK(near(px(img, 640, 425, 240), 0, 0, 0));
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("in-between frames: the same object drawn in another order pairs with itself (V3)") {
+  InterpScene sc;
+  // Two copies of one quad (one identity), at x 100 and x 400; the second frame draws
+  // them the other way round, each 20 pixels further right.
+  auto two = [](float left, float right, bool swap) {
+    return [=](Stream& s) {
+      const float xs[2] = {swap ? right : left, swap ? left : right};
+      for (float x : xs) {
+        s.xff(0x000, {1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0});
+        quad(s, 0, 100, 60, 160, 0xFF0000FF);
+      }
+    };
+  };
+  const std::uint64_t a = sc.frame(0, two(100, 400, false));
+  const std::uint64_t b = sc.frame(0, two(120, 420, true));
+  const Renderer::Frame* ib = sc.r.between(a, b);
+  REQUIRE(ib != nullptr);
+  CHECK(sc.r.interp_stats().reordered == 2);
+  auto img = sc.r.read_frame(*ib);
+  CHECK(near(px(img, 640, 105, 130), 0, 0, 0));    // halfway: x 110-170 and 410-470
+  CHECK(near(px(img, 640, 115, 130), 255, 0, 0));
+  CHECK(near(px(img, 640, 165, 130), 255, 0, 0));
+  CHECK(near(px(img, 640, 175, 130), 0, 0, 0));
+  CHECK(near(px(img, 640, 405, 130), 0, 0, 0));
+  CHECK(near(px(img, 640, 415, 130), 255, 0, 0));
+  CHECK(near(px(img, 640, 250, 130), 0, 0, 0));    // nothing between them
+  // Many copies that all move together keep their order (a crowd in a camera pan).
+  auto row = [](float dx) {
+    return [=](Stream& s) {
+      for (int k = 0; k < 8; ++k) {
+        s.xff(0x000, {1, 0, 0, 40.0f * k + dx, 0, 1, 0, 0, 0, 0, 1, 0});
+        quad(s, 0, 300, 20, 320, 0x00FF00FF);
+      }
+    };
+  };
+  const std::uint64_t c = sc.frame(0, row(0));
+  const std::uint64_t d = sc.frame(0, row(36));  // nearer to the next one's old place than to its own
+  ib = sc.r.between(c, d);
+  REQUIRE(ib != nullptr);
+  CHECK(sc.r.interp_stats().reordered == 2);
+  img = sc.r.read_frame(*ib);
+  CHECK(near(px(img, 640, 17, 310), 0, 0, 0));     // halfway: x 18-38, 58-78, ...
+  CHECK(near(px(img, 640, 20, 310), 0, 255, 0));
+  CHECK(near(px(img, 640, 60, 310), 0, 255, 0));
+  CHECK(near(px(img, 640, 45, 310), 0, 0, 0));
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("in-between frames: none on a cut, after a gap, or for new geometry (V3)") {
+  InterpScene sc;
+  const Renderer::InterpStats& st = sc.r.interp_stats();
+  std::uint64_t a = sc.frame(0, red_quad);
+  // Other geometry (other vertex bytes): nothing matches.
+  std::uint64_t cuts = st.cut_match;
+  std::uint64_t b = sc.frame(0, [](Stream& s) { quad(s, 300, 300, 400, 400, 0xFF0000FF); });
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.cut_match == cuts + 1);
+  CHECK(st.last_match == doctest::Approx(0.0));
+  // The same quad moved too far for one object (half the screen in a frame).
+  a = sc.frame(0, red_quad);
+  cuts = st.cut_match;
+  b = sc.frame(320, red_quad);
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.cut_match == cuts + 1);
+  // Frames two fields apart (the game at 30 frames a second): no in-between.
+  a = sc.frame(0, red_quad, 2);
+  const std::uint64_t gaps = st.gap;
+  b = sc.frame(10, red_quad);
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.gap == gaps + 1);
+  // A 3D scene that moved too far on average (a camera cut).
+  a = sc.frame(0, [](Stream& s) { persp(s, 0); persp_quad(s); });
+  b = sc.frame(0, [](Stream& s) { persp(s, 0.5f); persp_quad(s); });  // 0.25 of the screen's width
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.cut_shift == 1);
+  CHECK(st.last_shift == doctest::Approx(0.25).epsilon(0.01));
+  // Nothing moved (a menu, a pause): no in-between needed, the frame shows twice as long.
+  const std::uint64_t stills = st.still;
+  a = sc.frame(10, red_quad);  // (after the 3D scene: a cut)
+  b = sc.frame(10, red_quad);
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.still == stills + 1);
+  // And back to normal.
+  a = sc.frame(0, red_quad);
+  b = sc.frame(10, red_quad);
+  CHECK(sc.r.between(a, b) != nullptr);
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("in-between frames: 2D edges at 2x still cover whole console pixels (V3, Q8)") {
+  InterpScene sc(2);
+  auto q = [](Stream& s) { quad(s, 100.6f, 55.44f, 200.44f, 101.376f, 0xFF0000FF); };
+  const std::uint64_t a = sc.frame(0, q);
+  const std::uint64_t b = sc.frame(51, q);  // halfway: x 126.1-225.94, console columns 126-225
+  const Renderer::Frame* ib = sc.r.between(a, b);
+  REQUIRE(ib != nullptr);
+  auto img = sc.r.read_frame(*ib);
+  const u32 w = 1280;
+  CHECK(near(px(img, w, 126 * 2, 80 * 2), 255, 0, 0));
+  CHECK(near(px(img, w, 125 * 2 + 1, 80 * 2), 0, 0, 0));
+  CHECK(near(px(img, w, 225 * 2 + 1, 80 * 2), 255, 0, 0));
+  CHECK(near(px(img, w, 226 * 2, 80 * 2), 0, 0, 0));
+  CHECK(near(px(img, w, 150 * 2, 55 * 2), 255, 0, 0));   // row 55, whole
+  CHECK(near(px(img, w, 150 * 2, 54 * 2 + 1), 0, 0, 0));
+  CHECK(gpu().errors() == 0);
+}
+
+namespace {
+
+// A frame with EFB copies: a 64 x 64 square of `rgba` at (0, 0) copied (RGBA8, with
+// a clear) to 0x60000, a quad at (300 + tx, 200) sampling that copy, then the square
+// redrawn magenta and copied there again (nothing samples the second copy).
+void copy_body(Stream& s, u32 rgba) {
+  s.xff(0x000, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});
+  quad(s, 0, 0, 64, 64, rgba);
+  s.bp(bp::kEfbTL, 0);
+  s.bp(bp::kEfbWH, 63u | 63u << 10);
+  s.bp(bp::kXfbAddr, 0x60000 >> 5);
+  s.bp(bp::kTriggerCopy, ((6u & 7) << 1 | 6u >> 3) << 3 | 1u << 11);
+}
+template <class Scn>
+std::uint64_t copy_frame(Scn& sc, float tx, u32 rgba) {
+  return sc.frame(0, [&](Stream& s) {
+    copy_body(s, rgba);
+    s.xff(0x000, {1, 0, 0, tx, 0, 1, 0, 0, 0, 0, 1, 0});
+    s.xf(xf::kNumTexGens, {1});
+    s.xf(xf::kTexGen, {5u << 7});
+    s.xff(60 * 4, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});
+    s.cp(cp::kMatIndexA, 60u << 6);
+    s.bp(bp::kGenMode, 1u | 1u << 4);
+    s.bp(bp::kTref, 1u << 6);
+    s.bp(bp::kTevColorEnv, color_env(kZeroC, kZeroC, kZeroC, kTexC));
+    s.bp(bp::tex_reg(bp::kTexImage0, 0), 63u | 63u << 10 | 6u << 20);
+    s.bp(bp::tex_reg(bp::kTexImage3, 0), 0x60000 >> 5);
+    for (int k = 0; k < 2; ++k) {
+      s.bp(static_cast<u8>(bp::kSuSSize + 2 * k), 63);
+      s.bp(static_cast<u8>(bp::kSuTSize + 2 * k), 63);
+    }
+    quad(s, 300, 200, 428, 328, 0xFFFFFFFF);
+    // The rasterized color again, the square in magenta, copied over the first copy.
+    s.xf(xf::kNumTexGens, {0});
+    s.bp(bp::kGenMode, 1u << 4);
+    s.bp(bp::kTref, 0u << 7);
+    s.bp(bp::kTevColorEnv, color_env(kZeroC, kZeroC, kZeroC, kRasC));
+    copy_body(s, 0xFF00FFFF);
+  });
+}
+
+}  // namespace
+
+TEST_CASE("in-between frames: EFB copies are redone privately, at their place in the frame (V3)") {
+  InterpScene sc;
+  const std::uint64_t a = copy_frame(sc, 0, 0x00FFFFFF);   // cyan
+  const std::uint64_t b = copy_frame(sc, 40, 0xFFFF00FF);  // yellow, 40 pixels right
+  auto live = sc.r.read_frame(*sc.r.xfb(0x80000));
+  CHECK(near(px(live, 640, 400, 260), 255, 255, 0));  // the frame samples its first copy
+  const Renderer::Frame* ib = sc.r.between(a, b);
+  REQUIRE(ib != nullptr);
+  auto img = sc.r.read_frame(*ib);
+  // Halfway (x 320-448), with what the first copy held at that point of the frame: yellow,
+  // not the live texture's magenta from the frame's last copy.
+  CHECK(near(px(img, 640, 315, 260), 0, 0, 0));
+  CHECK(near(px(img, 640, 325, 260), 255, 255, 0));
+  CHECK(near(px(img, 640, 440, 260), 255, 255, 0));
+  CHECK(near(px(img, 640, 455, 260), 0, 0, 0));
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("in-between frames: mixed like the scan-out where the game alternates pictures (V3, P1)") {
+  InterpScene sc;
+  sc.r.scan_mix = true;
+  // A slowly moving quad, two still ones, and a white square drawn in every other frame
+  // (a 30 Hz alternation, which the scan-out shows as a steady mix of both).
+  auto body = [](bool blink) {
+    return [blink](Stream& s) {
+      red_quad(s);
+      s.xff(0x000, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});
+      quad(s, 20, 300, 60, 340, 0x0000FFFF);
+      quad(s, 80, 300, 120, 340, 0x0000FFFF);
+      if (blink) quad(s, 400, 300, 440, 340, 0xFFFFFFFF);
+    };
+  };
+  sc.frame(0, body(true));
+  sc.frame(2, body(false));
+  const std::uint64_t a = sc.frame(4, body(true));
+  const std::uint64_t b = sc.frame(6, body(false));
+  const Renderer::Frame* ib = sc.r.between(a, b);
+  REQUIRE(ib != nullptr);
+  auto img = sc.r.read_frame(*ib);
+  auto shown = sc.r.read_frame(*sc.r.scanout());
+  // The square is in neither the frame nor its in-between, but both show it mixed.
+  CHECK(near(px(shown, 640, 420, 320), 128, 128, 128, 3));
+  CHECK(near(px(img, 640, 420, 320), 128, 128, 128, 3));
+  CHECK(near(px(img, 640, 150, 150), 255, 0, 0));
+  CHECK(gpu().errors() == 0);
+}
+
+TEST_CASE("in-between frames: the frames themselves are the same with them on and off (V3)") {
+  InterpScene on(2, true), off(2, false);
+  const float steps[] = {0, 12, 30, 31, 80, 80, 20};
+  for (int k = 0; k < 7; ++k) {
+    CAPTURE(k);
+    copy_frame(on, steps[k], k & 1 ? 0x00FFFFFF : 0xFFFF00FF);
+    copy_frame(off, steps[k], k & 1 ? 0x00FFFFFF : 0xFFFF00FF);
+    auto x = on.r.read_frame(*on.r.xfb(0x80000));
+    auto y = off.r.read_frame(*off.r.xfb(0x80000));
+    REQUIRE(x.size() == y.size());
+    CHECK(std::memcmp(x.data(), y.data(), x.size()) == 0);
+    auto ex = on.r.read_efb();
+    auto ey = off.r.read_efb();
+    CHECK(std::memcmp(ex.data(), ey.data(), ex.size()) == 0);
+  }
+  CHECK(on.r.interp_stats().made >= 5);
+  CHECK(off.r.interp_stats().frames == 0);
+  CHECK(on.r.stats().draws == off.r.stats().draws);
+  CHECK(on.r.stats().encoded == off.r.stats().encoded);
   CHECK(gpu().errors() == 0);
 }
 

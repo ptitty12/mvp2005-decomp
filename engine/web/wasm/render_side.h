@@ -84,6 +84,11 @@ class RenderSide {
   // Q1: the internal resolution, 1-3 times the console's (gfx/wgpu/renderer.h);
   // it takes effect with the next frame the game starts.
   void set_scale(int s);
+  // V3: in-between frames (gfx/wgpu/renderer.h): each present of a new frame that has
+  // one shows it first (two pictures: the page shows one per display refresh). Only with
+  // the page's frame port (the threaded engine): elsewhere it stays off.
+  void set_interp(bool on);
+  bool interp() const { return interp_; }
 
   void set_trace(bool on) { tap_.on = on; }
   std::string trace_take();      // the records since the last call, as a JSON array
@@ -108,8 +113,14 @@ class RenderSide {
     else views_[slot] = std::make_unique<gfx::GxProcessor>(*proc_);
   }
   void load_view(int slot) {
-    if (proc_ && views_[slot]) *proc_ = *views_[slot];
-    if (renderer_) renderer_->invalidate_textures();
+    if (proc_ && views_[slot]) {
+      *proc_ = *views_[slot];
+      proc_->set_identify(interp_);  // V3: a setting of this side, not of the saved state
+    }
+    if (renderer_) {
+      renderer_->invalidate_textures();
+      renderer_->interp_reset();  // V3: no in-between across the jump
+    }
     gp_.field();
   }
   // Save-state files (runtime/state_file.h): the GX processor's state as bytes
@@ -130,7 +141,10 @@ class RenderSide {
         proc_->read_state(r);
       }
     }
-    if (renderer_) renderer_->invalidate_textures();
+    if (renderer_) {
+      renderer_->invalidate_textures();
+      renderer_->interp_reset();  // V3: no in-between across the jump
+    }
     gp_.field();
   }
 
@@ -158,6 +172,17 @@ class RenderSide {
   std::uint32_t xfb_ = 0;
   std::uint64_t presents_ = 0, last_presented_ = 0, copies_at_present_ = 0, resizes_ = 0;
   int scale_ = 1;
+  bool interp_want_ = false, interp_ = false;  // V3: asked for; on (asked for, and pictures go to the page)
+  // V3 (statistics, for tuning): the VI fields of the last scene cuts and of in-betweens made over a
+  // large move, with the frame's matched share and mean move.
+  struct InterpEvent {
+    std::uint64_t field;
+    bool made;
+    float match, shift;
+  };
+  std::vector<InterpEvent> interp_events_;
+  std::uint64_t cuts_seen_ = 0, made_seen_ = 0;
+  std::uint64_t presents_between_ = 0;  // V3: in-between pictures shown
   // Q5: the GPU's time per presented frame, from timestamp queries (gfx/wgpu/gpu_timer.h),
   // where the device has them.
   std::unique_ptr<gfx::GpuTimer> timer_;

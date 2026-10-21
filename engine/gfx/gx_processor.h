@@ -158,6 +158,8 @@ class GxProcessor {
   const PrimInfo& last_primitive() const { return prim_info_; }
   // Fill last_primitive() at every draw (off by default: it costs a copy per draw).
   void set_keep_primitive_info(bool on) { keep_prim_info_ = on; }
+  // V3: compute DrawCall::ident for every draw (in-between frames; off by default).
+  void set_identify(bool on) { identify_ = on; }
 
  private:
   template <class Ar>
@@ -199,6 +201,7 @@ class GxProcessor {
   Stats stats_;
   PrimInfo prim_info_;
   bool keep_prim_info_ = false;
+  bool identify_ = false;  // V3
   // Vertex formats 0-7 unpacked, and their sizes, valid until a VCD or VAT write (E3c).
   VertexFormat fmt_cache_[8];
   u32 fmt_size_[8] = {};
