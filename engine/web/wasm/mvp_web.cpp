@@ -835,6 +835,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
     });
     if (!g.mods.start(g.m->cpu(), &g.error)) return 0;
     g.timeline = std::make_unique<mods::Timeline>(*g.m, *g.hooks, *g.hw, *g.input, g.mods, g_timeline_tool);
+    g.timeline->prepare();  // V4: the slots' buffers now, not at the first pitches
     g.timeline->set_log([to_page](const std::string& s) { to_page("timeline: " + s); });
     g_poll_gate = &poll_gate;
   }
@@ -1106,7 +1107,10 @@ void state_step() {
                     views.empty() ? "false" : "true", now_ms() - t0);
       g.state_result = b;
     } else {
-      rt::SaveState st;
+      // V4: with gameplay mods the file goes into a snapshot slot's buffers (restart() below
+      // takes the slots over): no second copy of the machine on the heap.
+      rt::SaveState scratch;
+      rt::SaveState& st = g.timeline ? g.timeline->slot_for_load() : scratch;
       std::vector<std::uint8_t> mods_state, views;
       std::string err;
       if (!rt::read_state_file(g.state_in, *g.hw, g.input.get(), st, mods_state, views, &err))

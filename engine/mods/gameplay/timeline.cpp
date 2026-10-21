@@ -123,6 +123,10 @@ std::string Timeline::mem1_sha1() {
   return Sha1::hex(h.finish());
 }
 
+void Timeline::prepare() {
+  for (rt::SaveState& s : slot_) rt::prepare_state(s, m_, hw_);
+}
+
 void Timeline::log(const std::string& s) {
   if (log_) log_(s);
   else std::printf("timeline: %s\n", s.c_str());

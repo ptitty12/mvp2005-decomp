@@ -33,6 +33,11 @@ void save_state(SaveState& s, Machine& m, YieldingHooks& hooks, Hardware& hw, co
   s.valid = true;
 }
 
+void prepare_state(SaveState& s, Machine& m, const Hardware& hw) {
+  if (!s.hw) s.hw = hw.snapshot();
+  s.machine.mem1.resize(m.mem1_bytes());  // touched now, not at the first save
+}
+
 void load_state(const SaveState& s, Machine& m, YieldingHooks& hooks, Hardware& hw, InputQueue* input) {
   check_idle("load_state");
   if (!s.valid) throw std::logic_error("load_state: empty save state");

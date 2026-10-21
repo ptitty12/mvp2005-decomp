@@ -62,6 +62,7 @@ class Machine {
   ppc::Memory& memory() { return *mem_; }
   u8* mem1() { return mem1_; }
   const u8* mem1() const { return mem1_; }
+  static constexpr std::size_t mem1_bytes() { return std::size_t{kMem1Size} + kGuard; }  // a Snapshot's mem1
 
  private:
   const vfs::Dol* dol_ = nullptr;

@@ -1307,7 +1307,10 @@ int main(int argc, char** argv) {
   timeline_tool.hw = &hw;
   if (!audio_wav.empty() || audio_out) timeline_tool.mixer = &mixer;
   mods::Timeline timeline(m, hooks, hw, input, gameplay, timeline_tool);
-  if (g_mods) g_timeline = &timeline;
+  if (g_mods) {
+    g_timeline = &timeline;
+    timeline.prepare();  // V4: the slots' buffers now, not at the first pitches
+  }
   g_rewind.m = &m;
   g_rewind.hooks = &hooks;
   g_rewind.hw = &hw;
