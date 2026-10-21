@@ -103,6 +103,12 @@ struct WasmEmitOptions {
   // dispatcher (a br_table at every back edge, every local a phi of one loop
   // around the whole body), where they nest and are entered at their start only.
   bool structured_loops = false;
+  // V4: a module for code the game writes at run time (heap code, translated in the
+  // page when it is called: runtime/wasm_host.h). Its functions have no resume
+  // labels and no entry prologue: the interpreter, which runs such code otherwise,
+  // has no safe points there, so neither has this code (the caller also clears the
+  // CFG's back edges and idle spins), and an unwinding return just leaves.
+  bool heap_code = false;
 };
 
 // A guest address and the table slot (relative to the module's table base) of

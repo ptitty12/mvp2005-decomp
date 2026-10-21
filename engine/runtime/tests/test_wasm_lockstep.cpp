@@ -762,3 +762,138 @@ TEST_CASE("V4: loop shapes, structured where they nest, match the interpreter") 
     CHECK(be32(nat.mem1() + 0x300010) == be32(ref.mem1() + 0x300010));
   }
 }
+
+// V4: code outside the translated program (in a data section here: code the game
+// writes at run time), called through CTR: translated on its first call and called
+// while its bytes stay the same, interpreted again after main changes one of them,
+// then translated anew; a loop inside it and a call from it back into the program.
+// Against the interpreter in lockstep.
+namespace {
+
+LoopProgram make_heap_program() {
+  using namespace mvp::ppc::enc;
+  constexpr u32 kText = 0x80003100, kData = 0x80200000;
+  // The blob (data): r3 += 5 (later 7); r3 += 0 + 1 + 2 + 3 (a loop); r3 = leaf(r3).
+  std::vector<u32> blob = {
+      SPR(339, 0, 8),       // mflr r0
+      D(36, 0, 1, 4),       // stw r0, 4(r1)
+      D(37, 1, 1, -16),     // stwu r1, -16(r1)
+      D(14, 3, 3, 5),       // addi r3, r3, 5   (word 3: main makes it addi r3, r3, 7)
+      D(14, 5, 0, 0),       // li r5, 0
+      XO(3, 3, 5, 0, 266),  // L: add r3, r3, r5
+      D(14, 5, 5, 1),       // addi r5, r5, 1
+      D(11, 0, 5, 4),       // cmpwi r5, 4
+      B(12, 0, -12),        // blt L
+      D(15, 12, 0, 0),      // lis r12, leaf@h   (patched below)
+      D(24, 12, 12, 0),     // ori r12, r12, leaf@l
+      SPR(467, 12, 9),      // mtctr r12
+      X(19, 20, 0, 0, 528, 1),  // bctrl
+      D(32, 0, 1, 20),      // lwz r0, 20(r1)
+      D(14, 1, 1, 16),      // addi r1, r1, 16
+      SPR(467, 0, 8),       // mtlr r0
+      X(19, 20, 0, 0, 16),  // blr
+  };
+  std::vector<u32> w;
+  auto la = [&](u32 r, u32 v) {
+    w.push_back(D(15, r, 0, static_cast<s32>(v >> 16)));
+    w.push_back(D(24, r, r, static_cast<s32>(v & 0xFFFF)));
+  };
+  auto call_blob = [&](u32 acc) {  // r3 = k (r22); bctrl blob; acc += r3
+    w.push_back(X(31, 22, 3, 22, 444));  // mr r3, r22
+    la(12, kData);
+    w.push_back(SPR(467, 12, 9));        // mtctr r12
+    w.push_back(X(19, 20, 0, 0, 528, 1));  // bctrl
+    w.push_back(XO(acc, acc, 3, 0, 266));  // add acc, acc, r3
+    w.push_back(D(14, 22, 22, 1));       // addi r22, r22, 1
+  };
+  w.push_back(D(15, 1, 0, 0x8040));      // lis r1, 0x8040
+  w.push_back(D(15, 20, 0, 0x8030));     // lis r20, results
+  w.push_back(D(14, 21, 0, 0));          // li r21, 0
+  w.push_back(D(14, 23, 0, 0));          // li r23, 0
+  w.push_back(D(14, 22, 0, 0));          // li r22, 0
+  for (int k = 0; k < 5; ++k) call_blob(21);
+  w.push_back(D(36, 21, 20, 0));         // stw r21, 0(r20)
+  la(4, D(14, 3, 3, 7));                 // the new word 3: addi r3, r3, 7
+  la(12, kData);
+  w.push_back(D(36, 4, 12, 12));         // stw r4, 12(r12)
+  for (int k = 0; k < 4; ++k) call_blob(23);
+  w.push_back(D(36, 23, 20, 4));         // stw r23, 4(r20)
+  w.push_back(D(15, 9, 0, static_cast<s32>(static_cast<std::int16_t>(0xCC00))));  // lis r9, 0xCC00
+  w.push_back(D(36, 0, 9, 0));           // stw r0, 0(r9): MMIO, the stop
+  w.push_back(I(0));                     // b . (not reached)
+  const u32 leaf = kText + 4 * static_cast<u32>(w.size());
+  w.push_back(XO(3, 3, 3, 0, 266));      // leaf: add r3, r3, r3
+  w.push_back(X(19, 20, 0, 0, 16));      // blr
+  blob[9] = D(15, 12, 0, static_cast<s32>(leaf >> 16));
+  blob[10] = D(24, 12, 12, static_cast<s32>(leaf & 0xFFFF));
+  const std::size_t text_bytes = 4 * w.size(), data_bytes = 4 * blob.size();
+  std::vector<std::uint8_t> d(0x100 + text_bytes + data_bytes, 0);
+  put_be32(&d[0x00], 0x100);
+  put_be32(&d[0x48], kText);
+  put_be32(&d[0x90], static_cast<u32>(text_bytes));
+  put_be32(&d[0x1C], static_cast<u32>(0x100 + text_bytes));  // data section 0
+  put_be32(&d[0x64], kData);
+  put_be32(&d[0xAC], static_cast<u32>(data_bytes));
+  put_be32(&d[0xE0], kText);
+  for (std::size_t k = 0; k < w.size(); ++k) put_be32(&d[0x100 + 4 * k], w[k]);
+  for (std::size_t k = 0; k < blob.size(); ++k) put_be32(&d[0x100 + text_bytes + 4 * k], blob[k]);
+  char line[256];
+  std::snprintf(line, sizeof line,
+                "main = .text:0x%08X; // type:function size:0x%X\nleaf = .text:0x%08X; // type:function size:0x8\n",
+                kText, leaf - kText, leaf);
+  return LoopProgram{std::move(d), line};
+}
+
+}  // namespace
+
+TEST_CASE("V4: heap code translated while the program runs matches the interpreter") {
+  LoopProgram prog = make_heap_program();
+  auto syms = xlat::SymbolTable::parse(prog.symbols);
+  auto dol = vfs::Dol::parse(prog.dol);
+  REQUIRE(dol);
+  xlat::ProgramCfg cfg = xlat::build_cfg(*dol, syms);
+  REQUIRE(cfg.errors == 0);
+  Machine ref, nat;
+  set_wasm_mem1(nat.mem1(), Machine::kMem1Size);
+  xlat::WasmEmitOptions opt;
+  opt.precise_io = true;
+  opt.fixed = wasm_fixed_addrs();
+  opt.fast_entries = true;
+  opt.structured_loops = true;
+  xlat::WasmModule mod;
+  std::string err;
+  REQUIRE_MESSAGE(xlat::emit_wasm(cfg, opt, &mod, &err), err);
+  FixedHooks hr, hn;
+  StopIo ir, in;
+  ir.cpu = &ref.cpu();
+  in.cpu = &nat.cpu();
+  ref.memory().io = &ir;
+  nat.memory().io = &in;
+  ref.cpu().hooks = &hr;
+  nat.cpu().hooks = &hn;
+  ref.load_dol(*dol);
+  nat.load_dol(*dol);
+  WasmLoadStats ls;
+  REQUIRE_MESSAGE(load_wasm_module(mod, &ls, &err), err);
+  const WasmHeapStats before = wasm_heap_stats();
+  set_wasm_heap_code_tuning(1, 0);
+  set_wasm_heap_code(true);
+  LockstepResult r = run_lockstep(ref, nat, cfg, 1);
+  set_wasm_heap_code(false);
+  set_wasm_heap_code_tuning(3, 8);
+  set_wasm_mem1(nullptr, 0);
+  INFO(r.message);
+  REQUIRE(r.pass);
+  CHECK(r.stop.addr == 0xCC000000u);
+  const WasmHeapStats& after = wasm_heap_stats();
+  CHECK(after.translated == before.translated + 2);  // the blob, then the blob as changed
+  CHECK(after.changed == before.changed + 1);
+  CHECK(after.calls == before.calls + 9);
+  // (k + 5 + 6) * 2 for k = 0..4, then (k + 7 + 6) * 2 for k = 5..8
+  u32 a = 0, b = 0;
+  for (u32 k = 0; k < 5; ++k) a += (k + 11) * 2;
+  for (u32 k = 5; k < 9; ++k) b += (k + 13) * 2;
+  CHECK(be32(nat.mem1() + 0x300000) == a);
+  CHECK(be32(nat.mem1() + 0x300004) == b);
+  CHECK(be32(ref.mem1() + 0x300004) == b);
+}

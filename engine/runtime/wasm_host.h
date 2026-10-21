@@ -47,4 +47,23 @@ void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size);
 // away from where a loaded module has it fixed.
 xlat::WasmFixed wasm_fixed_addrs();
 
+// V4: code the game writes into its heap and calls through CTR or LR (the
+// interpreter ran it: about 17,000 instructions a field in play) is translated
+// in the page on its third call, a module of its own (WasmEmitOptions::heap_code),
+// and called while its bytes stay as they were then (compared at every call;
+// different bytes: the interpreter, and a new translation later). The code it
+// reaches from its entry must lie within 64 KiB of MEM1 and be translatable
+// alone (no direct calls out of it); otherwise it stays interpreted. At most one
+// translation per 8 ms of host time. The guest runs the same either way: no safe
+// points in it (as in the interpreter), the same semantics per instruction.
+void set_wasm_heap_code(bool on);
+// Tests: translate after `calls_before` interpreted calls, with at least `gap_ms`
+// of host time between two translations (defaults 3 and 8).
+void set_wasm_heap_code_tuning(unsigned calls_before, double gap_ms);
+struct WasmHeapStats {
+  std::uint64_t translated = 0, failed = 0, calls = 0, changed = 0, bytes = 0;
+  double ms_total = 0, ms_max = 0;  // host time translating (CFG, emit, compile, instantiate)
+};
+const WasmHeapStats& wasm_heap_stats();
+
 }  // namespace mvp::rt

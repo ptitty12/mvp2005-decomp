@@ -8,12 +8,17 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common/bytes.h"
 #include "ppc/interp.h"
+#include "ppc/isa.h"
 #include "ppc/mem_access.h"
 #include "ppc/sem.h"
 #include "runtime/hle.h"
 #include "runtime/hw.h"
 #include "runtime/native.h"
+#include "translator/cfg.h"
+#include "translator/symbols.h"
+#include "vfs/dol.h"
 
 using namespace mvp;
 using namespace mvp::rt;
@@ -252,6 +257,153 @@ xlat::WasmFixed wasm_fixed_addrs() {
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error) {
   return load_wasm_module(m, m.bytes.data(), m.bytes.size(), false, stats, error);
 }
+
+// ---- V4: heap code ----
+
+namespace {
+
+constexpr u32 kHeapMaxBytes = 0x10000;  // a translation's reach from its entry
+u32 kHeapCallsBefore = 3;               // interpreted calls before the translation
+double kHeapGapMs = 8;                  // host time between two translations
+
+struct HeapFn {
+  std::vector<std::uint8_t> bytes;  // the code as translated, from the entry
+  GuestFn fn = nullptr;
+  u32 calls = 0;
+  bool failed = false;
+};
+std::unordered_map<u32, HeapFn> g_heap;
+WasmHeapStats g_heap_stats;
+double g_heap_last_ms = -1e9;
+
+// The end of the code reachable from `entry` (branches followed, calls and returns
+// as the translator's CFG takes them), or 0 if it leaves MEM1 or kHeapMaxBytes,
+// meets an invalid word or calls anything directly (the CFG of the code alone
+// could not name the callee).
+u32 heap_extent(const std::uint8_t* mem1, u32 entry) {
+  const u32 lo = entry, hi_limit = entry + kHeapMaxBytes;
+  if (entry - 0x80000000u >= 0x01800000u - kHeapMaxBytes) return 0;
+  std::vector<bool> seen(kHeapMaxBytes / 4, false);
+  std::vector<u32> work{entry};
+  u32 hi = entry;
+  while (!work.empty()) {
+    u32 a = work.back();
+    work.pop_back();
+    for (;;) {
+      if (a < lo || a >= hi_limit) return 0;
+      const u32 k = (a - lo) / 4;
+      if (seen[k]) break;
+      seen[k] = true;
+      if (a > hi) hi = a;
+      const ppc::Insn i{be32(mem1 + (a - 0x80000000u))};
+      const ppc::Op op = ppc::decode(i.w);
+      if (op == ppc::Op::invalid) return 0;
+      if (op == ppc::Op::b || op == ppc::Op::bc) {
+        if (i.lk()) return 0;  // a direct call: not translatable alone
+        const s32 disp = op == ppc::Op::b ? i.li() : i.bd();
+        const u32 t = i.aa() ? static_cast<u32>(disp) : a + static_cast<u32>(disp);
+        if (t < lo || t >= hi_limit) return 0;  // a branch out of it
+        work.push_back(t);
+        if (op == ppc::Op::b || (i.bo() & 0x14) == 0x14) break;
+      } else if (op == ppc::Op::bclr || op == ppc::Op::bcctr) {
+        if (!i.lk() && (i.bo() & 0x14) == 0x14) break;  // blr, bctr: the end of this path
+      } else if (op == ppc::Op::rfi) {
+        break;
+      }
+      a += 4;
+    }
+  }
+  return hi + 4;
+}
+
+// The translation of the code at [entry, end), or null.
+GuestFn heap_translate(u32 entry, u32 end, const std::uint8_t* code) {
+  const u32 len = end - entry;
+  std::vector<std::uint8_t> dol(0x100 + len, 0);  // a DOL with one text section: the code
+  put_be32(&dol[0x00], 0x100);
+  put_be32(&dol[0x48], entry);
+  put_be32(&dol[0x90], len);
+  put_be32(&dol[0xE0], entry);
+  std::memcpy(&dol[0x100], code, len);
+  auto d = vfs::Dol::parse(std::move(dol));
+  if (!d) return nullptr;
+  char line[128];
+  std::snprintf(line, sizeof line, "heap_%08X = .text:0x%08X; // type:function size:0x%X\n", entry, entry, len);
+  xlat::SymbolTable syms = xlat::SymbolTable::parse(line);
+  xlat::ProgramCfg cfg = xlat::build_cfg(*d, syms);
+  if (cfg.errors || cfg.functions.size() != 1) return nullptr;
+  for (auto& f : cfg.functions) {  // no safe points in heap code (the interpreter has none there)
+    f.back_edges.clear();
+    f.idle_spins.clear();
+    f.resume_points.clear();
+  }
+  xlat::WasmEmitOptions opt;
+  opt.fixed = wasm_fixed_addrs();
+  opt.heap_code = true;
+  opt.structured_loops = true;
+#ifdef __EMSCRIPTEN_PTHREADS__
+  opt.shared_memory = true;
+#endif
+  xlat::WasmModule mod;
+  std::string err;
+  if (!xlat::emit_wasm(cfg, opt, &mod, &err) || mod.entries.size() != 1) return nullptr;
+  alignas(8) double times[2] = {0, 0};
+  const int base = mvp_js_instantiate(mod.bytes.data(), static_cast<unsigned>(mod.bytes.size()), mod.slots,
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_unwinding)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_resume)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_entry_hook)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_wgp)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), 0, times);
+  if (base < 0) return nullptr;
+  g_heap_stats.bytes += mod.bytes.size();
+  return as_fn(static_cast<u32>(base) + mod.entries[0].slot);
+}
+
+GuestFn heap_code(Cpu& c, u32 target) {
+  if (!g_mem1.limit || target - 0x80000000u >= 0x01800000u) return nullptr;
+  const std::uint8_t* mem1 = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(g_mem1.base));
+  HeapFn& h = g_heap[target];
+  const std::uint8_t* at = mem1 + (target - 0x80000000u);
+  if (h.fn) {
+    if (std::memcmp(at, h.bytes.data(), h.bytes.size()) == 0) {
+      ++g_heap_stats.calls;
+      return h.fn;
+    }
+    h.fn = nullptr;  // other code there now: interpreted, translated again later
+    h.calls = 0;
+    ++g_heap_stats.changed;
+  }
+  if (h.failed || ++h.calls < kHeapCallsBefore) return nullptr;
+  const double now = emscripten_get_now();
+  if (now - g_heap_last_ms < kHeapGapMs) return nullptr;  // later (host time only: the guest runs the same)
+  g_heap_last_ms = now;
+  const u32 end = heap_extent(mem1, target);
+  GuestFn fn = end ? heap_translate(target, end, at) : nullptr;
+  const double ms = emscripten_get_now() - now;
+  g_heap_stats.ms_total += ms;
+  if (ms > g_heap_stats.ms_max) g_heap_stats.ms_max = ms;
+  if (!fn) {
+    h.failed = true;
+    ++g_heap_stats.failed;
+    return nullptr;
+  }
+  h.bytes.assign(at, at + (end - target));
+  h.fn = fn;
+  ++g_heap_stats.translated;
+  ++g_heap_stats.calls;
+  (void)c;
+  return fn;
+}
+
+}  // namespace
+
+void set_wasm_heap_code(bool on) { g_heap_code_hook = on ? &heap_code : nullptr; }
+void set_wasm_heap_code_tuning(unsigned calls_before, double gap_ms) {
+  kHeapCallsBefore = calls_before;
+  kHeapGapMs = gap_ms;
+}
+const WasmHeapStats& wasm_heap_stats() { return g_heap_stats; }
 
 bool load_wasm_module(const xlat::WasmModule& m, const std::uint8_t* bytes, std::size_t len, bool keep_js_copy,
                       WasmLoadStats* stats, std::string* error) {

@@ -2810,7 +2810,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
   // Resume labels (runtime/native.h): every call's return address and every
   // back edge, except entries; none in a replaced function's original.
   std::vector<u32> entries = mode_ == Mode::Body ? f_.entries : std::vector<u32>{f_.start};
-  if (mode_ == Mode::Body || mode_ == Mode::Plain) {  // V4: not in Fast
+  if (mode_ == Mode::Body || (mode_ == Mode::Plain && !ctx_.opt.heap_code)) {  // V4: not in Fast, not heap code
     auto add = [&](u32 a) {
       if (f_.contains(a) && f_.reachable[(a - f_.start) / 4] &&
           std::find(f_.entries.begin(), f_.entries.end(), a) == f_.entries.end())
@@ -2994,7 +2994,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
       body.mem(op::i32_load8_u, 0, 0);
       body.br_if(pre_level_);
     }
-    if (mode_ == Mode::Plain || mode_ == Mode::Fast) {
+    if ((mode_ == Mode::Plain || mode_ == Mode::Fast) && !ctx_.opt.heap_code) {
       emit_prologue(body, f_.start, [&] {
         if (has_resume_) body.br(pre_level_);
         else leave();

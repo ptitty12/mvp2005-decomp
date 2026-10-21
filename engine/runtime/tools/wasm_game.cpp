@@ -12,6 +12,8 @@
 //   MVP_WASM_NAMES=1     add a name section (function names for profilers)
 //   MVP_WASM_FIXED=0     the runtime's addresses as imported globals (V4: constants by default)
 //   MVP_WASM_FAST=0      one function per guest function (V4: fast entries and resumable copies)
+//   MVP_WASM_LOOPS=0     loops through the dispatcher (V4: structured loops)
+//   MVP_WASM_HEAP=0      heap code interpreted (V4: translated on its third call)
 #include <emscripten.h>
 
 #include <chrono>
@@ -77,6 +79,8 @@ void mvp_register_game() {
     std::fprintf(stderr, "mvp-boot-wasm: %s\n", err.c_str());
     std::exit(1);
   }
+  // V4: heap code translated while the game runs, as in the browser; MVP_WASM_HEAP=0: interpreted.
+  if (const char* v = std::getenv("MVP_WASM_HEAP"); !v || *v != '0') rt::set_wasm_heap_code(true);
   const auto& s = mod.stats;
   std::printf("wasm: disc+symbols %.0f ms, CFG %.0f ms, emit %.0f ms, compile %.0f ms, instantiate %.0f ms\n", load_ms,
               cfg_ms, emit_ms, ls.compile_ms, ls.instantiate_ms);

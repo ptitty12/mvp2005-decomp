@@ -687,6 +687,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate(const char* text, int len) {
   // V4: for the cache the bytes stay on the JavaScript side (Module.mvpModuleBytes), so
   // the engine's heap gives them back at once, before the machine is built.
   if (!load_wasm_module(mod, mod.bytes.data(), mod.bytes.size(), g.keep_module, &g.load, &g.error)) return 0;
+  set_wasm_heap_code(true);  // V4: heap code translated while the game runs
   g.translated = true;
   if (g.keep_module) {  // the tables, serialized later, off the critical path
     g.kept_len = mod.bytes.size();
@@ -739,6 +740,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate_cached(const std::uint8_t* blob, double l
   set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: the module's fixed MEM1 (load_wasm_module checks it)
   if (!load_wasm_module(mod, blob + bytes_at, static_cast<std::size_t>(len) - bytes_at, false, &g.load, &g.error))
     return 0;
+  set_wasm_heap_code(true);  // V4: heap code translated while the game runs
   g.translated = true;
   g.from_cache = true;
   return 1;
