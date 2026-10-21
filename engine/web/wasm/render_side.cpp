@@ -191,6 +191,17 @@ std::string RenderSide::status_json() const {
                   static_cast<unsigned long long>(ts.untimed), static_cast<unsigned long long>(ts.dropped), ts.last_ms,
                   present_ms_, gpu_load_);
     s += b;
+    // V5: the GX path's work (primitives, vertices, pixel-state snapshots) and the
+    // renderer's per-draw paths (state reused, draws merged, WebGPU draws, bytes uploaded).
+    std::snprintf(b, sizeof b,
+                  ",\"gx\":{\"prims\":%llu,\"verts\":%llu,\"snaps\":%llu,\"same\":%llu,\"merged\":%llu,"
+                  "\"encoded\":%llu,\"vbytes\":%llu,\"ibytes\":%llu,\"tex_hits\":%llu}",
+                  static_cast<unsigned long long>(ps.draws), static_cast<unsigned long long>(ps.vertices),
+                  static_cast<unsigned long long>(ps.snapshots), static_cast<unsigned long long>(rs.same_state),
+                  static_cast<unsigned long long>(rs.merged), static_cast<unsigned long long>(rs.encoded),
+                  static_cast<unsigned long long>(rs.vertex_bytes), static_cast<unsigned long long>(rs.index_bytes),
+                  static_cast<unsigned long long>(rs.texture_hits));
+    s += b;
     const auto& gs = gp_.stats();  // Q1: the GP's view of memory
     std::snprintf(b, sizeof b, ",\"gp_memory\":{\"flushes\":%llu,\"flushed_mb\":%.1f,\"overlays\":%llu,\"lines\":%llu,\"drops\":%llu}",
                   static_cast<unsigned long long>(gs.flushes), static_cast<double>(gs.flushed_bytes) / 1e6,

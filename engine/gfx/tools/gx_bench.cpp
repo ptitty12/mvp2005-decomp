@@ -6,7 +6,7 @@
 // two texture coordinate generators with post matrices, and a 3x4 matrix
 // loaded through XF every two primitives (the game's CPU skinning).
 //
-//   mvp-gx-bench [--prims N] [--reps N] [--pack] [--no-light] [--no-texgen] [--no-skin] [--alpha-lit]
+//   mvp-gx-bench [--prims N] [--reps N] [--pack] [--no-light] [--no-texgen] [--no-skin] [--alpha-lit] [--ref] [--gp]
 //
 // It also prints a hash of every vertex and index it produced (P2): changes to
 // the processor's arithmetic must keep it.
@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "common/bytes.h"
+#include "gfx/gp_memory.h"
 #include "gfx/gx_processor.h"
 #include "gfx/tests/gx_stream.h"
 
@@ -85,7 +86,7 @@ struct PackBackend : Backend {
 
 int main(int argc, char** argv) {
   int prims = 8000, reps = 20;
-  bool pack = false, light = true, texgen = true, skin = true, alpha_lit = false;
+  bool pack = false, light = true, texgen = true, skin = true, alpha_lit = false, ref = false, gp = false, dark = false;
   for (int k = 1; k < argc; ++k) {
     std::string a = argv[k];
     if (a == "--prims" && k + 1 < argc) prims = std::atoi(argv[++k]);
@@ -95,6 +96,9 @@ int main(int argc, char** argv) {
     else if (a == "--no-texgen") texgen = false;
     else if (a == "--no-skin") skin = false;
     else if (a == "--alpha-lit") alpha_lit = true;  // alpha 0 lit like color 0 (GX_COLOR0A0)
+    else if (a == "--ref") ref = true;              // V5: the reference vertex path (the one before V5)
+    else if (a == "--dark") dark = true;            // V5: color 0 lit by no light (ambient times material: the game's usual setup)
+    else if (a == "--gp") gp = true;                // V5: arrays read through a GpMemory holding copies of them (the render thread's case)
   }
 
   // Arrays: 256 positions (s16 xyz), normals (s8 xyz), colors (rgba8), texture coordinates (s16 st).
@@ -142,7 +146,7 @@ int main(int argc, char** argv) {
   s.xf(xf::kNumColors, {1});
   s.xf(xf::kAmbient0, {0x30303030});
   s.xf(xf::kMaterial0, {0xFFFFFFFF});
-  s.xf(xf::kColor0Cntrl, {light ? (1u | 1u << 1 | 3u << 2 | 2u << 7 | 2u << 9) : 1u});
+  s.xf(xf::kColor0Cntrl, {dark ? (1u | 1u << 1 | 2u << 7 | 2u << 9) : light ? (1u | 1u << 1 | 3u << 2 | 2u << 7 | 2u << 9) : 1u});
   s.xf(xf::kColor0Cntrl + 2, {light && alpha_lit ? (1u | 1u << 1 | 3u << 2 | 2u << 7 | 2u << 9) : 1u});
   for (int l = 0; l < 2; ++l) {
     const std::uint32_t b = xf::kLights + 16u * static_cast<std::uint32_t>(l);
@@ -189,6 +193,13 @@ int main(int argc, char** argv) {
   Backend* backend = pack ? static_cast<Backend*>(&pack_backend) : &null_backend;
   GxProcessor proc(backend);
   proc.set_memory(mem.data(), static_cast<std::uint32_t>(mem.size()));
+  proc.set_reference_vertices(ref);
+  GpMemory gpm;
+  if (gp) {  // as the threaded engine's render thread: the arrays' entries are copies (Q6)
+    gpm.attach(mem.data(), static_cast<std::uint32_t>(mem.size()));
+    for (std::uint32_t at : {kPos, kNrm, kCol, kTex}) gpm.shadow(at, 0x600, mem.data() + at);
+    proc.set_gp_memory(&gpm);
+  }
   s.run(proc);
   body.run(proc);  // warm-up
   double best = 1e30;
@@ -202,12 +213,13 @@ int main(int argc, char** argv) {
     HashBackend hb;
     GxProcessor hp(&hb);
     hp.set_memory(mem.data(), static_cast<std::uint32_t>(mem.size()));
+    hp.set_reference_vertices(ref);
     s.run(hp);
     body.run(hp);
     std::printf("gx-bench output hash %016llx\n", static_cast<unsigned long long>(hb.h));
   }
-  std::printf("gx-bench%s: %d primitives, %llu vertices: best %.3f ms (%.1f ns per primitive, %.1f ns per vertex)\n",
-              pack ? " (with packing)" : "", prims, static_cast<unsigned long long>(vertices), best,
+  std::printf("gx-bench%s%s%s: %d primitives, %llu vertices: best %.3f ms (%.1f ns per primitive, %.1f ns per vertex)\n",
+              ref ? " (reference path)" : "", gp ? " (GP memory)" : "", pack ? " (with packing)" : "", prims, static_cast<unsigned long long>(vertices), best,
               best * 1e6 / prims, best * 1e6 / static_cast<double>(vertices));
   return 0;
 }

@@ -50,7 +50,10 @@ class GpMemory {
   // Memory in [addr, addr + len) was written without the cache: snapshots there end.
   void write_through(std::uint32_t addr, std::uint32_t len);
   // A VI field: the snapshots expire.
-  void field() { ++gen_; }
+  void field() {
+    ++gen_;
+    ++version_;
+  }
 
   bool active_line(std::uint32_t line) const { return line < lines_ && gen_of_[line] == gen_; }
 
@@ -86,6 +89,21 @@ class GpMemory {
     return live_ + addr;
   }
 
+  // V5: a window of the GP's view: [lo, hi), where view(addr, len) is base + addr
+  // for every range inside it, while version() stays what it was (every change to
+  // what view() returns where, except new snapshot contents, which windows never
+  // cover, bumps it). The GX processor's vertex loader reads arrays through
+  // windows instead of a view() per attribute.
+  struct Window {
+    std::uint32_t lo = 0, hi = 0;
+    const std::uint8_t* base = nullptr;
+    std::uint64_t version = 0;  // 0: none
+  };
+  std::uint64_t version() const { return version_; }
+  // The largest window around [addr, addr + len) inside its 4 KiB page (memory as
+  // it is, or copies), false if view() gives a composed copy there.
+  bool window(std::uint32_t addr, std::uint32_t len, Window& w) const;
+
   struct Stats {
     std::uint64_t flushes = 0, flushed_bytes = 0;  // flushes (and the bytes they snapshot)
     std::uint64_t overlays = 0;                     // views that laid snapshots over memory
@@ -110,6 +128,7 @@ class GpMemory {
   const std::uint8_t* live_ = nullptr;
   std::uint32_t size_ = 0, lines_ = 0;
   std::uint32_t gen_ = 2;                  // the field generation (0: never flushed)
+  std::uint64_t version_ = 1;              // V5: bumped by every change of where view() reads (windows)
   bool any_active_ = false;                // a flush has happened (the fast path until then)
   std::vector<std::uint8_t> snap_;         // the snapshot contents, per line
   std::vector<std::uint32_t> gen_of_;      // per line: the generation of its last flush, 0 none

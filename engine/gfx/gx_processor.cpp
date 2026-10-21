@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 namespace mvp::gfx {
@@ -453,6 +454,32 @@ VertexFormat GxProcessor::vertex_format(int fmt) const {
     t.scale = 1.0f / static_cast<float>(1u << bits(reg, at + 4, 5));
     t.size = static_cast<u8>(t.cnt * comp_size(t.fmt));
   }
+  // V5: the loader program (vertices()): the reads load_vertex makes, in the
+  // same order, with the decoder each one takes. Floats are counted from
+  // InVertex::pos: pos 0, nrm 3, bin 6, tan 9, color k 12 + 4k, tex k 20 + 2k.
+  auto add = [&f](u32 op, u32 type, u32 array, u32 size, u32 dst, u32 n, float scale) {
+    VertexFormat::Step& s = f.steps[f.nsteps++];
+    s.op = static_cast<u8>(op);
+    s.type = static_cast<u8>(type);
+    s.array = static_cast<u8>(array);
+    s.size = static_cast<u8>(size);
+    s.dst = static_cast<u8>(dst);
+    s.n = static_cast<u8>(n);
+    s.scale = scale;
+  };
+  auto comp_op = [](u32 fmt) { return fmt < kF32 ? fmt : u32{kF32}; };  // read_comp: 4-7 read floats
+  if (f.pos.type) add(comp_op(f.pos.fmt), f.pos.type, 0, f.pos.size, 0, f.pos.cnt, f.pos.scale);
+  if (f.nrm.type) {
+    if (f.nbt3) {
+      for (u32 n = 0; n < 3; ++n) add(comp_op(f.nrm.fmt), f.nrm.type, 1, 3 * comp_size(f.nrm.fmt), 3 + 3 * n, 3, f.nrm.scale);
+    } else {
+      add(comp_op(f.nrm.fmt), f.nrm.type, 1, f.nrm.size, 3, f.nbt ? 9 : 3, f.nrm.scale);
+    }
+  }
+  for (u32 k = 0; k < 2; ++k)
+    if (f.color[k].type) add(8 + std::min<u32>(f.color[k].fmt, kRgba8888), f.color[k].type, 2 + k, f.color[k].size, 12 + 4 * k, 4, 1.0f);
+  for (u32 k = 0; k < 8; ++k)
+    if (f.tex[k].type) add(comp_op(f.tex[k].fmt), f.tex[k].type, 4 + k, f.tex[k].size, 20 + 2 * k, f.tex[k].cnt, f.tex[k].scale);
   return f;
 }
 
@@ -576,6 +603,46 @@ void GxProcessor::setup_transform(XformSetup& x) const {
   x.lit = false;
   for (u32 ch = 0; ch < 2 && ch < x.nchan; ++ch)
     x.lit = x.lit || bits(x.chan[ch][0].ctl, 1, 1) || bits(x.chan[ch][1].ctl, 1, 1);
+
+  // V5: the fast path's plan (transform_fast). Color passes in transform's order;
+  // each light factor (a light with a diffuse and an attenuation function)
+  // once, whichever passes use it (transform reuses it the same way: P1).
+  x.npasses = x.nfactors = 0;
+  for (u32 ch = 0; ch < 2 && ch < x.nchan; ++ch)
+    for (u32 is_alpha = 0; is_alpha < 2; ++is_alpha) {
+      const u32 ctl = x.chan[ch][is_alpha].ctl;
+      XformSetup::Pass& ps = x.passes[x.npasses++];
+      ps.ch = static_cast<u8>(ch);
+      ps.alpha = static_cast<u8>(is_alpha);
+      ps.mat_vtx = static_cast<u8>(bits(ctl, 0, 1));
+      ps.lit = static_cast<u8>(bits(ctl, 1, 1));
+      ps.amb_vtx = static_cast<u8>(bits(ctl, 6, 1));
+      ps.nlights = 0;
+      if (!ps.lit) continue;
+      const u32 mask = bits(ctl, 2, 4) | bits(ctl, 11, 4) << 4;
+      const u8 diffuse = static_cast<u8>(bits(ctl, 7, 2)), attn = static_cast<u8>(bits(ctl, 9, 2));
+      for (u32 l = 0; l < 8; ++l) {
+        if (!(mask & (1u << l))) continue;
+        u32 fi = 0;
+        while (fi < x.nfactors && !(x.factors[fi].light == l && x.factors[fi].diffuse == diffuse && x.factors[fi].attn == attn))
+          ++fi;
+        if (fi == x.nfactors) x.factors[x.nfactors++] = {static_cast<u8>(l), diffuse, attn};
+        ps.light[ps.nlights] = static_cast<u8>(l);
+        ps.factor[ps.nlights] = static_cast<u8>(fi);
+        ++ps.nlights;
+      }
+    }
+  x.ngen8 = std::min<u32>(x.ngen, 8);
+  for (u32 i = 0; i < x.ngen8; ++i) {
+    const u32 info = x.texgen[i];
+    XformSetup::Gen& g = x.gens[i];
+    g.type = static_cast<u8>(bits(info, 4, 3));
+    g.row = static_cast<u8>(bits(info, 7, 5));
+    g.ab11 = static_cast<u8>(!bits(info, 2, 1));
+    g.stq = static_cast<u8>(bits(info, 1, 1));
+    g.emboss_src = static_cast<u8>(bits(info, 12, 3));
+    g.post_norm = static_cast<u8>(x.dual ? bits(x.post[i], 8, 1) : 0);
+  }
 }
 
 OutVertex GxProcessor::transform(const InVertex& v) const {
@@ -782,6 +849,267 @@ void GxProcessor::transform(const InVertex& v, XformSetup& x, OutVertex& o) cons
   for (u32 i = std::min<u32>(x.ngen, 8); i < 8; ++i) std::memset(o.tex[i], 0, sizeof o.tex[i]);
 }
 
+namespace {
+
+// A light's factor (attenuation times diffuse term) for a vertex at `view` with
+// normal `n`: transform's arithmetic, operation for operation.
+inline float light_factor(const XformSetup::Light& L, u32 diffuse, u32 attn_fn, const float view[3], const float n[3]) {
+  float ldir[3] = {L.pos[0] - view[0], L.pos[1] - view[1], L.pos[2] - view[2]};
+  float attn = 1.0f;
+  if (attn_fn == 3) {  // spot
+    float dist2 = dot3(ldir, ldir), dist = std::sqrt(dist2);
+    if (dist > 0) {
+      ldir[0] /= dist;
+      ldir[1] /= dist;
+      ldir[2] /= dist;
+    }
+    float c = std::max(0.0f, dot3(ldir, L.dir));
+    float num = std::max(0.0f, L.cosatt[0] + L.cosatt[1] * c + L.cosatt[2] * c * c);
+    float den = L.distatt[0] + L.distatt[1] * dist + L.distatt[2] * dist2;
+    attn = den != 0 ? num / den : 0.0f;
+  } else if (attn_fn == 1) {  // specular
+    normalize3(ldir);
+    float c = dot3(n, ldir) >= 0 ? std::max(0.0f, dot3(n, L.dir)) : 0.0f;
+    float da[3] = {L.distatt[0], L.distatt[1], L.distatt[2]};
+    if (diffuse != 0) normalize3(da);
+    float num = std::max(0.0f, L.cosatt[0] + L.cosatt[1] * c + L.cosatt[2] * c * c);
+    float den = da[0] + da[1] * c + da[2] * c * c;
+    attn = den != 0 ? num / den : 0.0f;
+  } else {
+    normalize3(ldir);
+  }
+  float d = 1.0f;
+  if (diffuse == 1) d = dot3(ldir, n);
+  else if (diffuse == 2) d = std::max(0.0f, dot3(ldir, n));
+  return attn * d;
+}
+
+}  // namespace
+
+// V5: transform() with the per-primitive plan of setup_transform: the same
+// arithmetic in the same order (test_vertex_exact compares every bit), without
+// re-deciding per vertex what each pass and generator does.
+void GxProcessor::transform_fast(const InVertex& v, XformSetup& x, OutVertex& o) const {
+  auto mtx34 = [&](u32 index) -> const float* {
+    index &= 0x3F;
+    if (!(x.have_pos >> index & 1)) {
+      const u32 at = index * 4u;
+      for (int k = 0; k < 12; ++k) x.pos[index][k] = xf_float(xf::kPosMtx + ((at + static_cast<u32>(k)) & 0xFF));
+      x.have_pos |= 1ull << index;
+    }
+    return x.pos[index];
+  };
+  const float* m = mtx34(v.pnmtx);
+  const float* p = v.pos;
+  float view[3];
+  for (int r = 0; r < 3; ++r) view[r] = m[4 * r] * p[0] + m[4 * r + 1] * p[1] + m[4 * r + 2] * p[2] + m[4 * r + 3];
+  const float* pr = x.pr;
+  float cx, cy, cz, cw;
+  if (x.ortho) {
+    cx = pr[0] * view[0] + pr[1];
+    cy = pr[2] * view[1] + pr[3];
+    cz = pr[4] * view[2] + pr[5];
+    cw = 1.0f;
+  } else {
+    cx = pr[0] * view[0] + pr[1] * view[2];
+    cy = pr[2] * view[1] + pr[3] * view[2];
+    cz = pr[4] * view[2] + pr[5];
+    cw = -view[2];
+  }
+  const float hw = static_cast<float>(kEfbWidth) / 2, hh = static_cast<float>(kEfbHeight) / 2;
+  o.pos[0] = (cx * x.wd + cw * (x.xo - x.ox)) / hw - cw;
+  o.pos[1] = cw - (cy * x.ht + cw * (x.yo - x.oy)) / hh;
+  o.pos[2] = (cz * x.zr + cw * x.zf) / 16777215.0f;
+  o.pos[3] = cw;
+
+  // Color channels.
+  if (x.npasses < 4) std::memset(o.color[x.npasses / 2], 0, sizeof o.color[0] * (2 - x.npasses / 2));
+  if (x.npasses) {
+    float n[3] = {v.nrm[0], v.nrm[1], v.nrm[2]};
+    float lf[32];
+    // The normal only feeds light factors: a lit channel without lights (the
+    // game's usual case: ambient times material) needs none.
+    if (x.nfactors) {
+      const u32 ni = v.pnmtx & 31u;
+      if (!(x.have_nrm >> ni & 1)) {
+        const u32 nm = xf::kNrmMtx + ni * 3u;
+        for (int k = 0; k < 9; ++k) x.nrm[ni][k] = xf_float(nm + static_cast<u32>(k));
+        x.have_nrm |= 1ull << ni;
+      }
+      const float* q = x.nrm[ni];
+      float t[3];
+      for (int r = 0; r < 3; ++r) t[r] = q[3 * r] * v.nrm[0] + q[3 * r + 1] * v.nrm[1] + q[3 * r + 2] * v.nrm[2];
+      n[0] = t[0];
+      n[1] = t[1];
+      n[2] = t[2];
+      normalize3(n);
+      for (u32 i = 0; i < x.nfactors; ++i) {
+        const XformSetup::Factor& F = x.factors[i];
+        lf[i] = light_factor(x.lights[F.light], F.diffuse, F.attn, view, n);
+      }
+    }
+    for (u32 pi = 0; pi < x.npasses; ++pi) {
+      const XformSetup::Pass& ps = x.passes[pi];
+      const XformSetup::Chan& cs = x.chan[ps.ch][ps.alpha];
+      const float* mat = ps.mat_vtx ? v.color[ps.ch] : cs.mat;
+      float* out = o.color[ps.ch];
+      if (ps.alpha) {
+        if (!ps.lit) {
+          out[3] = mat[3];
+          continue;
+        }
+        float acc = ps.amb_vtx ? v.color[ps.ch][3] : cs.amb[3];
+        for (u32 j = 0; j < ps.nlights; ++j) acc += lf[ps.factor[j]] * x.lights[ps.light[j]].col[3];
+        out[3] = mat[3] * std::clamp(acc, 0.0f, 1.0f);
+      } else {
+        if (!ps.lit) {
+          out[0] = mat[0];
+          out[1] = mat[1];
+          out[2] = mat[2];
+          continue;
+        }
+        const float* amb = ps.amb_vtx ? v.color[ps.ch] : cs.amb;
+        float a0 = amb[0], a1 = amb[1], a2 = amb[2];
+        for (u32 j = 0; j < ps.nlights; ++j) {
+          const float f = lf[ps.factor[j]];
+          const float* col = x.lights[ps.light[j]].col;
+          a0 += f * col[0];
+          a1 += f * col[1];
+          a2 += f * col[2];
+        }
+        out[0] = mat[0] * std::clamp(a0, 0.0f, 1.0f);
+        out[1] = mat[1] * std::clamp(a1, 0.0f, 1.0f);
+        out[2] = mat[2] * std::clamp(a2, 0.0f, 1.0f);
+      }
+    }
+  }
+
+  // Texture coordinate generation.
+  for (u32 i = 0; i < x.ngen8; ++i) {
+    const XformSetup::Gen& g = x.gens[i];
+    float out[3] = {0, 0, 1};
+    if (g.type == 0) {
+      float src[4] = {0, 0, 1, 1};
+      switch (g.row) {
+        case 0: src[0] = v.pos[0]; src[1] = v.pos[1]; src[2] = v.pos[2]; break;
+        case 1: src[0] = v.nrm[0]; src[1] = v.nrm[1]; src[2] = v.nrm[2]; break;
+        case 2: src[0] = o.color[0][0]; src[1] = o.color[0][1]; src[2] = o.color[0][2]; break;
+        case 3: src[0] = v.tan[0]; src[1] = v.tan[1]; src[2] = v.tan[2]; break;
+        case 4: src[0] = v.bin[0]; src[1] = v.bin[1]; src[2] = v.bin[2]; break;
+        default:
+          if (g.row <= 12) {
+            src[0] = v.tex[g.row - 5][0];
+            src[1] = v.tex[g.row - 5][1];
+          }
+          break;
+      }
+      if (g.ab11) src[2] = 1.0f;
+      const float* mtx = mtx34(v.texmtx[i]);
+      for (int r = 0; r < (g.stq ? 3 : 2); ++r)
+        out[r] = mtx[4 * r] * src[0] + mtx[4 * r + 1] * src[1] + mtx[4 * r + 2] * src[2] + mtx[4 * r + 3] * src[3];
+      if (x.dual) {
+        if (g.post_norm) normalize3(out);
+        const float* pm = x.postmtx[i];
+        float r3[3];
+        for (int r = 0; r < 3; ++r) r3[r] = pm[4 * r] * out[0] + pm[4 * r + 1] * out[1] + pm[4 * r + 2] * out[2] + pm[4 * r + 3];
+        std::memcpy(out, r3, sizeof out);
+      }
+    } else if (g.type == 1) {
+      if (g.emboss_src < i) std::memcpy(out, o.tex[g.emboss_src], sizeof out);
+    } else {
+      const float* col = o.color[g.type == 2 ? 0 : 1];
+      out[0] = col[0];
+      out[1] = col[1];
+    }
+    std::memcpy(o.tex[i], out, sizeof out);
+  }
+  if (x.ngen8 < 8) std::memset(o.tex[x.ngen8], 0, sizeof o.tex[0] * (8 - x.ngen8));
+}
+
+// V5: load_vertex and transform for a primitive's vertices, with the format's
+// loader program. The input vertex starts zeroed once: every vertex writes the
+// same fields (or zeroes them when their data is outside memory, where
+// load_vertex leaves its fresh vertex's zeros).
+void GxProcessor::load_fast(const VertexFormat& f, const u8* p, InVertex& v) const {
+  static_assert(offsetof(InVertex, nrm) == offsetof(InVertex, pos) + 12 && offsetof(InVertex, bin) == offsetof(InVertex, pos) + 24 &&
+                offsetof(InVertex, tan) == offsetof(InVertex, pos) + 36 &&
+                offsetof(InVertex, color) == offsetof(InVertex, pos) + 48 &&
+                offsetof(InVertex, tex) == offsetof(InVertex, pos) + 80);
+  // The floats from pos on, as one array (the object's bytes, not pos's).
+  float* const fl = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(&v) + offsetof(InVertex, pos));
+  const VertexFormat::Step* const steps = f.steps;
+  const u32 nsteps = f.nsteps;
+  {
+    if (f.pnmtx) v.pnmtx = *p++ & 0x3F;
+    if (f.texmtx)
+      for (int t = 0; t < 8; ++t)
+        if (f.texmtx & (1u << t)) v.texmtx[t] = *p++ & 0x3F;
+    for (u32 s = 0; s < nsteps; ++s) {
+      const VertexFormat::Step& st = steps[s];
+      const u8* q;
+      if (st.type == 1) {
+        q = p;
+        p += st.size;
+      } else {
+        u32 idx;
+        if (st.type == 2) {
+          idx = *p++;
+        } else {
+          idx = be16_at(p);
+          p += 2;
+        }
+        q = fetch(st.array, array_base_[st.array] + idx * array_stride_[st.array], st.size);
+      }
+      float* d = fl + st.dst;
+      const u32 n = st.n;
+      if (!q) {
+        for (u32 i = 0; i < n; ++i) d[i] = 0.0f;
+        continue;
+      }
+      const float sc = st.scale;
+      switch (st.op) {
+        case kU8:
+          for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(q[i]) * sc;
+          break;
+        case kS8:
+          for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(static_cast<std::int8_t>(q[i])) * sc;
+          break;
+        case kU16:
+          for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(be16_at(q + 2 * i)) * sc;
+          break;
+        case kS16:
+          for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(static_cast<std::int16_t>(be16_at(q + 2 * i))) * sc;
+          break;
+        case kF32:
+          for (u32 i = 0; i < n; ++i) d[i] = std::bit_cast<float>(be32_at(q + 4 * i));
+          break;
+        default:
+          read_color(q, st.op - 8u, d);
+          break;
+      }
+    }
+  }
+}
+
+InVertex GxProcessor::load_vertex_fast(int fmt, const u8* p) const {
+  const VertexFormat f = vertex_format(fmt);
+  InVertex v;
+  v.pnmtx = f.default_pnmtx;
+  std::memcpy(v.texmtx, f.default_texmtx, sizeof v.texmtx);
+  load_fast(f, p, v);
+  return v;
+}
+
+void GxProcessor::vertices(const VertexFormat& f, const u8* data, u32 count, u32 vsize, OutVertex* out) {
+  InVertex v;
+  v.pnmtx = f.default_pnmtx;
+  std::memcpy(v.texmtx, f.default_texmtx, sizeof v.texmtx);
+  for (u32 k = 0; k < count; ++k) {
+    load_fast(f, data + static_cast<std::size_t>(k) * vsize, v);
+    transform_fast(v, xs_, out[k]);
+  }
+}
+
 void GxProcessor::snapshot(DrawCall& d) const {
   PipelineConfig& c = d.cfg;
   c = PipelineConfig{};
@@ -969,10 +1297,14 @@ void GxProcessor::primitive(u8 op, const u8* data, u32 count) {
     setup_transform(xs_);
     xs_valid_ = true;
   }
-  for (u32 k = 0; k < count; ++k) {
-    InVertex in;
-    load_vertex(vf, data + static_cast<std::size_t>(k) * vsize, in);
-    transform(in, xs_, vs[k]);
+  if (!ref_vertices_) {
+    vertices(vf, data, count, vsize, vs.data());  // V5: the fast path
+  } else {
+    for (u32 k = 0; k < count; ++k) {
+      InVertex in;
+      load_vertex(vf, data + static_cast<std::size_t>(k) * vsize, in);
+      transform(in, xs_, vs[k]);
+    }
   }
 
   if (keep_prim_info_) {
