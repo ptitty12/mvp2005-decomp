@@ -598,13 +598,19 @@ void Renderer::flush() {
   StagingPool::Entry* st = vb + ib + ub ? take_staging(uo + ub) : nullptr;
   wgpu::CommandBuffer cbs[2];
   std::uint32_t ncb = 0;
+  bool staged = false;
   if (st) {
-    // V6: through a staging buffer, copied on the GPU before the batch's commands.
+    // V6: through a staging buffer, copied on the GPU before the batch's commands (queue
+    // writes if the mapped memory refuses a write).
     st->ready = false;
-    if (vb) st->buf.WriteMappedRange(0, vdata_.data() + vup_, vb);
-    if (ib) st->buf.WriteMappedRange(io, idata_.data() + iup_, ib);
-    if (ub) st->buf.WriteMappedRange(uo, udata_.data() + uup_, ub);
+    bool ok = true;
+    if (vb) ok = ok && st->buf.WriteMappedRange(0, vdata_.data() + vup_, vb) == wgpu::Status::Success;
+    if (ib) ok = ok && st->buf.WriteMappedRange(io, idata_.data() + iup_, ib) == wgpu::Status::Success;
+    if (ub) ok = ok && st->buf.WriteMappedRange(uo, udata_.data() + uup_, ub) == wgpu::Status::Success;
     st->buf.Unmap();
+    staged = ok;
+  }
+  if (staged) {
     wgpu::CommandEncoder copy = gpu_.device().CreateCommandEncoder();
     if (vb) copy.CopyBufferToBuffer(st->buf, 0, vbuf_, vup_, vb);
     if (ib) copy.CopyBufferToBuffer(st->buf, io, ibuf_, iup_ * 2, ib);

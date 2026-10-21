@@ -523,17 +523,20 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   std::uint64_t staged_bytes = 0;
   for (const Span& sp : spans_) staged_bytes += (sp.to - sp.from + 7) & ~std::size_t(7);
   StagingPool::Entry* st = staged_bytes ? take_staging(staged_bytes) : nullptr;
+  bool staged = false;
   if (st) {
     st->ready = false;
     std::uint64_t at = 0;
+    bool ok = true;
     for (const Span& sp : spans_) {
-      st->buf.WriteMappedRange(at, cur.v.data() + sp.from, sp.to - sp.from);
+      ok = ok && st->buf.WriteMappedRange(at, cur.v.data() + sp.from, sp.to - sp.from) == wgpu::Status::Success;
       at += (sp.to - sp.from + 7) & ~std::size_t(7);
     }
     st->buf.Unmap();
-  } else {
-    for (const Span& sp : spans_) q.WriteBuffer(ivbuf_, sp.from, cur.v.data() + sp.from, sp.to - sp.from);
+    staged = ok;
   }
+  if (!staged)  // queue writes (no staging buffer mapped, or the mapped memory refused a write)
+    for (const Span& sp : spans_) q.WriteBuffer(ivbuf_, sp.from, cur.v.data() + sp.from, sp.to - sp.from);
   for (const Span& sp : spans_) istats_.upload_bytes += sp.to - sp.from;
   if (!cur.copies.empty() && !iconvert_group_) {
     wgpu::BindGroupEntry be[3]{};
@@ -554,7 +557,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   ++replays_;
   subst_.clear();
   wgpu::CommandEncoder enc = dev.CreateCommandEncoder();
-  if (st) {
+  if (staged) {
     std::uint64_t at = 0;
     for (const Span& sp : spans_) {
       enc.CopyBufferToBuffer(st->buf, at, ivbuf_, sp.from, sp.to - sp.from);
