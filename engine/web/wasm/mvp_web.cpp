@@ -277,6 +277,7 @@ struct Engine {
   xlat::WasmEmitStats emit_stats;
   std::size_t module_bytes = 0;
   bool keep_module = false;      // keep the module for the cache (mvp_module_blob)
+  std::size_t kept_len = 0;      // V4: its bytes' length (the bytes themselves: Module.mvpModuleBytes)
   bool from_cache = false;
   xlat::WasmModule kept;
   std::vector<std::uint8_t> blob;
@@ -340,6 +341,10 @@ struct Engine {
   std::string state_result;             // the last request's outcome for the page (JSON), until taken
 };
 Engine g;
+// V4: MEM1 at a fixed address (static storage: the same place in every run of this
+// engine build), so the translated module has it as a constant (xlat::WasmFixed;
+// the cache key names the build, and rt::load_wasm_module checks the addresses).
+alignas(64) std::uint8_t g_mem1_store[Machine::kMem1Size + Machine::kGuard];
 std::vector<TimedSource::Record> g_io_log;
 bool g_io_logging = false;
 
@@ -668,6 +673,10 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate(const char* text, int len) {
     const auto& table = hle_table();
     for (std::size_t k = 0; k < table.size(); ++k)
       opt.hle.push_back({table[k].name, table[k].address, static_cast<int>(k), table[k].kind == HleKind::Before});
+    set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: where the machine's MEM1 will be (mvp_boot)
+    opt.fixed = wasm_fixed_addrs();                    // the runtime's addresses as constants
+    opt.fast_entries = true;                           // V4: functions without resume labels for calls
+    opt.structured_loops = true;                       // V4: and their loops as wasm loops
     if (!xlat::emit_wasm(cfg, opt, &mod, &g.error)) return 0;
     double t3 = now_ms();
     g.t_symbols = t1 - t0;
@@ -677,9 +686,16 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate(const char* text, int len) {
   g.module_bytes = mod.bytes.size();
   g.emit_stats = mod.stats;
   mvp_js_progress("Translating: compiling the module", 4, 5);
-  if (!load_wasm_module(mod, &g.load, &g.error)) return 0;
+  // V4: for the cache the bytes stay on the JavaScript side (Module.mvpModuleBytes), so
+  // the engine's heap gives them back at once, before the machine is built.
+  if (!load_wasm_module(mod, mod.bytes.data(), mod.bytes.size(), g.keep_module, &g.load, &g.error)) return 0;
+  set_wasm_heap_code(true);  // V4: heap code translated while the game runs
   g.translated = true;
-  if (g.keep_module) g.kept = std::move(mod);  // serialized later, off the critical path
+  if (g.keep_module) {  // the tables, serialized later, off the critical path
+    g.kept_len = mod.bytes.size();
+    std::vector<std::uint8_t>().swap(mod.bytes);
+    g.kept = std::move(mod);
+  }
   return 1;
 }
 
@@ -691,15 +707,17 @@ EMSCRIPTEN_KEEPALIVE void mvp_keep_module(int keep) { g.keep_module = keep != 0;
 // its size, mvp_module_blob_ptr its address) and the wasm bytes
 // (mvp_module_bytes_ptr, mvp_module_bytes_len); valid until mvp_module_release().
 EMSCRIPTEN_KEEPALIVE double mvp_module_blob() {
-  if (g.kept.bytes.empty()) return 0;
-  g.blob = web::serialize_module_header(g.kept);
+  if (!g.kept_len) return 0;
+  g.blob = web::serialize_module_header(g.kept, g.kept_len);
   return static_cast<double>(g.blob.size());
 }
 EMSCRIPTEN_KEEPALIVE const std::uint8_t* mvp_module_blob_ptr() { return g.blob.data(); }
-EMSCRIPTEN_KEEPALIVE const std::uint8_t* mvp_module_bytes_ptr() { return g.kept.bytes.data(); }
-EMSCRIPTEN_KEEPALIVE double mvp_module_bytes_len() { return static_cast<double>(g.kept.bytes.size()); }
+// V4: the bytes are Module.mvpModuleBytes now (load_wasm_module kept a copy there).
+EMSCRIPTEN_KEEPALIVE const std::uint8_t* mvp_module_bytes_ptr() { return nullptr; }
+EMSCRIPTEN_KEEPALIVE double mvp_module_bytes_len() { return static_cast<double>(g.kept_len); }
 EMSCRIPTEN_KEEPALIVE void mvp_module_release() {
   g.kept = xlat::WasmModule{};
+  g.kept_len = 0;
   std::vector<std::uint8_t>().swap(g.blob);
 }
 
@@ -714,13 +732,17 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate_cached(const std::uint8_t* blob, double l
   }
   xlat::WasmModule mod;
   const double t0 = now_ms();
-  if (!web::deserialize_module(blob, static_cast<std::size_t>(len), &mod, &g.error)) return 0;
+  std::size_t bytes_at = 0;  // V4: the wasm bytes are compiled from the blob itself, not a copy
+  if (!web::deserialize_module_tables(blob, static_cast<std::size_t>(len), &mod, &bytes_at, &g.error)) return 0;
   g.t_symbols = g.t_cfg = 0;
   g.t_emit = now_ms() - t0;  // unpacking the blob stands in for the emitter
-  g.module_bytes = mod.bytes.size();
+  g.module_bytes = static_cast<std::size_t>(len) - bytes_at;
   g.emit_stats = mod.stats;
   mvp_js_progress("Loading the cached translation: compiling", 4, 5);
-  if (!load_wasm_module(mod, &g.load, &g.error)) return 0;
+  set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: the module's fixed MEM1 (load_wasm_module checks it)
+  if (!load_wasm_module(mod, blob + bytes_at, static_cast<std::size_t>(len) - bytes_at, false, &g.load, &g.error))
+    return 0;
+  set_wasm_heap_code(true);  // V4: heap code translated while the game runs
   g.translated = true;
   g.from_cache = true;
   return 1;
@@ -771,7 +793,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
   if (stop_fields > 0) g.stop_fields = static_cast<std::uint64_t>(stop_fields);
   if (stop_frames > 0) g.stop_frames = static_cast<std::uint64_t>(stop_frames);
 
-  g.m = std::make_unique<Machine>();
+  g.m = std::make_unique<Machine>(g_mem1_store);  // V4: MEM1 where the translated module has it
   g.m->load_dol(g.disc->dol);
   setup_boot_environment(*g.m, *g.disc);
   g.hw = std::make_unique<Hardware>(&g.m->cpu(), g.m->mem1(), Machine::kMem1Size);
@@ -817,6 +839,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_boot(const char* script, int len, double stop_field
     });
     if (!g.mods.start(g.m->cpu(), &g.error)) return 0;
     g.timeline = std::make_unique<mods::Timeline>(*g.m, *g.hooks, *g.hw, *g.input, g.mods, g_timeline_tool);
+    g.timeline->prepare();  // V4: the slots' buffers now, not at the first pitches
     g.timeline->set_log([to_page](const std::string& s) { to_page("timeline: " + s); });
     g_poll_gate = &poll_gate;
   }
@@ -1088,7 +1111,10 @@ void state_step() {
                     views.empty() ? "false" : "true", now_ms() - t0);
       g.state_result = b;
     } else {
-      rt::SaveState st;
+      // V4: with gameplay mods the file goes into a snapshot slot's buffers (restart() below
+      // takes the slots over): no second copy of the machine on the heap.
+      rt::SaveState scratch;
+      rt::SaveState& st = g.timeline ? g.timeline->slot_for_load() : scratch;
       std::vector<std::uint8_t> mods_state, views;
       std::string err;
       if (!rt::read_state_file(g.state_in, *g.hw, g.input.get(), st, mods_state, views, &err))
@@ -1435,9 +1461,9 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_status() {
   if (g.timeline) {  // gameplay mods: snapshots and reviews, with the longest host time of each
     const auto& t = *g.timeline;
     std::snprintf(b, sizeof b,
-                  ",\"timeline\":{\"snapshots\":%llu,\"snapshot_ms_max\":%.2f,\"reviews\":%llu,\"restores\":%llu,"
-                  "\"restore_ms_max\":%.2f}",
-                  static_cast<unsigned long long>(t.snapshots), t.snapshot_ms_max,
+                  ",\"timeline\":{\"snapshots\":%llu,\"snapshot_ms_max\":%.2f,\"snapshot_ms_total\":%.2f,"
+                  "\"reviews\":%llu,\"restores\":%llu,\"restore_ms_max\":%.2f}",
+                  static_cast<unsigned long long>(t.snapshots), t.snapshot_ms_max, t.snapshot_ms_total,
                   static_cast<unsigned long long>(t.reviews), static_cast<unsigned long long>(t.restores),
                   t.restore_ms_max);
     s += b;

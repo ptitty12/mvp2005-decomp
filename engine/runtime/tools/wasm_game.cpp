@@ -10,6 +10,10 @@
 //   MVP_WASM_HELPERS=1   every non-branch instruction through the runtime
 //   MVP_WASM_OUT=FILE    also write the module (only ever under build/)
 //   MVP_WASM_NAMES=1     add a name section (function names for profilers)
+//   MVP_WASM_FIXED=0     the runtime's addresses as imported globals (V4: constants by default)
+//   MVP_WASM_FAST=0      one function per guest function (V4: fast entries and resumable copies)
+//   MVP_WASM_LOOPS=0     loops through the dispatcher (V4: structured loops)
+//   MVP_WASM_HEAP=0      heap code interpreted (V4: translated on its third call)
 #include <emscripten.h>
 
 #include <chrono>
@@ -54,6 +58,13 @@ void mvp_register_game() {
   opt.precise_io = env_on("MVP_WASM_PRECISE");
   opt.inline_ops = !env_on("MVP_WASM_HELPERS");
   opt.names = env_on("MVP_WASM_NAMES");
+  // V4: the runtime's addresses (MEM1's included: the machine exists by now) as
+  // constants, as the browser's engine emits them; MVP_WASM_FIXED=0 keeps the globals.
+  if (const char* v = std::getenv("MVP_WASM_FIXED"); !v || *v != '0') opt.fixed = rt::wasm_fixed_addrs();
+  // V4: Fast entries with resumable copies, as the browser's engine; MVP_WASM_FAST=0: one function each.
+  if (const char* v = std::getenv("MVP_WASM_FAST"); !v || *v != '0') opt.fast_entries = true;
+  // V4: loops as wasm loops where the dispatcher is not needed; MVP_WASM_LOOPS=0: the dispatcher.
+  if (const char* v = std::getenv("MVP_WASM_LOOPS"); !v || *v != '0') opt.structured_loops = true;
   auto t2 = std::chrono::steady_clock::now();
   xlat::WasmModule mod;
   if (!xlat::emit_wasm(cfg, opt, &mod, &err)) {
@@ -68,6 +79,8 @@ void mvp_register_game() {
     std::fprintf(stderr, "mvp-boot-wasm: %s\n", err.c_str());
     std::exit(1);
   }
+  // V4: heap code translated while the game runs, as in the browser; MVP_WASM_HEAP=0: interpreted.
+  if (const char* v = std::getenv("MVP_WASM_HEAP"); !v || *v != '0') rt::set_wasm_heap_code(true);
   const auto& s = mod.stats;
   std::printf("wasm: disc+symbols %.0f ms, CFG %.0f ms, emit %.0f ms, compile %.0f ms, instantiate %.0f ms\n", load_ms,
               cfg_ms, emit_ms, ls.compile_ms, ls.instantiate_ms);

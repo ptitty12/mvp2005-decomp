@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "common/bytes.h"
+#include "common/state_io.h"
 #include "runtime/boot.h"
 #include "runtime/hw.h"
 #include "runtime/sys_hooks.h"
@@ -451,4 +452,103 @@ TEST_CASE("hardware log, write-gather pipe and the poll limit") {
   CHECK_THROWS_AS(g.r(0xCC002000, 2), StopRun);
   CHECK_THROWS_AS(g.r(0xCD000000), StopRun);
   CHECK(g.hw.log().size() > 10);
+}
+
+// V4: snapshots copy ARAM and the card's image by pages (Hardware::save_into,
+// restore_from): after every save the snapshot holds what a whole copy would, and
+// every restore brings back exactly the snapshot, through DMA writes, card programs
+// and erases, two snapshots taken in turn, restores of either, and a snapshot read
+// from a state file (no pages to compare with).
+TEST_CASE("V4: snapshots by pages hold what whole copies hold") {
+  CardRig c;
+  c.hw.insert_card(MemoryCard::formatted(0, 0, 1));
+  c.unlock_read(0x7FEC8000u, 4, 0);
+  for (int k = 0; k < 3; ++k) c.unlock_read(0, 24, 1);
+  REQUIRE((c.status() & 0x40) != 0);
+  std::uint64_t tb = 0;
+  std::uint32_t seed = 1;
+  auto rnd = [&] {
+    seed = seed * 1664525u + 1013904223u;
+    return seed;
+  };
+  auto dma = [&](u32 ar, u32 n) {  // n bytes of fresh data to ARAM at `ar`
+    for (u32 k = 0; k < n; ++k) c.mem[0x00100000 + k] = static_cast<u8>(rnd() >> 24);
+    c.w(0xCC005020, 0x00100000);
+    c.w(0xCC005024, ar);
+    c.w(0xCC005028, n);
+  };
+  auto program = [&](u32 page) {  // a 128-byte card page program
+    c.exi_select(0);
+    c.send({0xF2, static_cast<u8>((page >> 17) & 0x7F), static_cast<u8>(page >> 9), static_cast<u8>((page >> 7) & 3),
+            static_cast<u8>(page & 0x7F)});
+    for (u32 k = 0; k < 128; k += 4) {
+      const u32 v = rnd();
+      c.send({static_cast<u8>(v), static_cast<u8>(v >> 8), static_cast<u8>(v >> 16), static_cast<u8>(v >> 24)});
+    }
+    c.exi_deselect();
+    tb += MemoryCard::kProgramTb + MemoryCard::kEraseTb;
+    c.hw.advance(tb);
+  };
+  auto erase = [&](u32 sector) {
+    c.exi_select(0);
+    c.send({0xF1, static_cast<u8>((sector >> 17) & 0x7F), static_cast<u8>(sector >> 9)});
+    c.exi_deselect();
+    tb += MemoryCard::kProgramTb + MemoryCard::kEraseTb;
+    c.hw.advance(tb);
+  };
+  auto state = [](const Hardware& h) {
+    StateWriter w;
+    h.write_state(w);  // every device's state, ARAM included (not the card's contents)
+    return w.out();
+  };
+  auto same = [&](const Hardware& a, const Hardware& b) {
+    return state(a) == state(b) && a.card() && b.card() && a.card()->image() == b.card()->image();
+  };
+  dma(0x000000, 0x4000);
+  dma(0x800020, 0x60);
+  program(3 * 0x2000);
+  auto s1 = c.hw.snapshot();
+  CHECK(same(*s1, c.hw));
+  dma(0x001000, 0x2000);  // within what s1 has
+  program(3 * 0x2000 + 0x80);
+  program(40 * 0x2000);
+  auto s2 = c.hw.snapshot();
+  CHECK(same(*s2, c.hw));
+  dma(0x7FF000, 0x3000);
+  erase(3 * 0x2000);
+  c.hw.save_into(*s1);
+  CHECK(same(*s1, c.hw));
+  dma(0x000800, 0x100);
+  program(41 * 0x2000);
+  c.hw.save_into(*s2);
+  CHECK(same(*s2, c.hw));
+  const auto want1 = state(*s1);
+  const auto card1 = s1->card()->image();
+  dma(0x200000, 0x10000);
+  program(1000 * 0x2000);
+  c.hw.restore_from(*s1);
+  CHECK(state(c.hw) == want1);
+  CHECK(c.hw.card()->image() == card1);
+  dma(0x800000, 0x1000);
+  program(40 * 0x2000 + 0x100);
+  c.hw.save_into(*s2);  // after a restore: what it brought back is new to s2
+  CHECK(same(*s2, c.hw));
+  c.hw.restore_from(*s2);
+  CHECK(same(*s2, c.hw));
+  c.hw.restore_from(*s1);
+  CHECK(state(c.hw) == want1);
+  CHECK(c.hw.card()->image() == card1);
+  c.hw.save_into(*s1);
+  CHECK(same(*s1, c.hw));
+  // A snapshot read from a state file: ARAM from the file, then a whole copy back.
+  dma(0x400000, 0x800);
+  const auto file_state = state(c.hw);
+  dma(0x400000, 0x800);
+  auto f = c.hw.snapshot();
+  StateReader r(file_state);
+  f->read_state(r);
+  c.hw.restore_from(*f);
+  CHECK(state(c.hw) == file_state);
+  c.hw.save_into(*s1);
+  CHECK(same(*s1, c.hw));
 }

@@ -39,6 +39,10 @@ struct SaveState {
 // Both throw std::logic_error when called inside a run (rt::g_unwinding,
 // g_resume, g_yield or an exception handler active). `input` may be null.
 void save_state(SaveState& s, Machine& m, YieldingHooks& hooks, Hardware& hw, const InputQueue* input);
+// V4: makes `s`'s buffers now (MEM1's, written through, and the hardware's
+// snapshot object) so that its first save_state copies without allocating; `s`
+// stays empty (valid false). Nothing of the machine changes.
+void prepare_state(SaveState& s, Machine& m, const Hardware& hw);
 void load_state(const SaveState& s, Machine& m, YieldingHooks& hooks, Hardware& hw, InputQueue* input);
 
 }  // namespace mvp::rt

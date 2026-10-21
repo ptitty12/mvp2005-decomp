@@ -274,13 +274,6 @@ u32 double_to_single(u64 d) {
   return hi2 | static_cast<u32>((d >> 29) & 0x3FFFFFFF);
 }
 
-u32 double_to_single_ftz(u64 d) {
-  u32 exp = static_cast<u32>((d >> 52) & 0x7FF);
-  if (exp > 896 || (d & ~kSign) == 0)
-    return static_cast<u32>((d >> 32) & 0xC0000000u) | static_cast<u32>((d >> 29) & 0x3FFFFFFF);
-  return static_cast<u32>((d >> 32) & 0x80000000u);
-}
-
 Model g_model = Model::Fast;
 
 u64 force25(u64 x) { return (x & 0xFFFFFFFFF8000000ull) + (x & 0x8000000ull); }

@@ -74,6 +74,7 @@ void Timeline::save(int slot) {
   ++snapshots;
   const double ms = ms_since(t0);
   if (ms > snapshot_ms_max) snapshot_ms_max = ms;
+  snapshot_ms_total += ms;
 }
 
 void Timeline::load(int slot) {
@@ -120,6 +121,10 @@ std::string Timeline::mem1_sha1() {
   Sha1 h;
   h.update(m_.mem1(), rt::Machine::kMem1Size);
   return Sha1::hex(h.finish());
+}
+
+void Timeline::prepare() {
+  for (rt::SaveState& s : slot_) rt::prepare_state(s, m_, hw_);
 }
 
 void Timeline::log(const std::string& s) {

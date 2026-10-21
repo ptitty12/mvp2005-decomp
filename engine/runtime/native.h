@@ -100,6 +100,12 @@ void fp_unavailable(Cpu& c, u32 at);
 // Calls the guest function at `target` (LR already set): native if translated,
 // otherwise in the interpreter until it returns to LR (or an unwind passes).
 void call_indirect(Cpu& c, u32 target);
+// V4: code outside the translated program (code the game writes into its heap)
+// may have a translation made while the game runs (runtime/wasm_host.h): when set,
+// call_indirect asks it for one before it interprets. It returns a function only
+// where that is the same as interpreting from `target` (null: interpret).
+using HeapCodeHook = GuestFn (*)(Cpu& c, u32 target);
+extern HeapCodeHook g_heap_code_hook;
 // bla to an address outside the DOL (code the OS installs in low memory).
 void absolute_call(Cpu& c, u32 target);
 

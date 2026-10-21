@@ -50,6 +50,16 @@ class Timeline {
 
   Timeline(rt::Machine& m, rt::YieldingHooks& hooks, rt::Hardware& hw, rt::InputQueue& input,
            GameplayHost& mods, Tool& tool);
+  // V4: makes the snapshot slots' buffers now (while the machine is being built,
+  // with mods on): a slot's first snapshot, a pitch, then copies without
+  // allocating and touching 50 MB. Changes nothing else.
+  void prepare();
+  // V4: a slot whose buffers a tool may read a save-state file into, emptied; the
+  // tool must call restart() once the state is loaded (it saves that slot again).
+  rt::SaveState& slot_for_load() {
+    slot_[0].valid = false;
+    return slot_[0];
+  }
 
   // rt::g_poll_gate: whether the poll may go ahead (false: the run stopped before it).
   bool gate(ppc::Cpu& c);
@@ -72,6 +82,7 @@ class Timeline {
 
   std::uint64_t snapshots = 0, reviews = 0, restores = 0;
   double snapshot_ms_max = 0, restore_ms_max = 0;
+  double snapshot_ms_total = 0;  // V4: with `snapshots`, the mean (the longest is usually a slot's first)
 
   // The slots by the polls of their snapshots (~0: empty). A live snapshot
   // replaces an empty slot, else the older; a review restores the latest at or

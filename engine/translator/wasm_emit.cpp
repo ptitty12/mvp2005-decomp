@@ -96,6 +96,22 @@ constexpr const char* kHelperName[kHelperCount] = {"rd8",  "rd16", "rd32", "wr8"
                                                    "wr32.page", "rd64.page", "wr64.page", "lfs.page", "stfs.page"};
 // Imported globals (immutable i32): the table base and three runtime addresses.
 enum Glb : u32 { gTableBase, gUnwinding, gResume, gHook, gWgp, gGpPages, gMem1, kGlobals };
+// V4: WasmEmitOptions::fixed of the module being emitted (emit_wasm sets it).
+thread_local WasmFixed t_fixed;
+// Pushes the address the imported global `g` holds: the constant when it is fixed.
+void glb(Fn& b, Glb g) {
+  u32 c = 0;
+  switch (g) {
+    case gUnwinding: c = t_fixed.unwinding; break;
+    case gResume: c = t_fixed.resume; break;
+    case gHook: c = t_fixed.hook; break;
+    case gWgp: c = t_fixed.wgp; break;
+    case gGpPages: c = t_fixed.gp_pages; break;
+    default: break;
+  }
+  if (c) b.i32c(c);
+  else b.global(g);
+}
 
 // ---- per-instruction classification ----
 enum Kind : u8 {
@@ -196,6 +212,16 @@ bool is_fp_inline(Op op) {
   }
 }
 
+// V4: whether a single-entry function has resume labels (as FuncGen::run finds them).
+bool has_resume_labels(const FunctionCfg& f) {
+  auto label = [&](u32 a) { return f.contains(a) && f.reachable[(a - f.start) / 4] && a != f.start; };
+  for (u32 a : f.resume_points)
+    if (label(a)) return true;
+  for (u32 a : f.back_edges)
+    if (label(a)) return true;
+  return false;
+}
+
 const HleSpec* find_spec(const WasmEmitOptions& o, const FunctionCfg& f) {
   for (const HleSpec& h : o.hle)
     if (h.address ? h.address == f.start : h.name == f.sym->name) return &h;
@@ -203,7 +229,9 @@ const HleSpec* find_spec(const WasmEmitOptions& o, const FunctionCfg& f) {
 }
 
 // A wasm function of the module.
-enum class WKind : u8 { Plain, Body, Stub, HleStub, Orig };
+// V4: Fast, a Plain function without resume labels (calls and the entry table
+// reach it); Slow, its copy with them (resume entries only).
+enum class WKind : u8 { Plain, Body, Stub, HleStub, Orig, Fast, Slow };
 struct WFunc {
   WKind kind;
   std::size_t cfg;   // index in ProgramCfg::functions
@@ -225,7 +253,7 @@ struct Ctx {
 // ---- one translated function body ----
 class FuncGen {
  public:
-  enum class Mode { Plain, Body, Orig };
+  enum class Mode { Plain, Body, Orig, Fast };
 
   FuncGen(Ctx& ctx, std::size_t cfg_index, Mode mode, int hook)
       : ctx_(ctx), f_(ctx.p.functions[cfg_index]), mode_(mode), hook_(hook), self_slot_(ctx.start_slot[cfg_index]) {}
@@ -331,7 +359,7 @@ class FuncGen {
     body_->set(L_sp);
   }
   void leave() {  // rt::leave(); return;
-    body_->global(gUnwinding);
+    glb(*body_, gUnwinding);
     body_->i32c(1);
     body_->mem(op::i32_store8, 0, 0);
     body_->op(op::return_);
@@ -372,6 +400,15 @@ class FuncGen {
   int loop_level_ = -1, pre_level_ = -1;
   int self_loop_ = -1;               // the current segment's own loop, if any
   std::vector<bool> self_loops_;     // per segment: it branches back to its own start
+  // V4: structured loops instead of the dispatcher (a function without resume
+  // labels: Fast, Orig): a segment that later segments branch back to starts a
+  // wasm loop that ends after the last of them (loop_end_), and its backward
+  // branches go to that loop (loop_at_: its level). Only when the loops nest and
+  // nothing branches into one but at its start (plan_loops); else the dispatcher.
+  bool structured_ = false;
+  std::vector<int> loop_end_, loop_at_;
+  bool plan_loops();
+  void emit_region(int a, int b, bool is_loop, const std::function<void(int)>& emit_segment);
   int cur_seg_ = 0;
   s64 p_ = 0;  // instructions started since the ticks local was last updated
   RegSet used_ = 0;
@@ -403,12 +440,12 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
   b.get(0);
   b.i32c(e);
   b.mem(op::i32_store, 2, kPc);
-  b.global(gHook);
+  glb(b, gHook);
   b.mem(op::i32_load, 2, 0);
   event_due();
   b.op(op::i32_or);
   b.if_();
-  b.global(gHook);
+  glb(b, gHook);
   b.mem(op::i32_load, 2, 0);
   b.if_();
   b.get(0);
@@ -424,7 +461,7 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
   b.mem(op::i32_load, 2, kPc);
   b.i32c(e);
   b.op(op::i32_ne);
-  b.global(gUnwinding);
+  glb(b, gUnwinding);
   b.mem(op::i32_load8_u, 0, 0);
   b.op(op::i32_or);
   b.if_();
@@ -434,7 +471,7 @@ void emit_prologue(Fn& b, u32 e, const std::function<void()>& miss) {
 }
 
 void emit_leave(Fn& b) {
-  b.global(gUnwinding);
+  glb(b, gUnwinding);
   b.i32c(1);
   b.mem(op::i32_store8, 0, 0);
   b.op(op::return_);
@@ -730,7 +767,7 @@ void FuncGen::check(u32 expect) {
   body_->mem(op::i32_load, 2, kPc);
   body_->i32c(expect);
   body_->op(op::i32_ne);
-  body_->global(gUnwinding);
+  glb(*body_, gUnwinding);
   body_->mem(op::i32_load8_u, 0, 0);
   body_->op(op::i32_or);
   body_->if_();
@@ -743,6 +780,8 @@ void FuncGen::jump(int seg) {
     body_->br(level_[static_cast<std::size_t>(seg)]);
   } else if (seg == cur_seg_ && self_loop_ >= 0) {
     body_->br(self_loop_);  // back to the start of this segment: its own loop (E2d)
+  } else if (structured_) {
+    body_->br(loop_at_[static_cast<std::size_t>(seg)]);  // V4: the loop that starts there
   } else {
     body_->i32c(seg);
     body_->set(L_label);
@@ -2572,6 +2611,8 @@ void FuncGen::emit_node(std::size_t k) {
         b.br_if(level_[static_cast<std::size_t>(t)]);
       } else if (t == cur_seg_ && self_loop_ >= 0) {
         b.br_if(self_loop_);
+      } else if (structured_) {
+        b.br_if(loop_at_[static_cast<std::size_t>(t)]);  // V4
       } else {
         b.if_();
         jump(t);
@@ -2690,6 +2731,78 @@ void FuncGen::emit_node(std::size_t k) {
   }
 }
 
+// V4: loops for a function without the dispatcher. Every branch from segment u
+// back to segment h <= u (u > h: h == u is a self loop, emit_segment's) makes h a
+// loop header whose loop runs to the last such u. The loops must nest (two may
+// share segments only if one contains the other), and no branch may enter a loop
+// but at its header (forward branches into a loop's later segments come from
+// inside it). Then every branch is a br: forward to a block that ends right
+// before its target, backward to the loop that starts at it.
+bool FuncGen::plan_loops() {
+  const std::size_t n = f_.insns.size();
+  const int nseg = static_cast<int>(seg_start_.size());
+  loop_end_.assign(static_cast<std::size_t>(nseg), -1);
+  loop_at_.assign(static_cast<std::size_t>(nseg), -1);
+  std::vector<std::pair<int, int>> edges;
+  for (std::size_t k = 0; k < n; ++k) {
+    if (!f_.reachable[k]) continue;
+    const Node& N = nodes_[k];
+    const int u = seg_at_[k];
+    if (N.kind == kJump || N.kind == kCJump) edges.push_back({u, seg_at_[static_cast<std::size_t>(N.s0)]});
+    if (N.jt >= 0)
+      for (int s : jt_succ_[static_cast<std::size_t>(N.jt)]) edges.push_back({u, seg_at_[static_cast<std::size_t>(s)]});
+  }
+  for (const auto& [u, v] : edges)
+    if (v < u) loop_end_[static_cast<std::size_t>(v)] = std::max(loop_end_[static_cast<std::size_t>(v)], u);
+  // Nesting: scan the segments with a stack of the loops open there.
+  std::vector<int> open;
+  for (int s = 0; s < nseg; ++s) {
+    while (!open.empty() && loop_end_[static_cast<std::size_t>(open.back())] < s) open.pop_back();
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    if (e < 0) continue;
+    if (!open.empty() && e > loop_end_[static_cast<std::size_t>(open.back())]) return false;  // overlapping loops
+    open.push_back(s);
+  }
+  // No entry into a loop but at its header.
+  for (const auto& [u, v] : edges) {
+    if (v <= u) continue;
+    for (int h = 0; h < v; ++h) {
+      const int e = loop_end_[static_cast<std::size_t>(h)];
+      if (e >= v && (u < h || u > e)) return false;
+    }
+  }
+  return true;
+}
+
+// V4: segments a..b, a region at one nesting level: the whole function, or a
+// loop (its wasm loop opened by the caller, a its header). Blocks for the
+// segments of this level (not those inside a nested loop) open here, the last
+// outermost; a nested loop is a region of its own.
+void FuncGen::emit_region(int a, int b, bool is_loop, const std::function<void(int)>& emit_segment) {
+  Fn& body = *body_;
+  std::vector<int> mine;  // the segments after a at this level
+  const int a_end = loop_end_[static_cast<std::size_t>(a)];  // a's own loop, when a starts a nested one here
+  for (int s = !is_loop && a_end >= 0 ? a_end + 1 : a + 1; s <= b;) {
+    mine.push_back(s);
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    s = e >= 0 ? e + 1 : s + 1;
+  }
+  for (auto it = mine.rbegin(); it != mine.rend(); ++it) level_[static_cast<std::size_t>(*it)] = body.block();
+  for (int s = a; s <= b;) {
+    if (s != a) body.end();  // the block that ends right before s
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    if (e >= 0 && !(is_loop && s == a)) {
+      loop_at_[static_cast<std::size_t>(s)] = body.loop();
+      emit_region(s, e, true, emit_segment);
+      body.end();
+      s = e + 1;
+    } else {
+      emit_segment(s);
+      ++s;
+    }
+  }
+}
+
 bool FuncGen::run(Fn& body, std::string* error) {
   body_ = &body;
   if (!classify(error)) return false;
@@ -2697,7 +2810,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
   // Resume labels (runtime/native.h): every call's return address and every
   // back edge, except entries; none in a replaced function's original.
   std::vector<u32> entries = mode_ == Mode::Body ? f_.entries : std::vector<u32>{f_.start};
-  if (mode_ != Mode::Orig) {
+  if (mode_ == Mode::Body || (mode_ == Mode::Plain && !ctx_.opt.heap_code)) {  // V4: not in Fast, not heap code
     auto add = [&](u32 a) {
       if (f_.contains(a) && f_.reachable[(a - f_.start) / 4] &&
           std::find(f_.entries.begin(), f_.entries.end(), a) == f_.entries.end())
@@ -2805,6 +2918,13 @@ bool FuncGen::run(Fn& body, std::string* error) {
     const Node& N = nodes_[k];
     if ((N.kind == kJump || N.kind == kCJump) && seg_at_[static_cast<std::size_t>(N.s0)] < seg_at_[k]) dispatch_ = true;
   }
+  // V4: without resume labels or secondary entries, loops (and jump tables) as wasm
+  // loops and blocks where they nest (plan_loops).
+  if (dispatch_ && ctx_.opt.structured_loops && !has_resume_ && mode_ != Mode::Body && plan_loops()) {
+    dispatch_ = false;
+    structured_ = true;
+    ++ctx_.out->stats.structured_functions;
+  }
   if (dispatch_) ++ctx_.out->stats.dispatch_functions;
   for (u32 a : resume_labels_) resume_out_.push_back({a, static_cast<u32>(seg_at_[(a - f_.start) / 4])});
   ctx_.out->stats.resume_labels += resume_labels_.size();
@@ -2870,11 +2990,11 @@ bool FuncGen::run(Fn& body, std::string* error) {
       body.i32c(0);
       body.set(L_label);
       pre_level_ = body.block();
-      body.global(gResume);
+      glb(body, gResume);
       body.mem(op::i32_load8_u, 0, 0);
       body.br_if(pre_level_);
     }
-    if (mode_ == Mode::Plain) {
+    if ((mode_ == Mode::Plain || mode_ == Mode::Fast) && !ctx_.opt.heap_code) {
       emit_prologue(body, f_.start, [&] {
         if (has_resume_) body.br(pre_level_);
         else leave();
@@ -2884,7 +3004,7 @@ bool FuncGen::run(Fn& body, std::string* error) {
         body.i32c(hook_);
         body.call(iHleBefore);
         // The hook may stop the run before the first instruction (runtime/hle.h).
-        body.global(gUnwinding);
+        glb(body, gUnwinding);
         body.mem(op::i32_load8_u, 0, 0);
         body.if_();
         if (has_resume_) body.br(pre_level_);
@@ -2943,6 +3063,8 @@ bool FuncGen::run(Fn& body, std::string* error) {
       emit_segment(s);
     }
     body.end();
+  } else if (structured_) {
+    emit_region(0, nseg - 1, false, emit_segment);
   } else {
     for (int s = nseg - 1; s >= 1; --s) level_[static_cast<std::size_t>(s)] = body.block();
     emit_segment(0);
@@ -2986,7 +3108,7 @@ thread_local bool t_gp_checks = false;
 void gp_check(Fn& h, const std::function<void()>& first, const std::function<void()>& last) {
   if (!t_gp_checks) return;
   auto entry = [&](const std::function<void()>& addr) {
-    h.global(gGpPages);
+    if (!t_fixed.gp_pages) h.global(gGpPages);
     addr();
     h.i32c(WasmGpLayout::kShift);
     h.op(op::i32_shr_u);
@@ -2994,8 +3116,8 @@ void gp_check(Fn& h, const std::function<void()>& first, const std::function<voi
     h.op(op::i32_and);
     h.i32c(2);
     h.op(op::i32_shl);
-    h.op(op::i32_add);
-    h.mem(op::i32_load, 2, 0);
+    if (!t_fixed.gp_pages) h.op(op::i32_add);
+    h.mem(op::i32_load, 2, t_fixed.gp_pages);  // V4: the table's address as the offset
   };
   entry(first);
   entry(last);
@@ -3034,12 +3156,24 @@ void host_addr(Fn& h, u32 p_local) {
 // 0x80000000 + t with t < limit is at base + t, the host address `access` finds
 // in the i32 local `a`; `access` ends with a return. The page table maps the
 // same bytes there (Machine), so the result is the same.
+// V4: with MEM1 fixed (WasmFixed::mem1_limit) the limit is a constant and `a`
+// keeps t: `access` adds mem1_offset() to its offsets (the load's or store's
+// offset immediate holds the base, so the host address is never computed).
+u32 mem1_offset() { return t_fixed.mem1_limit ? t_fixed.mem1_base : 0; }
 void mem1_path(Fn& h, u32 a, const std::function<void()>& access) {
   using M = WasmMem1Layout;
   h.get(1);
   h.i32c(0x80000000u);
   h.op(op::i32_sub);
   h.tee(a);
+  if (t_fixed.mem1_limit) {
+    h.i32c(t_fixed.mem1_limit);
+    h.op(op::i32_lt_u);
+    h.if_();
+    access();
+    h.end();
+    return;
+  }
   h.global(gMem1);
   h.mem(op::i32_load, 2, M::kLimit);
   h.op(op::i32_lt_u);
@@ -3066,6 +3200,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
   const bool wr = f == Front::Write || f == Front::Write64 || f == Front::Stfs;
   const u32 params = wr ? 5 : 4;
   const u32 a = params, w = params + 1;  // the host address; a word
+  const u32 mo = mem1_offset();  // V4: added to the accesses' offsets (0 unless MEM1 is fixed)
   h.uleb(1);
   h.uleb(2);
   h.byte(kI32);
@@ -3087,9 +3222,9 @@ Fn helper_front(Front f, int bytes, u32 page) {
       case Front::Read:
         h.get(a);
         if (bytes == 1) {
-          h.mem(op::i32_load8_u, 0, 0);
+          h.mem(op::i32_load8_u, 0, mo + 0);
         } else if (bytes == 2) {
-          h.mem(op::i32_load16_u, 0, 0);
+          h.mem(op::i32_load16_u, 0, mo + 0);
           h.tee(w);
           h.i32c(8);
           h.op(op::i32_shl);
@@ -3100,7 +3235,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.i32c(0xFFFF);
           h.op(op::i32_and);
         } else {
-          h.mem(op::i32_load, 0, 0);
+          h.mem(op::i32_load, 0, mo + 0);
           h.tee(w);
           swap32_from_local(h, w);
         }
@@ -3110,7 +3245,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
         h.get(a);
         if (bytes == 1) {
           h.get(2);
-          h.mem(op::i32_store8, 0, 0);
+          h.mem(op::i32_store8, 0, mo + 0);
         } else if (bytes == 2) {
           h.get(2);
           h.i32c(8);
@@ -3121,17 +3256,17 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.i32c(0xFF);
           h.op(op::i32_and);
           h.op(op::i32_or);
-          h.mem(op::i32_store16, 0, 0);
+          h.mem(op::i32_store16, 0, mo + 0);
         } else {
           h.get(2);
           swap32_from_local(h, 2);
-          h.mem(op::i32_store, 0, 0);
+          h.mem(op::i32_store, 0, mo + 0);
         }
         break;
       case Front::Read64:
         for (u32 off : {0u, 4u}) {
           h.get(a);
-          h.mem(op::i32_load, 0, off);
+          h.mem(op::i32_load, 0, mo + off);
           h.tee(w);
           swap32_from_local(h, w);
           h.op(op::i64_extend_i32_u);
@@ -3154,12 +3289,12 @@ Fn helper_front(Front f, int bytes, u32 page) {
           h.op(op::i32_wrap_i64);
           h.tee(w);
           swap32_from_local(h, w);
-          h.mem(op::i32_store, 0, off);
+          h.mem(op::i32_store, 0, mo + off);
         }
         break;
       case Front::Lfs:
         h.get(a);
-        h.mem(op::i32_load, 0, 0);
+        h.mem(op::i32_load, 0, mo + 0);
         h.tee(w);
         swap32_from_local(h, w);
         h.set(w);
@@ -3170,7 +3305,7 @@ Fn helper_front(Front f, int bytes, u32 page) {
         h.get(a);
         h.get(w);
         swap32_from_local(h, w);
-        h.mem(op::i32_store, 0, 0);
+        h.mem(op::i32_store, 0, mo + 0);
         break;
     }
     h.op(op::return_);
@@ -3535,7 +3670,7 @@ Fn helper_write(int bytes, u32 slow) {
   h.i32c(0x1000);
   h.op(op::i32_lt_u);
   h.if_();
-  h.global(gWgp);
+  glb(h, gWgp);
   h.tee(6);
   h.mem(op::i32_load, 2, L::kFast);
   h.if_();
@@ -4245,7 +4380,7 @@ Fn helper_psq_store() {
     h.i32c(0x1000);
     h.op(op::i32_lt_u);
     h.if_();
-    h.global(gWgp);
+    glb(h, gWgp);
     h.tee(10);
     h.mem(op::i32_load, 2, L::kFast);
     h.if_();
@@ -4554,7 +4689,9 @@ const char* wasm_trap_text(std::uint32_t code) {
 
 bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out, std::string* error) {
   t_gp_checks = opt.shared_memory;
+  t_fixed = opt.fixed;
   *out = WasmModule{};
+  out->fixed = opt.fixed;
   if (p.errors) {
     if (error) *error = "the CFG has errors";
     return false;
@@ -4591,6 +4728,14 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
         if (e == f.start) ctx.start_slot[fi] = static_cast<int>(slot);
         funcs.push_back({WKind::Stub, fi, e, static_cast<int>(slot++), -1, false, body});
       }
+    } else if (opt.fast_entries && has_resume_labels(f)) {
+      // V4: the Fast function for calls and the entry, the Slow copy for resume entries.
+      ctx.callable[f.start] = index_of(funcs.size());
+      funcs.push_back(
+          {WKind::Fast, fi, f.start, static_cast<int>(slot++), spec ? spec->index : -1, spec && spec->before});
+      ctx.start_slot[fi] = static_cast<int>(slot);
+      funcs.push_back(
+          {WKind::Slow, fi, f.start, static_cast<int>(slot++), spec ? spec->index : -1, spec && spec->before});
     } else {
       ctx.callable[f.start] = index_of(funcs.size());
       ctx.start_slot[fi] = static_cast<int>(slot);
@@ -4600,124 +4745,10 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
   }
   out->slots = slot;
 
-  // Bodies.
-  Buf code;
-  code.uleb(kHelperCount + funcs.size());
-  auto put = [&](const Fn& fn) {
-    code.uleb(fn.b.size());
-    code.append(fn.b);
-  };
-  put(helper_front(Front::Read, 1, hRd8P));
-  put(helper_front(Front::Read, 2, hRd16P));
-  put(helper_front(Front::Read, 4, hRd32P));
-  put(helper_front(Front::Write, 1, hWr8P));
-  put(helper_front(Front::Write, 2, hWr16P));
-  put(helper_front(Front::Write, 4, hWr32P));
-  put(helper_cmp(true));
-  put(helper_cmp(false));
-  put(helper_div(true));
-  put(helper_div(false));
-  put(helper_single_to_double());
-  put(helper_double_to_single());
-  put(helper_multiple(false));
-  put(helper_multiple(true));
-  put(helper_psq_load());
-  put(helper_psq_store());
-  put(helper_front(Front::Read64, 8, hRd64P));
-  put(helper_front(Front::Write64, 8, hWr64P));
-  put(helper_front(Front::Lfs, 4, hLfsP));
-  put(helper_front(Front::Stfs, 4, hStfsP));
-  put(helper_read(1, iRead8));  // Q6: the page-table paths (hRd8P ...)
-  put(helper_read(2, iRead16));
-  put(helper_read(4, iRead32));
-  put(helper_write(1, iWrite8));
-  put(helper_write(2, iWrite16));
-  put(helper_write(4, iWrite32));
-  put(helper_read64());
-  put(helper_write64());
-  put(helper_load_single());
-  put(helper_store_single());
-  struct BodyInfo {  // per Body: its entries' dispatcher indices, and whether it has resume labels
-    std::vector<std::pair<u32, u32>> entry_seg;
-    bool resume = false;
-  };
-  std::unordered_map<u32, BodyInfo> bodies;
-  for (std::size_t k = 0; k < funcs.size(); ++k) {
-    const WFunc& w = funcs[k];
-    const FunctionCfg& f = p.functions[w.cfg];
-    Fn fn;
-    if (w.kind == WKind::Plain || w.kind == WKind::Body || w.kind == WKind::Orig) {
-      FuncGen::Mode mode = w.kind == WKind::Plain  ? FuncGen::Mode::Plain
-                           : w.kind == WKind::Body ? FuncGen::Mode::Body
-                                                   : FuncGen::Mode::Orig;
-      FuncGen g(ctx, w.cfg, mode, w.hook ? w.hle : -1);
-      if (!g.run(fn, error)) return false;
-      if (w.kind != WKind::Orig) {
-        for (const auto& [a, seg] : g.resume()) {
-          out->resume.push_back({a, static_cast<u32>(ctx.start_slot[w.cfg])});
-          out->resume_index.push_back({a, seg});
-        }
-        ++out->stats.functions;
-      }
-      if (w.kind == WKind::Body) {
-        BodyInfo info;
-        info.resume = !g.resume().empty();
-        for (u32 e : f.entries) info.entry_seg.push_back({e, g.entry_segment(e)});
-        bodies[index_of(k)] = info;
-      }
-    } else if (w.kind == WKind::Stub) {
-      const BodyInfo& info = bodies.at(w.target);
-      fn.uleb(0);
-      if (w.entry == f.start && info.resume) {
-        fn.global(gResume);
-        fn.mem(op::i32_load8_u, 0, 0);
-        fn.if_();
-        fn.get(0);
-        fn.i32c(0);
-        fn.call(w.target);
-        fn.op(op::return_);
-        fn.end();
-      }
-      emit_prologue(fn, w.entry, [&] { emit_leave(fn); });
-      u32 seg = 0;
-      for (const auto& [e, s] : info.entry_seg)
-        if (e == w.entry) seg = s;
-      fn.get(0);
-      fn.i32c(seg);
-      fn.call(w.target);
-      fn.byte(op::end);
-    } else {  // HleStub
-      fn.uleb(0);
-      emit_prologue(fn, w.entry, [&] { emit_leave(fn); });
-      fn.get(0);
-      fn.i32c(w.hle);
-      fn.global(gTableBase);
-      fn.i32c(funcs[w.target - kFirstGuest].slot);
-      fn.op(op::i32_add);
-      fn.call(iHleCall);
-      fn.byte(op::end);
-      ++out->stats.hle_stubs;
-    }
-    put(fn);
-    if (w.slot >= 0 && w.kind != WKind::Orig) {
-      out->entries.push_back({w.entry, static_cast<u32>(w.slot)});
-      ++out->stats.entries;
-    }
-  }
-  out->stats.wasm_functions = funcs.size();
-  out->stats.code_bytes = code.b.size();
-
-  // Safe points and idle spins, as the C++ emitter's table lists them.
-  for (const auto& f : p.functions) {
-    out->safe.insert(out->safe.end(), f.entries.begin(), f.entries.end());
-    out->safe.insert(out->safe.end(), f.back_edges.begin(), f.back_edges.end());
-    out->idle.insert(out->idle.end(), f.idle_spins.begin(), f.idle_spins.end());
-  }
-  std::sort(out->safe.begin(), out->safe.end());
-  std::sort(out->idle.begin(), out->idle.end());
-
-  // The module.
+  // The module (V4: before the bodies, which go straight into its code section,
+  // so the code is never copied: the heap's high-water mark stays one module).
   Buf m;
+  m.b.reserve(static_cast<std::size_t>(p.reachable_words) * (opt.fast_entries ? 80 : 42));
   const u8 header[] = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};  //  asm, version 1
   for (u8 c : header) m.byte(c);
   {
@@ -4795,7 +4826,137 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
     for (u32 fidx : by_slot) el.uleb(fidx);
     m.section(9, el);
   }
-  m.section(10, code);
+  // Bodies: the code section, its size patched at the end (a 5-byte LEB128).
+  m.byte(10);
+  const std::size_t code_size_at = m.b.size();
+  for (int k = 0; k < 5; ++k) m.byte(k < 4 ? 0x80 : 0x00);
+  const std::size_t code_start = m.b.size();
+  m.uleb(kHelperCount + funcs.size());
+  auto put = [&](const Fn& fn) {
+    m.uleb(fn.b.size());
+    m.append(fn.b);
+  };
+  put(helper_front(Front::Read, 1, hRd8P));
+  put(helper_front(Front::Read, 2, hRd16P));
+  put(helper_front(Front::Read, 4, hRd32P));
+  put(helper_front(Front::Write, 1, hWr8P));
+  put(helper_front(Front::Write, 2, hWr16P));
+  put(helper_front(Front::Write, 4, hWr32P));
+  put(helper_cmp(true));
+  put(helper_cmp(false));
+  put(helper_div(true));
+  put(helper_div(false));
+  put(helper_single_to_double());
+  put(helper_double_to_single());
+  put(helper_multiple(false));
+  put(helper_multiple(true));
+  put(helper_psq_load());
+  put(helper_psq_store());
+  put(helper_front(Front::Read64, 8, hRd64P));
+  put(helper_front(Front::Write64, 8, hWr64P));
+  put(helper_front(Front::Lfs, 4, hLfsP));
+  put(helper_front(Front::Stfs, 4, hStfsP));
+  put(helper_read(1, iRead8));  // Q6: the page-table paths (hRd8P ...)
+  put(helper_read(2, iRead16));
+  put(helper_read(4, iRead32));
+  put(helper_write(1, iWrite8));
+  put(helper_write(2, iWrite16));
+  put(helper_write(4, iWrite32));
+  put(helper_read64());
+  put(helper_write64());
+  put(helper_load_single());
+  put(helper_store_single());
+  struct BodyInfo {  // per Body: its entries' dispatcher indices, and whether it has resume labels
+    std::vector<std::pair<u32, u32>> entry_seg;
+    bool resume = false;
+  };
+  std::unordered_map<u32, BodyInfo> bodies;
+  for (std::size_t k = 0; k < funcs.size(); ++k) {
+    const WFunc& w = funcs[k];
+    const FunctionCfg& f = p.functions[w.cfg];
+    Fn fn;
+    if (w.kind == WKind::Plain || w.kind == WKind::Body || w.kind == WKind::Orig || w.kind == WKind::Fast ||
+        w.kind == WKind::Slow) {
+      FuncGen::Mode mode = w.kind == WKind::Plain || w.kind == WKind::Slow ? FuncGen::Mode::Plain
+                           : w.kind == WKind::Fast                         ? FuncGen::Mode::Fast
+                           : w.kind == WKind::Body                         ? FuncGen::Mode::Body
+                                                                           : FuncGen::Mode::Orig;
+      FuncGen g(ctx, w.cfg, mode, w.hook ? w.hle : -1);
+      if (!g.run(fn, error)) return false;
+      if (w.kind != WKind::Orig) {
+        for (const auto& [a, seg] : g.resume()) {
+          out->resume.push_back({a, static_cast<u32>(ctx.start_slot[w.cfg])});
+          out->resume_index.push_back({a, seg});
+        }
+        if (w.kind != WKind::Slow) ++out->stats.functions;
+      }
+      if (w.kind == WKind::Body) {
+        BodyInfo info;
+        info.resume = !g.resume().empty();
+        for (u32 e : f.entries) info.entry_seg.push_back({e, g.entry_segment(e)});
+        bodies[index_of(k)] = info;
+      }
+    } else if (w.kind == WKind::Stub) {
+      const BodyInfo& info = bodies.at(w.target);
+      fn.uleb(0);
+      if (w.entry == f.start && info.resume) {
+        glb(fn, gResume);
+        fn.mem(op::i32_load8_u, 0, 0);
+        fn.if_();
+        fn.get(0);
+        fn.i32c(0);
+        fn.call(w.target);
+        fn.op(op::return_);
+        fn.end();
+      }
+      emit_prologue(fn, w.entry, [&] { emit_leave(fn); });
+      u32 seg = 0;
+      for (const auto& [e, s] : info.entry_seg)
+        if (e == w.entry) seg = s;
+      fn.get(0);
+      fn.i32c(seg);
+      fn.call(w.target);
+      fn.byte(op::end);
+    } else {  // HleStub
+      fn.uleb(0);
+      emit_prologue(fn, w.entry, [&] { emit_leave(fn); });
+      fn.get(0);
+      fn.i32c(w.hle);
+      fn.global(gTableBase);
+      fn.i32c(funcs[w.target - kFirstGuest].slot);
+      fn.op(op::i32_add);
+      fn.call(iHleCall);
+      fn.byte(op::end);
+      ++out->stats.hle_stubs;
+    }
+    put(fn);
+    if (w.slot >= 0 && w.kind != WKind::Orig && w.kind != WKind::Slow) {
+      out->entries.push_back({w.entry, static_cast<u32>(w.slot)});
+      ++out->stats.entries;
+    }
+  }
+  out->stats.wasm_functions = funcs.size();
+  out->stats.code_bytes = m.b.size() - code_start;
+  {
+    const std::size_t n = m.b.size() - code_start;
+    if (static_cast<std::uint64_t>(n) >= (std::uint64_t{1} << 32)) {
+      if (error) *error = "the code section is too large";
+      return false;
+    }
+    for (int k = 0; k < 5; ++k)
+      m.b[code_size_at + static_cast<std::size_t>(k)] =
+          static_cast<u8>(((static_cast<std::uint64_t>(n) >> (7 * k)) & 0x7F) | (k < 4 ? 0x80 : 0));
+  }
+
+  // Safe points and idle spins, as the C++ emitter's table lists them.
+  for (const auto& f : p.functions) {
+    out->safe.insert(out->safe.end(), f.entries.begin(), f.entries.end());
+    out->safe.insert(out->safe.end(), f.back_edges.begin(), f.back_edges.end());
+    out->idle.insert(out->idle.end(), f.idle_spins.begin(), f.idle_spins.end());
+  }
+  std::sort(out->safe.begin(), out->safe.end());
+  std::sort(out->idle.begin(), out->idle.end());
+
   if (opt.names) {
     // Custom section "name", subsection 1: function names (profiling only).
     Buf fnames;
@@ -4811,7 +4972,8 @@ bool emit_wasm(const ProgramCfg& p, const WasmEmitOptions& opt, WasmModule* out,
     }
     for (std::size_t k = 0; k < funcs.size(); ++k) {
       const WFunc& w = funcs[k];
-      const char* suffix = w.kind == WKind::Body ? ".body" : w.kind == WKind::Orig ? ".orig" : w.kind == WKind::HleStub ? ".hle" : "";
+      const char* suffix = w.kind == WKind::Body ? ".body" : w.kind == WKind::Orig ? ".orig" : w.kind == WKind::HleStub ? ".hle"
+                           : w.kind == WKind::Slow ? ".resume" : "";
       std::string nm = p.functions[w.cfg].sym->name + suffix;
       if (w.kind == WKind::Stub) {
         char b[16];

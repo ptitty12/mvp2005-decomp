@@ -84,6 +84,16 @@ class MemoryCard {
   // Counts every program and erase: the host keeps the image when it changes.
   std::uint64_t writes() const { return writes_; }
 
+  // V4: for Hardware's snapshots, which copy the image by sectors (only those
+  // written since a snapshot was taken): every program or erase stamps its
+  // sectors with the epoch Hardware gives (set_epoch). Host bookkeeping, not the
+  // card's state: Hardware keeps it out of its member-wise copies.
+  std::vector<u8>& image_store() { return image_; }
+  std::vector<std::uint32_t>& stamps() { return stamp_; }
+  const std::vector<std::uint32_t>& stamps() const { return stamp_; }
+  void set_epoch(std::uint32_t e) { epoch_ = e; }
+  void stamp_all() { std::fill(stamp_.begin(), stamp_.end(), epoch_); }
+
   // The transfer state (not the contents) for save-state files.
   template <class Ar>
   void state_fields(Ar& a) {
@@ -122,6 +132,8 @@ class MemoryCard {
   std::uint64_t busy_until_ = ~0ull;
   std::vector<u8> page_;  // a page program's data
   std::uint64_t writes_ = 0;
+  std::vector<std::uint32_t> stamp_ = std::vector<std::uint32_t>(kSize / kSector, 0);  // V4: per sector
+  std::uint32_t epoch_ = 0;
 };
 
 }  // namespace mvp::rt

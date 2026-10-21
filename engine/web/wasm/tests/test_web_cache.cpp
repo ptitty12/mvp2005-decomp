@@ -156,6 +156,7 @@ TEST_CASE("module cache: a module survives the round trip; damage is refused") {
   m.idle = {0x80003300, 0x80003304};
   m.hle_sites = {{0x80004000, 2}, {0x80004100, 5}};
   m.hle_matched = {2, 5};
+  m.fixed = {0x1000, 0x1004, 0x1008, 0x2000, 0x3000, 0x400000, 0x17FFFF9};  // V4
   m.stats.functions = 2;
   m.stats.instructions = 123;
   m.stats.code_bytes = 9;
@@ -178,6 +179,7 @@ TEST_CASE("module cache: a module survives the round trip; damage is refused") {
   CHECK(r.idle == m.idle);
   CHECK(r.hle_sites == m.hle_sites);
   CHECK(r.hle_matched == m.hle_matched);
+  CHECK(r.fixed == m.fixed);
   CHECK(r.stats.functions == 2);
   CHECK(r.stats.instructions == 123);
   CHECK(r.stats.code_bytes == 9);
