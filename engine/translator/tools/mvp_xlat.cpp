@@ -2,7 +2,7 @@
 //
 //   mvp-xlat cfg [--errors] [--tables]   recover functions and CFGs, print a summary
 //   mvp-xlat emit-cpp <dir> [--shards N]  translate the whole DOL to C++ in <dir> (under build/)
-//   mvp-xlat emit-wasm <file> [--precise] [--helpers] [--names] [--shared] [--runs N]
+//   mvp-xlat emit-wasm <file> [--precise] [--helpers] [--names] [--shared] [--fast] [--runs N]
 //                                        translate the whole DOL to a WebAssembly module (E2) and print
 //                                        how long it took; <file> under build/ only (--names: function
 //                                        names for profilers and disassemblers; --shared: the threaded
@@ -112,6 +112,8 @@ int main(int argc, char** argv) {
       if (!std::strcmp(argv[k], "--helpers")) opt.inline_ops = false;
       if (!std::strcmp(argv[k], "--names")) opt.names = true;            // a name section (profilers, disassembly)
       if (!std::strcmp(argv[k], "--shared")) opt.shared_memory = true;   // the threaded engine's module (P2)
+      if (!std::strcmp(argv[k], "--fast")) opt.fast_entries = true;      // V4: fast entries, resumable copies
+      if (!std::strcmp(argv[k], "--loops")) opt.structured_loops = true; // V4: loops without the dispatcher
       if (!std::strcmp(argv[k], "--runs") && k + 1 < argc) runs = std::atoi(argv[k + 1]);
     }
     using clock = std::chrono::steady_clock;

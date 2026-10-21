@@ -400,6 +400,15 @@ class FuncGen {
   int loop_level_ = -1, pre_level_ = -1;
   int self_loop_ = -1;               // the current segment's own loop, if any
   std::vector<bool> self_loops_;     // per segment: it branches back to its own start
+  // V4: structured loops instead of the dispatcher (a function without resume
+  // labels: Fast, Orig): a segment that later segments branch back to starts a
+  // wasm loop that ends after the last of them (loop_end_), and its backward
+  // branches go to that loop (loop_at_: its level). Only when the loops nest and
+  // nothing branches into one but at its start (plan_loops); else the dispatcher.
+  bool structured_ = false;
+  std::vector<int> loop_end_, loop_at_;
+  bool plan_loops();
+  void emit_region(int a, int b, bool is_loop, const std::function<void(int)>& emit_segment);
   int cur_seg_ = 0;
   s64 p_ = 0;  // instructions started since the ticks local was last updated
   RegSet used_ = 0;
@@ -771,6 +780,8 @@ void FuncGen::jump(int seg) {
     body_->br(level_[static_cast<std::size_t>(seg)]);
   } else if (seg == cur_seg_ && self_loop_ >= 0) {
     body_->br(self_loop_);  // back to the start of this segment: its own loop (E2d)
+  } else if (structured_) {
+    body_->br(loop_at_[static_cast<std::size_t>(seg)]);  // V4: the loop that starts there
   } else {
     body_->i32c(seg);
     body_->set(L_label);
@@ -2600,6 +2611,8 @@ void FuncGen::emit_node(std::size_t k) {
         b.br_if(level_[static_cast<std::size_t>(t)]);
       } else if (t == cur_seg_ && self_loop_ >= 0) {
         b.br_if(self_loop_);
+      } else if (structured_) {
+        b.br_if(loop_at_[static_cast<std::size_t>(t)]);  // V4
       } else {
         b.if_();
         jump(t);
@@ -2718,6 +2731,78 @@ void FuncGen::emit_node(std::size_t k) {
   }
 }
 
+// V4: loops for a function without the dispatcher. Every branch from segment u
+// back to segment h <= u (u > h: h == u is a self loop, emit_segment's) makes h a
+// loop header whose loop runs to the last such u. The loops must nest (two may
+// share segments only if one contains the other), and no branch may enter a loop
+// but at its header (forward branches into a loop's later segments come from
+// inside it). Then every branch is a br: forward to a block that ends right
+// before its target, backward to the loop that starts at it.
+bool FuncGen::plan_loops() {
+  const std::size_t n = f_.insns.size();
+  const int nseg = static_cast<int>(seg_start_.size());
+  loop_end_.assign(static_cast<std::size_t>(nseg), -1);
+  loop_at_.assign(static_cast<std::size_t>(nseg), -1);
+  std::vector<std::pair<int, int>> edges;
+  for (std::size_t k = 0; k < n; ++k) {
+    if (!f_.reachable[k]) continue;
+    const Node& N = nodes_[k];
+    const int u = seg_at_[k];
+    if (N.kind == kJump || N.kind == kCJump) edges.push_back({u, seg_at_[static_cast<std::size_t>(N.s0)]});
+    if (N.jt >= 0)
+      for (int s : jt_succ_[static_cast<std::size_t>(N.jt)]) edges.push_back({u, seg_at_[static_cast<std::size_t>(s)]});
+  }
+  for (const auto& [u, v] : edges)
+    if (v < u) loop_end_[static_cast<std::size_t>(v)] = std::max(loop_end_[static_cast<std::size_t>(v)], u);
+  // Nesting: scan the segments with a stack of the loops open there.
+  std::vector<int> open;
+  for (int s = 0; s < nseg; ++s) {
+    while (!open.empty() && loop_end_[static_cast<std::size_t>(open.back())] < s) open.pop_back();
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    if (e < 0) continue;
+    if (!open.empty() && e > loop_end_[static_cast<std::size_t>(open.back())]) return false;  // overlapping loops
+    open.push_back(s);
+  }
+  // No entry into a loop but at its header.
+  for (const auto& [u, v] : edges) {
+    if (v <= u) continue;
+    for (int h = 0; h < v; ++h) {
+      const int e = loop_end_[static_cast<std::size_t>(h)];
+      if (e >= v && (u < h || u > e)) return false;
+    }
+  }
+  return true;
+}
+
+// V4: segments a..b, a region at one nesting level: the whole function, or a
+// loop (its wasm loop opened by the caller, a its header). Blocks for the
+// segments of this level (not those inside a nested loop) open here, the last
+// outermost; a nested loop is a region of its own.
+void FuncGen::emit_region(int a, int b, bool is_loop, const std::function<void(int)>& emit_segment) {
+  Fn& body = *body_;
+  std::vector<int> mine;  // the segments after a at this level
+  const int a_end = loop_end_[static_cast<std::size_t>(a)];  // a's own loop, when a starts a nested one here
+  for (int s = !is_loop && a_end >= 0 ? a_end + 1 : a + 1; s <= b;) {
+    mine.push_back(s);
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    s = e >= 0 ? e + 1 : s + 1;
+  }
+  for (auto it = mine.rbegin(); it != mine.rend(); ++it) level_[static_cast<std::size_t>(*it)] = body.block();
+  for (int s = a; s <= b;) {
+    if (s != a) body.end();  // the block that ends right before s
+    const int e = loop_end_[static_cast<std::size_t>(s)];
+    if (e >= 0 && !(is_loop && s == a)) {
+      loop_at_[static_cast<std::size_t>(s)] = body.loop();
+      emit_region(s, e, true, emit_segment);
+      body.end();
+      s = e + 1;
+    } else {
+      emit_segment(s);
+      ++s;
+    }
+  }
+}
+
 bool FuncGen::run(Fn& body, std::string* error) {
   body_ = &body;
   if (!classify(error)) return false;
@@ -2832,6 +2917,13 @@ bool FuncGen::run(Fn& body, std::string* error) {
     if (!f_.reachable[k]) continue;
     const Node& N = nodes_[k];
     if ((N.kind == kJump || N.kind == kCJump) && seg_at_[static_cast<std::size_t>(N.s0)] < seg_at_[k]) dispatch_ = true;
+  }
+  // V4: without resume labels or secondary entries, loops (and jump tables) as wasm
+  // loops and blocks where they nest (plan_loops).
+  if (dispatch_ && ctx_.opt.structured_loops && !has_resume_ && mode_ != Mode::Body && plan_loops()) {
+    dispatch_ = false;
+    structured_ = true;
+    ++ctx_.out->stats.structured_functions;
   }
   if (dispatch_) ++ctx_.out->stats.dispatch_functions;
   for (u32 a : resume_labels_) resume_out_.push_back({a, static_cast<u32>(seg_at_[(a - f_.start) / 4])});
@@ -2971,6 +3063,8 @@ bool FuncGen::run(Fn& body, std::string* error) {
       emit_segment(s);
     }
     body.end();
+  } else if (structured_) {
+    emit_region(0, nseg - 1, false, emit_segment);
   } else {
     for (int s = nseg - 1; s >= 1; --s) level_[static_cast<std::size_t>(s)] = body.block();
     emit_segment(0);

@@ -98,6 +98,11 @@ struct WasmEmitOptions {
   // unwinds that a frame resumed in place now reach the dispatcher, which
   // re-enters the copies. The module is about twice the size.
   bool fast_entries = false;
+  // V4: a function without resume labels or secondary entries (fast entries,
+  // replaced functions' originals) has its loops as wasm loops instead of the
+  // dispatcher (a br_table at every back edge, every local a phi of one loop
+  // around the whole body), where they nest and are entered at their start only.
+  bool structured_loops = false;
 };
 
 // A guest address and the table slot (relative to the module's table base) of
@@ -109,7 +114,8 @@ struct WasmSlot {
 
 struct WasmEmitStats {
   std::size_t functions = 0, wasm_functions = 0, entries = 0, instructions = 0, inline_insns = 0, helper_insns = 0,
-              branch_insns = 0, resume_labels = 0, dispatch_functions = 0, spills = 0, reloads = 0, hle_stubs = 0;
+              branch_insns = 0, resume_labels = 0, dispatch_functions = 0, spills = 0, reloads = 0, hle_stubs = 0,
+              structured_functions = 0;  // V4: loops without the dispatcher
   std::size_t code_bytes = 0;
   std::vector<std::size_t> helper_by_op;  // per ppc::Op: instructions that go through rt.exec
 };

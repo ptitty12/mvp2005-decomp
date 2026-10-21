@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <map>
 
 #include "../../ppc/tests/encode.h"
 #include "../../translator/tests/synth.h"
@@ -58,7 +59,8 @@ static void install_fp_handler(Machine& m) {
 // V4 (`fast`): calls reach functions without resume labels and resumes their
 // resumable copies (WasmEmitOptions::fast_entries): no unwind ends in a frame,
 // so the in-frame resumes become unwinds to the dispatcher and resume entries.
-static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false, bool fast = false) {
+// V4 (`loops`): with fast entries, loops as wasm loops where they nest (structured_loops).
+static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false, bool fast = false, bool loops = false) {
   xlat::synth::Program prog = xlat::synth::make();
   auto syms = xlat::SymbolTable::parse(prog.symbols);
   auto dol = vfs::Dol::parse(prog.dol);
@@ -73,6 +75,7 @@ static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false, boo
   opt.precise_io = true;  // exact registers at the MMIO stop
   opt.inline_ops = inline_ops;
   opt.fast_entries = fast;
+  opt.structured_loops = loops;
   Machine ref, nat;
   if (fixed) {
     set_wasm_mem1(nat.mem1(), Machine::kMem1Size);
@@ -83,7 +86,9 @@ static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false, boo
   std::string err;
   REQUIRE_MESSAGE(xlat::emit_wasm(cfg, opt, &mod, &err), err);
   MESSAGE(mod.bytes.size(), " bytes, ", mod.stats.instructions, " instructions (", mod.stats.inline_insns, " inline, ",
-          mod.stats.helper_insns, " through the runtime, ", mod.stats.branch_insns, " control)");
+          mod.stats.helper_insns, " through the runtime, ", mod.stats.branch_insns, " control), ",
+          mod.stats.structured_functions, " with structured loops");
+  if (loops) CHECK(mod.stats.structured_functions > 0);
 
   FixedHooks hr, hn;
   StopIo ir, in;
@@ -159,6 +164,12 @@ TEST_CASE("V4: the same with fast entries and resumable copies (as the browser e
   run_case(true, true, true, true);
   run_case(false, true, true, true);
   run_case(true, false, false, true);
+}
+
+TEST_CASE("V4: the same with fast entries and structured loops") {
+  run_case(true, true, true, true, true);
+  run_case(false, true, true, true, true);
+  run_case(true, false, false, true, true);
 }
 
 TEST_CASE("V4: a module made for other runtime addresses is refused") {
@@ -509,4 +520,245 @@ TEST_CASE("wasm-emitted stores to the write-gather pipe equal Hardware::write's"
   };
   CHECK(pipe_writes(nat.hw) == pipe_writes(ref.hw));
   CHECK(wasm_wgp_state()->fast_stores > 40 * 8);  // the module appended most of them itself
+}
+
+// V4: loop shapes for WasmEmitOptions::structured_loops, against the interpreter
+// in lockstep, with fast entries: nested loops with an inner forward branch; a
+// loop with a continue from its middle and a break out of it; a loop that calls
+// a function; and two shapes that keep the dispatcher (a loop entered at its
+// condition, and two loops that overlap).
+namespace {
+
+struct LoopProgram {
+  std::vector<std::uint8_t> dol;
+  std::string symbols;
+};
+
+LoopProgram make_loop_program() {
+  using namespace mvp::ppc::enc;
+  constexpr u32 kText = 0x80003100;
+  std::vector<u32> w;
+  std::map<std::string, u32> at;
+  std::vector<std::pair<std::size_t, std::string>> fix;  // b/bl (26-bit) or bc (16-bit) to a label
+  std::vector<std::pair<std::string, u32>> fns;
+  auto here = [&] { return kText + 4 * static_cast<u32>(w.size()); };
+  auto L = [&](const std::string& n) { at[n] = here(); };
+  auto fn = [&](const std::string& n) {
+    L(n);
+    fns.push_back({n, here()});
+  };
+  auto b = [&](const std::string& n, u32 lk = 0) {
+    fix.push_back({w.size(), n});
+    w.push_back(I(0, 0, lk));
+  };
+  auto bc = [&](u32 bo, u32 bi, const std::string& n) {
+    fix.push_back({w.size(), n});
+    w.push_back(B(bo, bi, 0));
+  };
+  auto cmpwi = [&](u32 ra, s32 v) { w.push_back(D(11, 0, ra, v)); };  // cmpwi cr0, ra, v
+  auto li = [&](u32 rt, s32 v) { w.push_back(D(14, rt, 0, v)); };
+  auto addi = [&](u32 rt, u32 ra, s32 v) { w.push_back(D(14, rt, ra, v)); };
+  auto add = [&](u32 rt, u32 ra, u32 rb) { w.push_back(XO(rt, ra, rb, 0, 266)); };
+  auto blr = [&] { w.push_back(X(19, 20, 0, 0, 16)); };
+  constexpr u32 kLt = 12, kGt = 12, kEq = 12, kNe = 4;  // BO: branch if true (12) / false (4)
+  constexpr u32 biLt = 0, biGt = 1, biEq = 2;
+  (void)kGt;
+  (void)kEq;
+
+  fn("main");
+  w.push_back(D(15, 1, 0, 0x8040));   // lis r1, 0x8040 (stack)
+  w.push_back(D(15, 20, 0, 0x8030));  // lis r20, results
+  for (int k = 0; k < 5; ++k) {
+    static const char* const names[] = {"nested", "brk", "rotated", "calls_in", "overlap"};
+    b(names[k], 1);
+    w.push_back(D(36, 3, 20, 4 * k));  // stw r3, 4k(r20)
+  }
+  w.push_back(D(15, 9, 0, static_cast<s32>(static_cast<std::int16_t>(0xCC00))));  // lis r9, 0xCC00
+  w.push_back(D(36, 0, 9, 0));  // stw r0, 0(r9): MMIO, the stop
+  L("spin");
+  b("spin");
+
+  // nested: r3 = sum over i < 5, j <= i of i*j, plus 1 for each odd j.
+  fn("nested");
+  li(3, 0);
+  li(4, 0);
+  L("n_outer");
+  li(5, 0);
+  L("n_inner");
+  w.push_back(XO(6, 4, 5, 0, 235));  // mullw r6, r4, r5
+  add(3, 3, 6);
+  w.push_back(D(28, 5, 7, 1));       // andi. r7, r5, 1
+  bc(kLt, biEq, "n_skip");           // beq n_skip
+  addi(3, 3, 1);
+  L("n_skip");
+  addi(5, 5, 1);
+  w.push_back(X(31, 0, 5, 4, 0));    // cmpw r5, r4
+  bc(kNe, biGt, "n_inner");          // ble n_inner
+  addi(4, 4, 1);
+  cmpwi(4, 5);
+  bc(kLt, biLt, "n_outer");          // blt n_outer
+  blr();
+
+  // brk: r3 = sum of the r4 in 1..20 that are not multiples of 4, plus 100 for each above 10.
+  fn("brk");
+  li(3, 0);
+  li(4, 0);
+  L("k_top");
+  addi(4, 4, 1);
+  cmpwi(4, 20);
+  bc(kLt, biGt, "k_done");           // bgt k_done (break)
+  w.push_back(D(28, 4, 5, 3));       // andi. r5, r4, 3
+  bc(kLt, biEq, "k_top");            // beq k_top (continue, from the middle)
+  cmpwi(4, 10);
+  bc(kNe, biGt, "k_add");            // ble k_add (a label inside the loop)
+  addi(3, 3, 100);
+  L("k_add");
+  add(3, 3, 4);
+  b("k_top");
+  L("k_done");
+  blr();
+
+  // rotated: r3 = 10 + 9 + ... + 1, the loop entered at its condition (dispatcher).
+  fn("rotated");
+  li(3, 0);
+  li(4, 10);
+  b("r_cond");
+  L("r_body");
+  add(3, 3, 4);
+  addi(4, 4, -1);
+  L("r_cond");
+  cmpwi(4, 0);
+  bc(kLt, biGt, "r_body");           // bgt r_body
+  blr();
+
+  // calls_in: r3 = sum of sq(i), i < 6, plus 1000 for each square of 10 or more, with a frame
+  // and a call in the loop.
+  fn("calls_in");
+  w.push_back(D(37, 1, 1, -32));     // stwu r1, -32(r1)
+  w.push_back(SPR(339, 0, 8));       // mflr r0
+  w.push_back(D(36, 0, 1, 36));      // stw r0, 36(r1)
+  w.push_back(D(36, 31, 1, 28));     // stw r31, 28(r1)
+  w.push_back(D(36, 30, 1, 24));     // stw r30, 24(r1)
+  li(31, 0);
+  li(30, 0);
+  L("c_loop");
+  w.push_back(X(31, 31, 3, 31, 444));  // mr r3, r31
+  b("sq", 1);
+  cmpwi(3, 10);
+  bc(kLt, biLt, "c_small");          // blt c_small (a label inside the loop)
+  addi(30, 30, 1000);
+  L("c_small");
+  add(30, 30, 3);
+  addi(31, 31, 1);
+  cmpwi(31, 6);
+  bc(kLt, biLt, "c_loop");           // blt c_loop
+  w.push_back(X(31, 30, 3, 30, 444));  // mr r3, r30
+  w.push_back(D(32, 0, 1, 36));      // lwz r0, 36(r1)
+  w.push_back(SPR(467, 0, 8));       // mtlr r0
+  w.push_back(D(32, 31, 1, 28));     // lwz r31, 28(r1)
+  w.push_back(D(32, 30, 1, 24));     // lwz r30, 24(r1)
+  addi(1, 1, 32);
+  blr();
+
+  fn("sq");
+  w.push_back(XO(3, 3, 3, 0, 235));  // mullw r3, r3, r3
+  blr();
+
+  // overlap: loops [o_a, o_c] and [o_b, o_d] share segments without nesting (dispatcher).
+  fn("overlap");
+  li(3, 0);
+  li(4, 0);
+  li(5, 0);
+  L("o_a");
+  addi(3, 3, 1);
+  L("o_b");
+  addi(4, 4, 1);
+  b("o_c");                          // (to the next instruction: o_c starts a segment)
+  L("o_c");
+  w.push_back(D(28, 4, 6, 1));       // andi. r6, r4, 1
+  bc(kNe, biEq, "o_a");              // bne o_a
+  b("o_d");
+  L("o_d");
+  addi(5, 5, 1);
+  cmpwi(5, 5);
+  bc(kLt, biLt, "o_b");              // blt o_b
+  add(3, 3, 4);
+  add(3, 3, 5);
+  blr();
+  fn("end");
+
+  for (const auto& [idx, n] : fix) {
+    const u32 t = at.at(n), from = kText + 4 * static_cast<u32>(idx);
+    u32& x = w[idx];
+    if ((x >> 26) == 18) x = (x & ~0x03FFFFFCu) | ((t - from) & 0x03FFFFFCu);
+    else x = (x & ~0xFFFCu) | ((t - from) & 0xFFFCu);
+  }
+  const std::size_t text_bytes = 4 * w.size();
+  std::vector<std::uint8_t> d(0x100 + text_bytes, 0);
+  put_be32(&d[0], 0x100);
+  put_be32(&d[0x48], kText);
+  put_be32(&d[0x90], static_cast<u32>(text_bytes));
+  put_be32(&d[0xE0], kText);
+  for (std::size_t k = 0; k < w.size(); ++k) put_be32(&d[0x100 + 4 * k], w[k]);
+  std::string syms;
+  char line[160];
+  for (std::size_t k = 0; k + 1 < fns.size(); ++k) {
+    std::snprintf(line, sizeof line, "%s = .text:0x%08X; // type:function size:0x%X\n", fns[k].first.c_str(),
+                  fns[k].second, fns[k + 1].second - fns[k].second);
+    syms += line;
+  }
+  return LoopProgram{std::move(d), std::move(syms)};
+}
+
+}  // namespace
+
+TEST_CASE("V4: loop shapes, structured where they nest, match the interpreter") {
+  LoopProgram prog = make_loop_program();
+  auto syms = xlat::SymbolTable::parse(prog.symbols);
+  auto dol = vfs::Dol::parse(prog.dol);
+  REQUIRE(dol);
+  xlat::ProgramCfg cfg = xlat::build_cfg(*dol, syms);
+  REQUIRE(cfg.errors == 0);
+  for (int loops = 0; loops < 2; ++loops) {
+    xlat::WasmEmitOptions opt;
+    opt.precise_io = true;
+    opt.fast_entries = true;
+    opt.structured_loops = loops != 0;
+    xlat::WasmModule mod;
+    std::string err;
+    REQUIRE_MESSAGE(xlat::emit_wasm(cfg, opt, &mod, &err), err);
+    MESSAGE("loops ", loops, ": ", mod.stats.structured_functions, " structured, ", mod.stats.dispatch_functions,
+            " with the dispatcher");
+    // nested, brk and calls_in structured; rotated and overlap (and every resumable copy) keep the dispatcher.
+    CHECK(mod.stats.structured_functions == (loops ? 3u : 0u));
+    Machine ref, nat;
+    FixedHooks hr, hn;
+    StopIo ir, in;
+    ir.cpu = &ref.cpu();
+    in.cpu = &nat.cpu();
+    ref.memory().io = &ir;
+    nat.memory().io = &in;
+    ref.cpu().hooks = &hr;
+    nat.cpu().hooks = &hn;
+    ref.load_dol(*dol);
+    nat.load_dol(*dol);
+    WasmLoadStats ls;
+    REQUIRE_MESSAGE(load_wasm_module(mod, &ls, &err), err);
+    LockstepResult r = run_lockstep(ref, nat, cfg, 1);
+    INFO(r.message);
+    REQUIRE(r.pass);
+    CHECK(r.stop.addr == 0xCC000000u);
+    const u32 want[] = {0, 0, 55, 2055, 0};  // nested and brk computed below; overlap as the interpreter
+    u32 nested = 0;
+    for (u32 i = 0; i < 5; ++i)
+      for (u32 j = 0; j <= i; ++j) nested += i * j + (j & 1);
+    u32 brk = 0;
+    for (u32 v = 1; v <= 20; ++v)
+      if (v & 3) brk += v + (v > 10 ? 100 : 0);
+    CHECK(be32(nat.mem1() + 0x300000) == nested);
+    CHECK(be32(nat.mem1() + 0x300004) == brk);
+    CHECK(be32(nat.mem1() + 0x300008) == want[2]);
+    CHECK(be32(nat.mem1() + 0x30000C) == want[3]);
+    CHECK(be32(nat.mem1() + 0x300010) == be32(ref.mem1() + 0x300010));
+  }
 }

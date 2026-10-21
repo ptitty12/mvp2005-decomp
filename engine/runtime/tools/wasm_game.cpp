@@ -61,6 +61,8 @@ void mvp_register_game() {
   if (const char* v = std::getenv("MVP_WASM_FIXED"); !v || *v != '0') opt.fixed = rt::wasm_fixed_addrs();
   // V4: Fast entries with resumable copies, as the browser's engine; MVP_WASM_FAST=0: one function each.
   if (const char* v = std::getenv("MVP_WASM_FAST"); !v || *v != '0') opt.fast_entries = true;
+  // V4: loops as wasm loops where the dispatcher is not needed; MVP_WASM_LOOPS=0: the dispatcher.
+  if (const char* v = std::getenv("MVP_WASM_LOOPS"); !v || *v != '0') opt.structured_loops = true;
   auto t2 = std::chrono::steady_clock::now();
   xlat::WasmModule mod;
   if (!xlat::emit_wasm(cfg, opt, &mod, &err)) {

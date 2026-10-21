@@ -674,6 +674,7 @@ EMSCRIPTEN_KEEPALIVE int mvp_translate(const char* text, int len) {
     set_wasm_mem1(g_mem1_store, Machine::kMem1Size);  // V4: where the machine's MEM1 will be (mvp_boot)
     opt.fixed = wasm_fixed_addrs();                    // the runtime's addresses as constants
     opt.fast_entries = true;                           // V4: functions without resume labels for calls
+    opt.structured_loops = true;                       // V4: and their loops as wasm loops
     if (!xlat::emit_wasm(cfg, opt, &mod, &g.error)) return 0;
     double t3 = now_ms();
     g.t_symbols = t1 - t0;

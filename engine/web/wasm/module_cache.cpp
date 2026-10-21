@@ -7,12 +7,12 @@ namespace mvp::web {
 namespace {
 
 constexpr char kMagic[8] = {'M', 'V', 'P', 'X', 'L', 'A', 'T', '\0'};
-constexpr std::uint32_t kVersion = 2;  // V4: 2 carries WasmModule::fixed
+constexpr std::uint32_t kVersion = 3;  // V4: 2 carries WasmModule::fixed, 3 the structured count
 
 // If this fails, xlat::WasmModule or WasmEmitStats changed: carry the new
 // fields below and bump kVersion (the cache key changes with the engine build
 // anyway; this keeps a warm start equal to a fresh translation).
-static_assert(sizeof(xlat::WasmModule) == 192 && sizeof(xlat::WasmEmitStats) == 64,
+static_assert(sizeof(xlat::WasmModule) == 196 && sizeof(xlat::WasmEmitStats) == 68,
               "update serialize_module/deserialize_module for the changed WasmModule");
 
 struct Writer {
@@ -108,7 +108,7 @@ std::vector<std::uint8_t> serialize_module_header(const xlat::WasmModule& m, std
   const auto& s = m.stats;
   for (std::size_t v : {s.functions, s.wasm_functions, s.entries, s.instructions, s.inline_insns, s.helper_insns,
                         s.branch_insns, s.resume_labels, s.dispatch_functions, s.spills, s.reloads, s.hle_stubs,
-                        s.code_bytes})
+                        s.code_bytes, s.structured_functions})
     w.u64(v);
   w.u32(static_cast<std::uint32_t>(s.helper_by_op.size()));
   for (std::size_t v : s.helper_by_op) w.u64(v);
@@ -162,7 +162,7 @@ bool deserialize_module_tables(const std::uint8_t* p, std::size_t n, xlat::WasmM
   auto& s = out.stats;
   for (std::size_t* v : {&s.functions, &s.wasm_functions, &s.entries, &s.instructions, &s.inline_insns,
                          &s.helper_insns, &s.branch_insns, &s.resume_labels, &s.dispatch_functions, &s.spills,
-                         &s.reloads, &s.hle_stubs, &s.code_bytes})
+                         &s.reloads, &s.hle_stubs, &s.code_bytes, &s.structured_functions})
     *v = static_cast<std::size_t>(r.u64());
   s.helper_by_op.resize(r.count(8));
   for (std::size_t& v : s.helper_by_op) v = static_cast<std::size_t>(r.u64());
