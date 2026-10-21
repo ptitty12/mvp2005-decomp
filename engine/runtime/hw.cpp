@@ -12,15 +12,77 @@
 
 namespace mvp::rt {
 
+namespace {
+
+// V4: the pages of `src` stamped after `saved` (all of them when `all`, or when the
+// sizes differ) into `dst`; with `restamp`, those pages get `now` in `stamp`.
+void copy_pages(std::vector<std::uint8_t>& dst, const std::vector<std::uint8_t>& src, std::vector<std::uint32_t>& stamp,
+                std::uint32_t page, std::uint32_t saved, bool all, bool restamp, std::uint32_t now) {
+  if (all || dst.size() != src.size() || stamp.size() * page != src.size()) {
+    dst = src;
+    if (restamp) std::fill(stamp.begin(), stamp.end(), now);
+    return;
+  }
+  for (std::size_t p = 0; p < stamp.size(); ++p) {
+    if (stamp[p] <= saved) continue;
+    std::memcpy(dst.data() + p * page, src.data() + p * page, page);
+    if (restamp) stamp[p] = now;
+  }
+}
+
+}  // namespace
+
+void Hardware::take_aside(Aside& a) {
+  aram_.swap(a.aram);
+  fifo_.swap(a.fifo);
+  log_.swap(a.log);
+  reads_.swap(a.reads);
+  writes_.swap(a.writes);
+  aram_stamp_.swap(a.aram_stamp);
+  std::swap(epoch_, a.epoch);
+  std::swap(snap_src_, a.src);
+  std::swap(snap_saved_, a.saved);
+  if (card_) {
+    card_->image_store().swap(a.card_image);
+    card_->stamps().swap(a.card_stamp);
+  }
+}
+
 std::unique_ptr<Hardware> Hardware::snapshot() const {
   auto s = std::make_unique<Hardware>(*this);
   s->wgp_ = &s->own_wgp_;
   s->own_wgp_ = *wgp_;
+  s->snap_src_ = this;  // V4: a whole copy, taken at this epoch
+  s->snap_saved_ = epoch_;
+  ++epoch_;
+  if (card_) const_cast<Hardware*>(this)->card_->set_epoch(epoch_);  // bookkeeping, not the state
   return s;
 }
 
 void Hardware::save_into(Hardware& snap) const {
-  snap = *this;  // vectors keep their capacity: no allocation after the first save
+  Hardware& self = const_cast<Hardware&>(*this);  // the members set aside come back before this returns
+  const bool same = snap.snap_src_ == this;
+  const std::uint32_t saved = snap.snap_saved_;
+  Aside mine, theirs;
+  self.take_aside(mine);
+  snap.take_aside(theirs);
+  try {
+    snap = self;  // the rest member by member (vectors keep their capacity: no allocation after the first save)
+  } catch (...) {
+    self.take_aside(mine);
+    snap.take_aside(theirs);
+    throw;
+  }
+  self.take_aside(mine);
+  snap.take_aside(theirs);
+  copy_pages(snap.aram_, aram_, self.aram_stamp_, kAramPage, saved, !same, false, 0);
+  if (card_ && snap.card_)
+    copy_pages(snap.card_->image_store(), card_->image(), self.card_->stamps(), MemoryCard::kSector, saved, !same,
+               false, 0);
+  snap.snap_src_ = this;
+  snap.snap_saved_ = epoch_;
+  ++epoch_;
+  if (card_) self.card_->set_epoch(epoch_);
   snap.wgp_ = &snap.own_wgp_;
   snap.own_wgp_ = *wgp_;
 }
@@ -30,7 +92,30 @@ void Hardware::restore_from(const Hardware& snap) {
   GfxObserver* gfx = gfx_;
   ax::FrameObserver* ax_obs = ax_obs_;
   vfs::Source* disc = disc_;
-  *this = snap;
+  Hardware& from = const_cast<Hardware&>(snap);  // the members set aside come back before this returns
+  const bool same = snap.snap_src_ == this;
+  const std::uint32_t saved = snap.snap_saved_;
+  Aside mine, theirs;
+  take_aside(mine);
+  from.take_aside(theirs);
+  try {
+    *this = snap;
+  } catch (...) {
+    take_aside(mine);
+    from.take_aside(theirs);
+    throw;
+  }
+  take_aside(mine);
+  from.take_aside(theirs);
+  // V4: the pages written since the snapshot come back from it (all of them when it
+  // came from elsewhere); they are new to every other snapshot.
+  copy_pages(aram_, snap.aram_, aram_stamp_, kAramPage, saved, !same, true, epoch_);
+  if (card_) {
+    if (snap.card_)
+      copy_pages(card_->image_store(), snap.card_->image(), card_->stamps(), MemoryCard::kSector, saved, !same, true,
+                 epoch_);
+    card_->set_epoch(epoch_);
+  }
   wgp_ = wgp;
   *wgp_ = snap.own_wgp_;
   disc_ = disc;
@@ -167,6 +252,7 @@ void Hardware::reset_card_state() {
 
 void Hardware::read_state(StateReader& r) {
   const std::size_t regs = regs_.size(), aram = aram_.size();
+  snap_src_ = nullptr;  // V4: ARAM from a file: no machine's pages to compare with
   state_fields(r);
   if (regs_.size() != regs || aram_.size() != aram || wgp_->n >= 32)
     throw StateError("save state: the hardware's register file or ARAM has another size");
@@ -607,6 +693,10 @@ void Hardware::dsp_aram_dma() {
     if (mm + k >= mem1_size_ || ar + k >= aram_.size()) break;
     if (to_mem) mem1_[mm + k] = aram_[ar + k];
     else aram_[ar + k] = mem1_[mm + k];
+  }
+  if (!to_mem && n && ar < aram_.size()) {  // V4: the pages written, for snapshots (save_into)
+    const u32 last = std::min<u32>(ar + n, static_cast<u32>(aram_.size())) - 1;
+    for (u32 p = ar / kAramPage; p <= last / kAramPage; ++p) aram_stamp_[p] = epoch_;
   }
   ar_cnt_ &= 0x80000000u;
   dsp_cr_ |= kDspArint;  // DMA complete

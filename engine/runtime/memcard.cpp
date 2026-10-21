@@ -235,6 +235,7 @@ bool MemoryCard::deselect(std::uint64_t now) {
       if (!unlocked_) return false;
       const u32 base = (addr_ % kSize) & ~(kPage - 1);
       for (u32 i = 0; i < page_.size(); ++i) image_[base + ((addr_ + i) & (kPage - 1))] = page_[i];
+      stamp_[base / kSector] = epoch_;  // V4
       busy_until_ = now + kProgramTb;
       ++writes_;
       return true;
@@ -243,6 +244,7 @@ bool MemoryCard::deselect(std::uint64_t now) {
       if (!unlocked_) return false;
       const u32 sector = ((u32(cmd_[1] & 0x7F) << 17) | (u32(cmd_[2]) << 9)) % kSize & ~(kSector - 1);
       std::fill_n(image_.begin() + sector, kSector, u8{0xFF});
+      stamp_[sector / kSector] = epoch_;  // V4
       busy_until_ = now + kEraseTb;
       ++writes_;
       return true;
@@ -250,6 +252,7 @@ bool MemoryCard::deselect(std::uint64_t now) {
     case 0xF4:
       if (!unlocked_) return false;
       std::fill(image_.begin(), image_.end(), u8{0xFF});
+      stamp_all();  // V4
       busy_until_ = now + kEraseTb;
       ++writes_;
       return true;

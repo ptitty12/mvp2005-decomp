@@ -72,6 +72,7 @@ class Timeline {
 
   std::uint64_t snapshots = 0, reviews = 0, restores = 0;
   double snapshot_ms_max = 0, restore_ms_max = 0;
+  double snapshot_ms_total = 0;  // V4: with `snapshots`, the mean (the longest is usually a slot's first)
 
   // The slots by the polls of their snapshots (~0: empty). A live snapshot
   // replaces an empty slot, else the older; a review restores the latest at or

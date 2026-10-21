@@ -1345,8 +1345,10 @@ int main(int argc, char** argv) {
   rt::g_frame_hook = nullptr;
   rt::g_poll_gate = nullptr;
   if (g_timeline)
-    std::printf("timeline: %llu snapshots (longest %.1f ms), %llu reviews, %llu restores (longest %.1f ms), %llu replay captures\n",
+    std::printf("timeline: %llu snapshots (longest %.1f ms, mean %.1f ms), %llu reviews, %llu restores (longest %.1f ms), "
+                "%llu replay captures\n",
                 static_cast<unsigned long long>(timeline.snapshots), timeline.snapshot_ms_max,
+                timeline.snapshots ? timeline.snapshot_ms_total / static_cast<double>(timeline.snapshots) : 0.0,
                 static_cast<unsigned long long>(timeline.reviews), static_cast<unsigned long long>(timeline.restores),
                 timeline.restore_ms_max, static_cast<unsigned long long>(play.review_captures));
   g_timeline = nullptr;

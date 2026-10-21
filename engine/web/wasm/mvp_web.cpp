@@ -1434,9 +1434,9 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_status() {
   if (g.timeline) {  // gameplay mods: snapshots and reviews, with the longest host time of each
     const auto& t = *g.timeline;
     std::snprintf(b, sizeof b,
-                  ",\"timeline\":{\"snapshots\":%llu,\"snapshot_ms_max\":%.2f,\"reviews\":%llu,\"restores\":%llu,"
-                  "\"restore_ms_max\":%.2f}",
-                  static_cast<unsigned long long>(t.snapshots), t.snapshot_ms_max,
+                  ",\"timeline\":{\"snapshots\":%llu,\"snapshot_ms_max\":%.2f,\"snapshot_ms_total\":%.2f,"
+                  "\"reviews\":%llu,\"restores\":%llu,\"restore_ms_max\":%.2f}",
+                  static_cast<unsigned long long>(t.snapshots), t.snapshot_ms_max, t.snapshot_ms_total,
                   static_cast<unsigned long long>(t.reviews), static_cast<unsigned long long>(t.restores),
                   t.restore_ms_max);
     s += b;

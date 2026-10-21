@@ -74,6 +74,7 @@ void Timeline::save(int slot) {
   ++snapshots;
   const double ms = ms_since(t0);
   if (ms > snapshot_ms_max) snapshot_ms_max = ms;
+  snapshot_ms_total += ms;
 }
 
 void Timeline::load(int slot) {
