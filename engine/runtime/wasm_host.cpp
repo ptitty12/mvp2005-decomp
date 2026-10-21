@@ -8,12 +8,17 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common/bytes.h"
 #include "ppc/interp.h"
+#include "ppc/isa.h"
 #include "ppc/mem_access.h"
 #include "ppc/sem.h"
 #include "runtime/hle.h"
 #include "runtime/hw.h"
 #include "runtime/native.h"
+#include "translator/cfg.h"
+#include "translator/symbols.h"
+#include "vfs/dol.h"
 
 using namespace mvp;
 using namespace mvp::rt;
@@ -37,6 +42,7 @@ struct Mem1View {
   u32 base = 0, limit = 0;
 };
 Mem1View g_mem1;
+xlat::WasmFixed g_loaded_fixed;  // V4: the fixed addresses of the module loaded last
 static_assert(offsetof(Mem1View, base) == xlat::WasmMem1Layout::kBase &&
                   offsetof(Mem1View, limit) == xlat::WasmMem1Layout::kLimit,
               "the translator's view of Mem1View");
@@ -169,7 +175,7 @@ EMSCRIPTEN_KEEPALIVE void mvp_rt_tw(Cpu* c, u32 w, u32 pc) {
 // the table base, or -1 with the message in the console.
 EM_JS(int, mvp_js_instantiate,
       (const void* bytes, unsigned len, unsigned slots, unsigned unwinding, unsigned resume, unsigned hook,
-       unsigned wgp, unsigned gp_pages, unsigned mem1, double* times),
+       unsigned wgp, unsigned gp_pages, unsigned mem1, int keep, double* times),
       {
         var names = ["on_entry", "safepoint", "read8", "read16", "read32", "write8", "write16", "write32", "exec",
                      "call_indirect", "absolute_call", "resume", "hle_call", "hle_before", "trap", "rfi",
@@ -179,8 +185,9 @@ EM_JS(int, mvp_js_instantiate,
           var t0 = performance.now();
           var view = new Uint8Array(wasmMemory.buffer, bytes, len);
           // A shared memory (the threaded engine, P2): WebAssembly.Module takes no shared view.
-          if (typeof SharedArrayBuffer != 'undefined' && wasmMemory.buffer instanceof SharedArrayBuffer)
+          if ((typeof SharedArrayBuffer != 'undefined' && wasmMemory.buffer instanceof SharedArrayBuffer) || keep)
             view = view.slice();
+          if (keep) Module['mvpModuleBytes'] = view;  // V4: for the cache, outside the engine's heap
           var mod = new WebAssembly.Module(view);
           var t1 = performance.now();
           var rt = {};
@@ -223,18 +230,203 @@ WgpState* wasm_wgp_state() { return &g_wgp; }
 void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size) {
   g_mem1.base = static_cast<u32>(reinterpret_cast<std::uintptr_t>(base));
   g_mem1.limit = base && size >= 8 ? size - 7 : 0;  // whole accesses of up to 8 bytes
+  if (!base) g_loaded_fixed.mem1_limit = 0;  // no machine: the loaded module's MEM1 is gone with it (tests)
+  if (base && g_loaded_fixed.mem1_limit &&
+      (g_mem1.base != g_loaded_fixed.mem1_base || g_mem1.limit != g_loaded_fixed.mem1_limit)) {
+    // V4: the loaded module reads and writes MEM1 at its fixed place: a machine elsewhere cannot run it.
+    std::fprintf(stderr, "mvp: MEM1 at 0x%08X, but the translated module has it fixed at 0x%08X\n", g_mem1.base,
+                 g_loaded_fixed.mem1_base);
+    std::abort();
+  }
+}
+
+xlat::WasmFixed wasm_fixed_addrs() {
+  xlat::WasmFixed f;
+  f.unwinding = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_unwinding));
+  f.resume = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_resume));
+  f.hook = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_entry_hook));
+  f.wgp = static_cast<u32>(reinterpret_cast<std::uintptr_t>(&g_wgp));
+  f.gp_pages = static_cast<u32>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages));
+  if (g_mem1.limit) {
+    f.mem1_base = g_mem1.base;
+    f.mem1_limit = g_mem1.limit;
+  }
+  return f;
 }
 
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error) {
-  static_assert(sizeof(GuestFn) == 4, "wasm32: a function pointer is a table index");
+  return load_wasm_module(m, m.bytes.data(), m.bytes.size(), false, stats, error);
+}
+
+// ---- V4: heap code ----
+
+namespace {
+
+constexpr u32 kHeapMaxBytes = 0x10000;  // a translation's reach from its entry
+u32 kHeapCallsBefore = 3;               // interpreted calls before the translation
+double kHeapGapMs = 8;                  // host time between two translations
+
+struct HeapFn {
+  std::vector<std::uint8_t> bytes;  // the code as translated, from the entry
+  GuestFn fn = nullptr;
+  u32 calls = 0;
+  bool failed = false;
+};
+std::unordered_map<u32, HeapFn> g_heap;
+WasmHeapStats g_heap_stats;
+double g_heap_last_ms = -1e9;
+
+// The end of the code reachable from `entry` (branches followed, calls and returns
+// as the translator's CFG takes them), or 0 if it leaves MEM1 or kHeapMaxBytes,
+// meets an invalid word or calls anything directly (the CFG of the code alone
+// could not name the callee).
+u32 heap_extent(const std::uint8_t* mem1, u32 entry) {
+  const u32 lo = entry, hi_limit = entry + kHeapMaxBytes;
+  if (entry - 0x80000000u >= 0x01800000u - kHeapMaxBytes) return 0;
+  std::vector<bool> seen(kHeapMaxBytes / 4, false);
+  std::vector<u32> work{entry};
+  u32 hi = entry;
+  while (!work.empty()) {
+    u32 a = work.back();
+    work.pop_back();
+    for (;;) {
+      if (a < lo || a >= hi_limit) return 0;
+      const u32 k = (a - lo) / 4;
+      if (seen[k]) break;
+      seen[k] = true;
+      if (a > hi) hi = a;
+      const ppc::Insn i{be32(mem1 + (a - 0x80000000u))};
+      const ppc::Op op = ppc::decode(i.w);
+      if (op == ppc::Op::invalid) return 0;
+      if (op == ppc::Op::b || op == ppc::Op::bc) {
+        if (i.lk()) return 0;  // a direct call: not translatable alone
+        const s32 disp = op == ppc::Op::b ? i.li() : i.bd();
+        const u32 t = i.aa() ? static_cast<u32>(disp) : a + static_cast<u32>(disp);
+        if (t < lo || t >= hi_limit) return 0;  // a branch out of it
+        work.push_back(t);
+        if (op == ppc::Op::b || (i.bo() & 0x14) == 0x14) break;
+      } else if (op == ppc::Op::bclr || op == ppc::Op::bcctr) {
+        if (!i.lk() && (i.bo() & 0x14) == 0x14) break;  // blr, bctr: the end of this path
+      } else if (op == ppc::Op::rfi) {
+        break;
+      }
+      a += 4;
+    }
+  }
+  return hi + 4;
+}
+
+// The translation of the code at [entry, end), or null.
+GuestFn heap_translate(u32 entry, u32 end, const std::uint8_t* code) {
+  const u32 len = end - entry;
+  std::vector<std::uint8_t> dol(0x100 + len, 0);  // a DOL with one text section: the code
+  put_be32(&dol[0x00], 0x100);
+  put_be32(&dol[0x48], entry);
+  put_be32(&dol[0x90], len);
+  put_be32(&dol[0xE0], entry);
+  std::memcpy(&dol[0x100], code, len);
+  auto d = vfs::Dol::parse(std::move(dol));
+  if (!d) return nullptr;
+  char line[128];
+  std::snprintf(line, sizeof line, "heap_%08X = .text:0x%08X; // type:function size:0x%X\n", entry, entry, len);
+  xlat::SymbolTable syms = xlat::SymbolTable::parse(line);
+  xlat::ProgramCfg cfg = xlat::build_cfg(*d, syms);
+  if (cfg.errors || cfg.functions.size() != 1) return nullptr;
+  for (auto& f : cfg.functions) {  // no safe points in heap code (the interpreter has none there)
+    f.back_edges.clear();
+    f.idle_spins.clear();
+    f.resume_points.clear();
+  }
+  xlat::WasmEmitOptions opt;
+  opt.fixed = wasm_fixed_addrs();
+  opt.heap_code = true;
+  opt.structured_loops = true;
+#ifdef __EMSCRIPTEN_PTHREADS__
+  opt.shared_memory = true;
+#endif
+  xlat::WasmModule mod;
+  std::string err;
+  if (!xlat::emit_wasm(cfg, opt, &mod, &err) || mod.entries.size() != 1) return nullptr;
   alignas(8) double times[2] = {0, 0};
-  int base = mvp_js_instantiate(m.bytes.data(), static_cast<unsigned>(m.bytes.size()), m.slots,
+  const int base = mvp_js_instantiate(mod.bytes.data(), static_cast<unsigned>(mod.bytes.size()), mod.slots,
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_unwinding)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_resume)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_entry_hook)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_wgp)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)),
+                                      static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), 0, times);
+  if (base < 0) return nullptr;
+  g_heap_stats.bytes += mod.bytes.size();
+  return as_fn(static_cast<u32>(base) + mod.entries[0].slot);
+}
+
+GuestFn heap_code(Cpu& c, u32 target) {
+  if (!g_mem1.limit || target - 0x80000000u >= 0x01800000u) return nullptr;
+  const std::uint8_t* mem1 = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(g_mem1.base));
+  HeapFn& h = g_heap[target];
+  const std::uint8_t* at = mem1 + (target - 0x80000000u);
+  if (h.fn) {
+    if (std::memcmp(at, h.bytes.data(), h.bytes.size()) == 0) {
+      ++g_heap_stats.calls;
+      return h.fn;
+    }
+    h.fn = nullptr;  // other code there now: interpreted, translated again later
+    h.calls = 0;
+    ++g_heap_stats.changed;
+  }
+  if (h.failed || ++h.calls < kHeapCallsBefore) return nullptr;
+  const double now = emscripten_get_now();
+  if (now - g_heap_last_ms < kHeapGapMs) return nullptr;  // later (host time only: the guest runs the same)
+  g_heap_last_ms = now;
+  const u32 end = heap_extent(mem1, target);
+  GuestFn fn = end ? heap_translate(target, end, at) : nullptr;
+  const double ms = emscripten_get_now() - now;
+  g_heap_stats.ms_total += ms;
+  if (ms > g_heap_stats.ms_max) g_heap_stats.ms_max = ms;
+  if (!fn) {
+    h.failed = true;
+    ++g_heap_stats.failed;
+    return nullptr;
+  }
+  h.bytes.assign(at, at + (end - target));
+  h.fn = fn;
+  ++g_heap_stats.translated;
+  ++g_heap_stats.calls;
+  (void)c;
+  return fn;
+}
+
+}  // namespace
+
+void set_wasm_heap_code(bool on) { g_heap_code_hook = on ? &heap_code : nullptr; }
+void set_wasm_heap_code_tuning(unsigned calls_before, double gap_ms) {
+  kHeapCallsBefore = calls_before;
+  kHeapGapMs = gap_ms;
+}
+const WasmHeapStats& wasm_heap_stats() { return g_heap_stats; }
+
+bool load_wasm_module(const xlat::WasmModule& m, const std::uint8_t* bytes, std::size_t len, bool keep_js_copy,
+                      WasmLoadStats* stats, std::string* error) {
+  static_assert(sizeof(GuestFn) == 4, "wasm32: a function pointer is a table index");
+  if (m.fixed.any()) {  // V4: its constants must be this runtime's addresses
+    const xlat::WasmFixed now = wasm_fixed_addrs();
+    auto same = [](u32 fixed, u32 here) { return !fixed || fixed == here; };
+    if (!same(m.fixed.unwinding, now.unwinding) || !same(m.fixed.resume, now.resume) ||
+        !same(m.fixed.hook, now.hook) || !same(m.fixed.wgp, now.wgp) || !same(m.fixed.gp_pages, now.gp_pages) ||
+        (m.fixed.mem1_limit && (m.fixed.mem1_base != now.mem1_base || m.fixed.mem1_limit != now.mem1_limit))) {
+      if (error) *error = "the translated module was made for other runtime addresses (another engine build)";
+      return false;
+    }
+  }
+  alignas(8) double times[2] = {0, 0};
+  int base = mvp_js_instantiate(bytes, static_cast<unsigned>(len), m.slots,
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_unwinding)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_resume)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_entry_hook)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_wgp)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)),
-                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), times);
+                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), keep_js_copy ? 1 : 0,
+                                times);
   if (base < 0) {
     if (error) *error = "the translated module did not compile or instantiate (see the console)";
     return false;
@@ -248,6 +440,7 @@ bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::stri
   g_native.set(entries.data(), entries.size());
   g_resume_labels.set(resume.data(), resume.size());
   g_safe.set(m.safe.data(), m.safe.size());
+  g_loaded_fixed = m.fixed;
   g_idle.set(m.idle.data(), m.idle.size());
   std::vector<HleSite> sites;
   for (const auto& [a, k] : m.hle_sites) sites.push_back({a, k});

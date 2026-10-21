@@ -34,6 +34,11 @@ class GpReads {
   explicit GpReads(Mark mark) : mark_(std::move(mark)) {}
 
   void command(const u8* c, std::size_t len);
+  // V4: whether command() does anything for a command starting with `op` (CP and BP
+  // loads, indexed XF loads, primitives); the caller may skip the others.
+  static bool reads_something(u8 op) {
+    return op == 0x08 || (op & 0xE7) == 0x20 || op == 0x61 || (op & 0xC0) == 0x80;
+  }
 
   // Q4: the marks' epoch. Within one epoch the owner promises that a range
   // marked once stays marked (its marks are good for every later command of the

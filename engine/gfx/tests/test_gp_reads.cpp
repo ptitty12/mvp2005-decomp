@@ -164,3 +164,33 @@ TEST_CASE("indexed attributes: within an epoch, each array's elements are report
   r.take();
   CHECK(draw({10, 12}) == R{{0x200000 + 10 * 6, 2 * 6 + 6}});
 }
+
+TEST_CASE("V4: commands reads_something leaves out report nothing") {
+  Recorder r;
+  Stream s;
+  // State under which every primitive and indexed load would read memory.
+  s.cp(cp::kVcdLo, 1u | 3u << 9 | 2u << 13);
+  s.cp(cp::kVatA, 1u | 3u << 1 | 5u << 14);
+  s.cp(cp::kArrayBase + 0, 0x100000);
+  s.cp(cp::kArrayStride + 0, 6);
+  s.cp(cp::kArrayBase + 2, 0x200000);
+  s.cp(cp::kArrayStride + 2, 8);
+  for (int a = 12; a < 16; ++a) {
+    s.cp(static_cast<u8>(cp::kArrayBase + a), 0x400000);
+    s.cp(static_cast<u8>(cp::kArrayStride + a), 16);
+  }
+  r.run(s);
+  r.take();
+  int skipped = 0;
+  for (int op = 0; op < 256; ++op) {
+    if (GpReads::reads_something(static_cast<u8>(op))) continue;
+    ++skipped;
+    std::vector<u8> c(64, 0x37);
+    c[0] = static_cast<u8>(op);
+    c[1] = 0;
+    c[2] = 3;  // a count, were it a primitive
+    r.reads.command(c.data(), c.size());
+    CHECK_MESSAGE(r.take().empty(), "op ", op);
+  }
+  CHECK(skipped == 256 - (1 + 4 + 1 + 64));  // CP, the four indexed XF loads, BP, primitives 0x80-0xBF
+}

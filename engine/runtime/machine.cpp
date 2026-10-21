@@ -4,10 +4,18 @@
 
 namespace mvp::rt {
 
-Machine::Machine() : mem1_(kMem1Size + kGuard, 0), mem_(std::make_unique<ppc::Memory>()) {
+Machine::Machine() : own_mem1_(kMem1Size + kGuard, 0), mem1_(own_mem1_.data()), mem_(std::make_unique<ppc::Memory>()) {
   // MEM1 through the cached (0x80000000) and uncached (0xC0000000) windows.
-  mem_->map(0x80000000u, mem1_.data(), kMem1Size);
-  mem_->map(0xC0000000u, mem1_.data(), kMem1Size);
+  mem_->map(0x80000000u, mem1_, kMem1Size);
+  mem_->map(0xC0000000u, mem1_, kMem1Size);
+  cpu_.mem = mem_.get();
+  cpu_.env = this;
+}
+
+Machine::Machine(u8* storage) : mem1_(storage), mem_(std::make_unique<ppc::Memory>()) {
+  std::memset(mem1_, 0, kMem1Size + kGuard);
+  mem_->map(0x80000000u, mem1_, kMem1Size);
+  mem_->map(0xC0000000u, mem1_, kMem1Size);
   cpu_.mem = mem_.get();
   cpu_.env = this;
 }
@@ -26,7 +34,7 @@ bool Machine::has_ram(u32 base) const {
 
 void Machine::set_real_mode(bool on) {
   if (on) {
-    mem_->map(0x00000000u, mem1_.data(), kMem1Size);
+    mem_->map(0x00000000u, mem1_, kMem1Size);
   } else {
     for (u32 off = 0; off < kMem1Size; off += ppc::Memory::kPageSize) mem_->page[off >> ppc::Memory::kPageShift] = nullptr;
   }
@@ -34,12 +42,12 @@ void Machine::set_real_mode(bool on) {
 
 void Machine::save(Snapshot& s) const {
   s.cpu = cpu_;
-  s.mem1.assign(mem1_.begin(), mem1_.end());  // keeps the snapshot's capacity: no allocation after the first
+  s.mem1.assign(mem1_, mem1_ + kMem1Size + kGuard);  // keeps the snapshot's capacity: no allocation after the first
   s.extra_ram = extra_ram_;
 }
 
 bool Machine::load(const Snapshot& s) {
-  if (s.mem1.size() != mem1_.size() || s.extra_ram.size() != extra_ram_.size()) return false;
+  if (s.mem1.size() != kMem1Size + kGuard || s.extra_ram.size() != extra_ram_.size()) return false;
   for (std::size_t k = 0; k < extra_ram_.size(); ++k)
     if (s.extra_ram[k].first != extra_ram_[k].first || s.extra_ram[k].second.size() != extra_ram_[k].second.size())
       return false;
@@ -50,7 +58,7 @@ bool Machine::load(const Snapshot& s) {
   cpu_.mem = mem;
   cpu_.hooks = hooks;
   cpu_.env = env;
-  std::memcpy(mem1_.data(), s.mem1.data(), mem1_.size());
+  std::memcpy(mem1_, s.mem1.data(), kMem1Size + kGuard);
   for (std::size_t k = 0; k < extra_ram_.size(); ++k)
     std::memcpy(extra_ram_[k].second.data(), s.extra_ram[k].second.data(), extra_ram_[k].second.size());
   constexpr u32 kXlat = ppc::msr::IR | ppc::msr::DR;

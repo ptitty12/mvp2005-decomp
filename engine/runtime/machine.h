@@ -20,6 +20,11 @@ class Machine {
   static constexpr u32 kGuard = 64;             // bytes past the end, for unaligned accesses
 
   Machine();
+  // V4: MEM1 in `storage` (kMem1Size + kGuard bytes, zeroed here) instead of a
+  // buffer of its own, which the caller keeps for the machine's lifetime: the
+  // browser's engine keeps MEM1 at a fixed address that its translated module
+  // has as a constant (xlat::WasmFixed).
+  explicit Machine(u8* storage);
   Machine(const Machine&) = delete;
   Machine& operator=(const Machine&) = delete;
 
@@ -55,12 +60,14 @@ class Machine {
 
   ppc::Cpu& cpu() { return cpu_; }
   ppc::Memory& memory() { return *mem_; }
-  u8* mem1() { return mem1_.data(); }
-  const u8* mem1() const { return mem1_.data(); }
+  u8* mem1() { return mem1_; }
+  const u8* mem1() const { return mem1_; }
+  static constexpr std::size_t mem1_bytes() { return std::size_t{kMem1Size} + kGuard; }  // a Snapshot's mem1
 
  private:
   const vfs::Dol* dol_ = nullptr;
-  std::vector<u8> mem1_;
+  std::vector<u8> own_mem1_;  // MEM1 unless the caller gave storage
+  u8* mem1_ = nullptr;        // kMem1Size + kGuard bytes
   std::vector<std::pair<u32, std::vector<u8>>> extra_ram_;
   std::unique_ptr<ppc::Memory> mem_;
   ppc::Cpu cpu_;

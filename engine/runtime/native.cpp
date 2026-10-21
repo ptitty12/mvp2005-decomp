@@ -127,6 +127,8 @@ void dispatch(Cpu& c, bool nested, u32 stop) {
 
 }  // namespace
 
+HeapCodeHook g_heap_code_hook = nullptr;
+
 void call_indirect(Cpu& c, u32 target) {
   u32 ret = c.lr;
   c.pc = target;
@@ -134,6 +136,11 @@ void call_indirect(Cpu& c, u32 target) {
     fn(c);
     return;
   }
+  if (g_heap_code_hook)
+    if (GuestFn fn = g_heap_code_hook(c, target)) {  // V4: heap code, translated
+      fn(c);
+      return;
+    }
   dispatch(c, true, ret & ~3u);
 }
 

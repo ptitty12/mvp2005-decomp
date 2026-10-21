@@ -142,15 +142,24 @@ class Hardware : public ppc::Io {
   // write-gather pipe, at an address write() takes for it, by host code that runs
   // a game function natively (runtime/hle_game.h) for the instruction at `pc`,
   // with c.ticks == `ticks` there: what write(addr, value, size) does, inline
-  // while nothing is logged (`fast`) and the value does not complete a burst.
+  // while nothing is logged (`fast`). V4: a store that completes a burst (or
+  // reaches into the next) takes write()'s pipe path from there too (count, end
+  // the poll detector's run, gather: no log entry once `fast` is set, and `fast`
+  // stays set), with c.pc and c.ticks set first, as write() would have them.
   void wgp_store(u32 addr, u32 value, int size, u32 pc, std::uint64_t ticks) {
     WgpState& w = *wgp_;
-    if (w.fast && w.n + static_cast<u32>(size) < 32) {
+    if (w.fast) {
       ++writes_[addr - kRegBase];
       w.last_read = 0;
-      u8* g = w.buf + w.n;
-      for (int k = 0; k < size; ++k) g[k] = static_cast<u8>(value >> (8 * (size - 1 - k)));
-      w.n += static_cast<u32>(size);
+      if (w.n + static_cast<u32>(size) < 32) {
+        u8* g = w.buf + w.n;
+        for (int k = 0; k < size; ++k) g[k] = static_cast<u8>(value >> (8 * (size - 1 - k)));
+        w.n += static_cast<u32>(size);
+        return;
+      }
+      cpu_->pc = pc;
+      cpu_->ticks = ticks;
+      wgp_write(value, size);
       return;
     }
     cpu_->pc = pc;
@@ -180,7 +189,11 @@ class Hardware : public ppc::Io {
   // the machine starts (offline only: an online game has none on either side).
   // Its contents are the player's storage; the host keeps them when writes()
   // moves (card()->image()).
-  void insert_card(std::vector<u8> image) { card_.emplace(std::move(image)); }
+  void insert_card(std::vector<u8> image) {
+    card_.emplace(std::move(image));
+    card_->set_epoch(epoch_);
+    card_->stamp_all();  // V4: new to every snapshot
+  }
   const MemoryCard* card() const { return card_ ? &*card_ : nullptr; }
 
   // ---- time and interrupts (E0b items 9 and 10) ----
@@ -219,6 +232,11 @@ class Hardware : public ppc::Io {
   // the GX FIFO parser included (and, alongside, statistics). The copy belongs to
   // this machine: restore_from() keeps this object's observers, disc and
   // write-gather pipe location and only takes the state.
+  // V4: save_into and restore_from copy ARAM and the card's image by pages, only
+  // those written since the snapshot was taken from this machine (or restored
+  // into it): the DMA and the card stamp the pages they write with the current
+  // epoch, and every save starts a new one. The access log and counts and the
+  // pipe's first bytes (statistics) stay with their object.
   std::unique_ptr<Hardware> snapshot() const;
   void save_into(Hardware& snap) const;
   void restore_from(const Hardware& snap);
@@ -390,6 +408,25 @@ class Hardware : public ppc::Io {
   bool dsp_booting_ = false;  // reset and halted since the last reset: the IPL init ucode runs on unhalt
   std::vector<u8> aram_;
   std::optional<MemoryCard> card_;
+
+  // V4: snapshots by pages (save_into). Host bookkeeping, never the state.
+  static constexpr u32 kAramPage = 4096;
+  std::vector<std::uint32_t> aram_stamp_ = std::vector<std::uint32_t>(0x01000000 / kAramPage, 0);
+  mutable std::uint32_t epoch_ = 1;     // what writes are stamped with now
+  const Hardware* snap_src_ = nullptr;  // a snapshot: the machine it was last saved from or restored into
+  std::uint32_t snap_saved_ = 0;        // ... and the epoch then
+  // What member-wise copies leave where it is: ARAM, the card's image and the
+  // bookkeeping (copied by pages instead), and the statistics.
+  struct Aside {
+    std::vector<u8> aram, fifo, card_image;
+    std::vector<MmioAccess> log;
+    std::vector<std::uint64_t> reads, writes;
+    std::vector<std::uint32_t> aram_stamp, card_stamp;
+    std::uint32_t epoch = 0;
+    const Hardware* src = nullptr;
+    std::uint32_t saved = 0;
+  };
+  void take_aside(Aside& a);  // swaps those members with a's (twice: back as they were)
 };
 
 // Thrown when the run must stop: an unanswered poll, an access outside the

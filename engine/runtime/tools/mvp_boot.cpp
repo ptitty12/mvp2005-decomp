@@ -495,6 +495,15 @@ int run_boot(const xlat::Inputs& in, int argc, char** argv) {
   }
   std::printf("MMIO: %zu accesses logged, %llu sc, %llu icbi blocks\n", hw.log().size(), ull(hooks.syscalls),
               ull(hooks.icbi_blocks));
+#ifdef MVP_BOOT_WASM
+  {
+    const WasmHeapStats& hs = wasm_heap_stats();  // V4
+    std::printf("heap code: %llu translated (%llu bytes of modules), %llu not translatable, %llu calls translated, "
+                "%llu changed since; %.1f ms translating (longest %.1f ms)\n",
+                ull(hs.translated), ull(hs.bytes), ull(hs.failed), ull(hs.calls), ull(hs.changed), hs.ms_total,
+                hs.ms_max);
+  }
+#endif
   std::printf("DI: %llu drive commands, %llu bytes read; DSP: %llu AX frames; AI: %llu DMA blocks\n", ull(hw.di_commands()), ull(hw.di_bytes()),
               ull(hw.dsp_frames()), ull(hw.ai_dma_blocks()));
   const AxStats& ax = hw.ax_stats();
