@@ -720,6 +720,12 @@ TEST_CASE("in-between frames: none on a cut, after a gap, or for new geometry (V
   CHECK(sc.r.between(a, b) == nullptr);
   CHECK(st.cut_shift == 1);
   CHECK(st.last_shift == doctest::Approx(0.25).epsilon(0.01));
+  // Nothing moved (a menu, a pause): no in-between needed, the frame shows twice as long.
+  const std::uint64_t stills = st.still;
+  a = sc.frame(10, red_quad);  // (after the 3D scene: a cut)
+  b = sc.frame(10, red_quad);
+  CHECK(sc.r.between(a, b) == nullptr);
+  CHECK(st.still == stills + 1);
   // And back to normal.
   a = sc.frame(0, red_quad);
   b = sc.frame(10, red_quad);

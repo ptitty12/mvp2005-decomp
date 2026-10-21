@@ -142,6 +142,7 @@ class Renderer : public Backend {
     std::uint64_t gap = 0;         // not made: the frame before was not one field earlier (or not recorded)
     std::uint64_t cut_match = 0;   // not made: too few vertices matched
     std::uint64_t cut_shift = 0;   // not made: matched vertices moved too far
+    std::uint64_t still = 0;       // not needed: nothing moved (the in-between would be the frame)
     std::uint64_t other = 0;       // not made: another scale, too large, nothing drawn
     std::uint64_t shown = 0;       // pictures handed out by between()
     std::uint64_t retextured = 0;  // textures re-decoded after the frame had sampled them (shown with their last contents)

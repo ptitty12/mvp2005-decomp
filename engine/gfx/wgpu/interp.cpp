@@ -375,7 +375,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   // A draw's move is measured on up to four of its vertices (the first, the last and two
   // between); the frame's mean move of 3D vertices weighs each draw by its 3D vertices.
   constexpr std::uint32_t kStill = ~0u - 1;
-  std::uint64_t total = 0, matched = 0, n3 = 0;
+  std::uint64_t total = 0, matched = 0, n3 = 0, moved = 0;
   double sum3 = 0;
   for (const RecRange& c : C) total += c.count;
   const float range_shift = interp_tune.range_shift;
@@ -415,6 +415,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
       continue;
     }
     matched += cnt;
+    ++moved;
     if (m3) {
       sum3 += static_cast<double>(s3) / m3 * c.n3;
       n3 += c.n3;
@@ -440,6 +441,10 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   }
   if (shift > interp_tune.cut_shift) {
     ++istats_.cut_shift;
+    return false;
+  }
+  if (moved == 0) {  // a still frame (a menu, a pause): the in-between would be the frame itself
+    ++istats_.still;
     return false;
   }
 
