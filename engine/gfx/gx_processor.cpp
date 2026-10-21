@@ -940,8 +940,10 @@ MVP_PROF_NOINLINE void GxProcessor::transform_fast(const InVertex& v, XformSetup
   o.pos[2] = (cz * x.zr + cw * x.zf) / 16777215.0f;
   o.pos[3] = cw;
 
-  // Color channels.
-  if (x.npasses < 4) std::memset(o.color[x.npasses / 2], 0, sizeof o.color[0] * (2 - x.npasses / 2));
+  // Color channels. (V5: zeroing with constant sizes, which the compiler writes as
+  // stores; a variable size is a memory.fill, a call in the browser.)
+  if (x.npasses == 0) std::memset(o.color, 0, sizeof o.color);
+  else if (x.npasses == 2) std::memset(o.color[1], 0, sizeof o.color[1]);
   if (x.npasses) {
     float n[3] = {v.nrm[0], v.nrm[1], v.nrm[2]};
     float lf[32];
@@ -1041,7 +1043,17 @@ MVP_PROF_NOINLINE void GxProcessor::transform_fast(const InVertex& v, XformSetup
     }
     std::memcpy(o.tex[i], out, sizeof out);
   }
-  if (x.ngen8 < 8) std::memset(o.tex[x.ngen8], 0, sizeof o.tex[0] * (8 - x.ngen8));
+  switch (x.ngen8) {
+    case 0: std::memset(o.tex[0], 0, sizeof o.tex[0] * 8); break;
+    case 1: std::memset(o.tex[1], 0, sizeof o.tex[0] * 7); break;
+    case 2: std::memset(o.tex[2], 0, sizeof o.tex[0] * 6); break;
+    case 3: std::memset(o.tex[3], 0, sizeof o.tex[0] * 5); break;
+    case 4: std::memset(o.tex[4], 0, sizeof o.tex[0] * 4); break;
+    case 5: std::memset(o.tex[5], 0, sizeof o.tex[0] * 3); break;
+    case 6: std::memset(o.tex[6], 0, sizeof o.tex[0] * 2); break;
+    case 7: std::memset(o.tex[7], 0, sizeof o.tex[0]); break;
+    default: break;
+  }
 }
 
 // V5: load_vertex and transform for a primitive's vertices, with the format's
@@ -1085,6 +1097,48 @@ MVP_PROF_NOINLINE void GxProcessor::load_fast(const VertexFormat& f, const u8* p
         continue;
       }
       const float sc = st.scale;
+      // The common shapes with their component counts as constants (unrolled).
+      switch (st.op << 4 | n) {
+        case kU8 << 4 | 2: d[0] = static_cast<float>(q[0]) * sc; d[1] = static_cast<float>(q[1]) * sc; continue;
+        case kU8 << 4 | 3:
+          d[0] = static_cast<float>(q[0]) * sc; d[1] = static_cast<float>(q[1]) * sc; d[2] = static_cast<float>(q[2]) * sc;
+          continue;
+        case kS8 << 4 | 3:
+          d[0] = static_cast<float>(static_cast<std::int8_t>(q[0])) * sc;
+          d[1] = static_cast<float>(static_cast<std::int8_t>(q[1])) * sc;
+          d[2] = static_cast<float>(static_cast<std::int8_t>(q[2])) * sc;
+          continue;
+        case kU16 << 4 | 2:
+          d[0] = static_cast<float>(be16_at(q)) * sc;
+          d[1] = static_cast<float>(be16_at(q + 2)) * sc;
+          continue;
+        case kS16 << 4 | 2:
+          d[0] = static_cast<float>(static_cast<std::int16_t>(be16_at(q))) * sc;
+          d[1] = static_cast<float>(static_cast<std::int16_t>(be16_at(q + 2))) * sc;
+          continue;
+        case kS16 << 4 | 3:
+          d[0] = static_cast<float>(static_cast<std::int16_t>(be16_at(q))) * sc;
+          d[1] = static_cast<float>(static_cast<std::int16_t>(be16_at(q + 2))) * sc;
+          d[2] = static_cast<float>(static_cast<std::int16_t>(be16_at(q + 4))) * sc;
+          continue;
+        case kF32 << 4 | 2:
+          d[0] = std::bit_cast<float>(be32_at(q));
+          d[1] = std::bit_cast<float>(be32_at(q + 4));
+          continue;
+        case kF32 << 4 | 3:
+          d[0] = std::bit_cast<float>(be32_at(q));
+          d[1] = std::bit_cast<float>(be32_at(q + 4));
+          d[2] = std::bit_cast<float>(be32_at(q + 8));
+          continue;
+        case (8 + kRgba8888) << 4 | 4:
+          d[0] = kDiv255.v[q[0]];
+          d[1] = kDiv255.v[q[1]];
+          d[2] = kDiv255.v[q[2]];
+          d[3] = kDiv255.v[q[3]];
+          continue;
+        default:
+          break;
+      }
       switch (st.op) {
         case kU8:
           for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(q[i]) * sc;
