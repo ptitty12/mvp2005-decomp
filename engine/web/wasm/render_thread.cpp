@@ -946,7 +946,8 @@ void render_gx_batch(const rt::GxCommand* cmds, std::size_t n) {
     return;
   }
   S->reads.set_epoch(S->ring.publishes());
-  for (std::size_t k = 0; k < n; ++k) S->reads.command(cmds[k].p, cmds[k].len);
+  for (std::size_t k = 0; k < n; ++k)  // V4: only the commands GpReads looks at (most are XF loads)
+    if (gfx::GpReads::reads_something(cmds[k].p[0])) S->reads.command(cmds[k].p, cmds[k].len);
   reads_copy();  // Q6: copies before the commands
   u8* d = S->ring.reserve(kGxBatch, static_cast<u32>(total));
   const u32 count = static_cast<u32>(n);
