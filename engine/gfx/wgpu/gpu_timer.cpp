@@ -44,6 +44,16 @@ const wgpu::PassTimestampWrites* GpuTimer::pass() {
 
 void GpuTimer::end_frame() {
   if (!on_ || used_ == 0) return;
+  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
+  end_frame_encode(enc);
+  wgpu::CommandBuffer cb = enc.Finish();
+  gpu_.queue().Submit(1, &cb);
+  end_frame_submitted();
+}
+
+void GpuTimer::end_frame_encode(const wgpu::CommandEncoder& enc) {
+  pending_slot_ = -1;
+  if (!on_ || used_ == 0) return;
   const std::uint32_t n = used_;
   used_ = 0;
   std::uint32_t slot = 0;
@@ -55,11 +65,18 @@ void GpuTimer::end_frame() {
   Read& r = state_->reads[slot];
   r.busy = true;
   const std::uint64_t bytes = 2ull * n * sizeof(std::uint64_t);
-  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
   enc.ResolveQuerySet(set_, 0, 2 * n, resolve_, 0);
   enc.CopyBufferToBuffer(resolve_, 0, r.buf, 0, bytes);
-  wgpu::CommandBuffer cb = enc.Finish();
-  gpu_.queue().Submit(1, &cb);
+  pending_slot_ = static_cast<int>(slot);
+  pending_n_ = n;
+}
+
+void GpuTimer::end_frame_submitted() {
+  if (pending_slot_ < 0) return;
+  const std::uint32_t slot = static_cast<std::uint32_t>(pending_slot_), n = pending_n_;
+  pending_slot_ = -1;
+  Read& r = state_->reads[slot];
+  const std::uint64_t bytes = 2ull * n * sizeof(std::uint64_t);
   r.buf.MapAsync(wgpu::MapMode::Read, 0, bytes, wgpu::CallbackMode::AllowSpontaneous,
                  [st = state_, slot, n, bytes](wgpu::MapAsyncStatus status, wgpu::StringView) {
                    Read& rr = st->reads[slot];

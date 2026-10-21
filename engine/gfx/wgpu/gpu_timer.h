@@ -40,6 +40,12 @@ class GpuTimer {
   // Every pass of the frame has been submitted: resolve and read back their
   // stamps (without waiting); the sum of their durations becomes one sample.
   void end_frame();
+  // V6: end_frame() in two parts, so the resolve goes into a command buffer of the
+  // caller's (after the frame's last pass) instead of a submit of its own: the
+  // resolve and copy into `enc`, then, once `enc`'s commands are submitted, the
+  // read-back.
+  void end_frame_encode(const wgpu::CommandEncoder& enc);
+  void end_frame_submitted();
 
   struct Stats {
     std::uint64_t frames = 0;   // samples read back
@@ -70,6 +76,10 @@ class GpuTimer {
   std::shared_ptr<State> state_ = std::make_shared<State>();
   std::uint32_t used_ = 0;  // passes timed in the frame so far
   wgpu::PassTimestampWrites writes_{};
+  // V6: the read-back end_frame_encode() set up, for end_frame_submitted(): its slot
+  // (-1: none) and passes.
+  int pending_slot_ = -1;
+  std::uint32_t pending_n_ = 0;
 };
 
 }  // namespace mvp::gfx

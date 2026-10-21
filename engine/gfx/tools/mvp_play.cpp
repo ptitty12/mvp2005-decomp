@@ -565,6 +565,7 @@ struct Play : GfxObserver {
       const gfx::Renderer::Frame* shown = renderer->scanout();
       if (!shown) shown = f;
       if (shown) {
+        renderer->flush();  // V6: scanout()'s mix is drawn in the renderer's batch
         window->present(shown->view, shown->width, shown->height);
         const auto c2 = std::chrono::steady_clock::now();
         if (field >= pacing_from) {

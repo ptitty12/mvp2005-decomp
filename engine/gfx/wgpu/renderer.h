@@ -4,9 +4,13 @@
 // place of guest memory), and keeps the decoded-texture, sampler and pipeline
 // caches. Only reads guest memory.
 //
-// Draws are recorded into one render pass on the EFB until something needs
-// the result (an EFB copy, a read-back, the end of a frame): flush() uploads
-// the pass's vertices and uniforms and submits.
+// Draws are recorded into render passes on the EFB, in one command encoder (a
+// batch) with the clears (drawn inside the open pass) and the EFB copies (between
+// passes), until something needs the work submitted (a read-back, a texture
+// upload over contents the batch samples, the in-between replay, a VI field):
+// flush() uploads the batch's vertices, indices and constants (one write each,
+// at offsets that grow through the batch) and submits it (V6: a submit per pass,
+// clear and copy before; Chrome's GPU process spent ~2 ms a field on that).
 //
 // Internal resolution (Q1): the EFB, its copies to the XFB and to textures can
 // be kept at 2x or 3x the console's pixels in each direction. Everything the
@@ -57,8 +61,16 @@ class Renderer : public Backend {
   std::uint32_t scale() const { return scale_; }
   static constexpr std::uint32_t kMaxScale = 3;
 
-  // Ends the open render pass (if any) and submits it.
+  // Ends the open render pass (if any) and submits the batch.
   void flush();
+  // V6: the batch's encoder, for commands that must follow its work and go in its
+  // submit (the presents: the frame's last commands and the picture shown, one
+  // submit). Ends the open pass; the next flush() submits them.
+  const wgpu::CommandEncoder& encoder() {
+    end_pass();
+    begin_batch();
+    return encoder_;
+  }
 
   // An XFB copy: the frame the video interface shows when it scans `addr`.
   // `width` and `height` are the texture's (console pixels times the scale).
@@ -86,6 +98,8 @@ class Renderer : public Backend {
   // show now: the frame of the last field, except that pixels alternating over
   // the last three fields (A, B, A) show the mean of the last two. Frames that do
   // not alternate are shown exactly as copied. Captures read the XFB itself.
+  // V6: the mix is drawn in the batch: flush() (or present into encoder()) before
+  // showing the picture.
   void scan_field(std::uint32_t addr);
   const Frame* scanout();
   bool scan_mix = true;  // false: scanout() is always the last field's frame (comparisons)
@@ -126,7 +140,7 @@ class Renderer : public Backend {
   }
   // The in-between picture to show before the new frame `to` (XFB serial) when the
   // frame shown before it is `from`; scan-mixed like scanout() when the frames
-  // around it alternate. Null if there is none.
+  // around it alternate (V6: in the batch, as scanout()'s). Null if there is none.
   const Frame* between(std::uint64_t from, std::uint64_t to);
   struct InterpTune {
     float min_match = 0.6f;     // a cut below this share of the frame's vertices matched
@@ -170,6 +184,7 @@ class Renderer : public Backend {
     std::uint64_t same_state = 0;           // draws that reused the previous draw's resolved state
     std::uint64_t tmem_textures = 0;        // preloaded (TMEM) textures decoded
     std::uint64_t vertex_bytes = 0, index_bytes = 0;  // uploaded
+    std::uint64_t submits = 0;  // V6: batches submitted
   };
   const Stats& stats() const { return stats_; }
 
@@ -185,7 +200,11 @@ class Renderer : public Backend {
     std::size_t operator()(const PipelineConfig& c) const;
   };
 
+  void begin_batch();  // V6: the command encoder that the next passes, clears and copies go into
   void begin_pass();
+  void end_pass();     // V6: ends the open pass (its last draw emitted); the batch stays open
+  // V6: one constant slot (kUniformSlot bytes, zero-padded) at the end of the batch's constants; its offset.
+  std::uint32_t push_slot(const void* data, std::size_t size);
   void create_efb();  // the EFB's textures at scale_
   void emit_pending();
   const Pipeline& pipeline(const PipelineConfig& c);
@@ -217,13 +236,25 @@ class Renderer : public Backend {
   wgpu::TextureView dummy_view_;
   wgpu::Sampler dummy_sampler_;
 
-  // The open pass.
+  // The open batch (V6) and its open pass. The batch's vertices, indices and
+  // constants, uploaded at flush().
   wgpu::CommandEncoder encoder_;
+  bool batch_open_ = false;
+  std::uint64_t batch_serial_ = 0;
   wgpu::RenderPassEncoder pass_;
   bool pass_open_ = false;
   std::uint64_t pass_serial_ = 0;
   std::vector<std::uint8_t> vdata_, udata_;
   std::vector<std::uint32_t> idata_;
+  // V6: which uploads must wait for a submit. Each draw that resolves its textures
+  // gets a serial (sample_serial_) that marks every texture it samples; flush()
+  // sets submitted_ to the last draw whose commands it submitted (not a draw still
+  // resolving its textures: it lands in the next batch). A texture marked after
+  // submitted_ is sampled by commands not submitted yet: its contents may only be
+  // replaced (a queue write, which runs before them) after a submit.
+  std::uint64_t sample_serial_ = 0, submitted_ = 0;
+  bool resolving_ = false;
+  bool unsubmitted(std::uint64_t mark) const { return mark > submitted_; }
   // The last draw, recorded but not encoded yet: a next draw with the same
   // pipeline, textures, constants and scissor appends its vertices and indices
   // to it (the game sends thousands of small primitives with one state). Its
@@ -284,13 +315,14 @@ class Renderer : public Backend {
   void forget_view(const wgpu::TextureView& v);
   std::uint64_t epoch_ = 1;
 
-  // Clears and EFB-to-texture conversion.
+  // Clears and EFB-to-texture conversion. V6: their constants are slots of the
+  // batch's constants, bound by dynamic offset (the replay binds its own buffers).
   wgpu::RenderPipeline clear_pipes_[8];
   wgpu::BindGroupLayout bgl_clear_;
-  wgpu::Buffer clear_buf_;
+  wgpu::BindGroup clear_group_;      // the constants buffer
   wgpu::RenderPipeline convert_pipe_;
   wgpu::BindGroupLayout bgl_convert_;
-  wgpu::Buffer convert_buf_;
+  wgpu::BindGroup convert_group_;    // the constants buffer and the EFB's views (made again with the EFB)
   wgpu::Sampler point_sampler_;
 
   std::map<std::uint32_t, Frame> frames_;
@@ -309,21 +341,21 @@ class Renderer : public Backend {
   Stats stats_;
 
   // ---- V3: in-between frames (interp.cpp) ----
-  // One encoded draw of a recorded pass, as emit_pending() encoded it.
+  // One encoded draw of a recorded batch, as emit_pending() encoded it.
   struct RecDraw {
     const Pipeline* pipe;
     std::uint32_t bind, uoff, first_index, index_count, base;
     std::uint32_t scissor[4];
   };
-  // A recorded draw pass: what flush() uploaded and the draws it encoded.
+  // A recorded batch (V6; a pass before): what flush() uploaded and the draws it encoded.
   struct RecPass {
     std::vector<std::uint8_t> v, u;
     std::vector<std::uint32_t> i;
     std::vector<RecDraw> draws;
     bool filled = false;
   };
-  // A DrawCall's vertices in a recorded pass: `count` vertices of `stride` bytes at
-  // byte `voff` of pass `pass`; their clip-space positions before the 2D snap at
+  // A DrawCall's vertices in a recorded batch: `count` vertices of `stride` bytes at
+  // byte `voff` of batch `pass`; their clip-space positions before the 2D snap at
   // Record::pos[4 * pos ...].
   struct RecRange {
     std::uint64_t ident;
@@ -346,9 +378,12 @@ class Renderer : public Backend {
     std::array<wgpu::Sampler, 8> samplers;
   };
   enum class RecKind : std::uint8_t { Pass, Clear, Copy };
+  // Pass: draws [begin, end) of batch `index` (V6: a batch's draws, between its clears and
+  // copies); Clear, Copy: clears[index], copies[index].
   struct RecOp {
     RecKind kind;
     std::uint32_t index;
+    std::uint32_t begin = 0, end = 0;
   };
   struct Record {
     bool valid = false;
@@ -358,7 +393,7 @@ class Renderer : public Backend {
     std::uint32_t scale = 1;
     std::uint32_t xfb[4] = {};        // the XFB copy's EFB rectangle (console pixels)
     std::vector<RecOp> ops;
-    std::vector<RecPass> passes;      // [0, npasses) in use; the rest keep their buffers
+    std::vector<RecPass> passes;      // batches: [0, npasses) in use; the rest keep their buffers
     std::size_t npasses = 0;
     std::vector<RecClear> clears;
     std::vector<RecCopy> copies;
@@ -366,7 +401,7 @@ class Renderer : public Backend {
     std::unordered_map<const void*, std::uint32_t> bind_index;
     std::vector<RecRange> ranges;
     std::vector<float> pos;
-    std::uint64_t pass_serial = 0;    // the live pass being recorded into passes[npasses - 1]
+    std::uint64_t batch_serial = 0;   // the live batch being recorded into passes[npasses - 1]
   };
   void rec_begin(const EfbCopy& c);   // at an XFB copy, before its clear
   // At an XFB copy of the EFB rectangle (x0, y0, w, h): ends the record, makes the in-between.
@@ -374,8 +409,8 @@ class Renderer : public Backend {
   void rec_drop();
   std::uint32_t rec_bind(const BindEntry& be);
   void rec_range(const DrawCall& d, std::size_t voff, std::uint32_t stride);
-  void rec_pass_end();                // flush() of a recorded pass: its data moves into the record
-  void rec_draw();                    // emit_pending() of a recorded pass
+  void rec_pass_end();                // flush() of a recorded batch: its data moves into the record
+  void rec_draw();                    // emit_pending() of a recorded batch
   void rec_clear(int m, const float* data, const std::uint32_t* rect);
   void rec_copy(const wgpu::TextureView& view, std::uint32_t pw, std::uint32_t ph, const std::int32_t* params);
   bool interp_make(Record& cur, Record& prev);  // matching and the replay; false: not made

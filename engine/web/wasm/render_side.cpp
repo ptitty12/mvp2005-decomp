@@ -81,8 +81,10 @@ void RenderSide::set_interp(bool on) {
 void RenderSide::vi_field(std::uint64_t field, std::uint32_t xfb) {
   gp_.field();  // Q1: snapshots of the game's cache write-backs expire
   if (renderer_) {
+    // What the VI scans out at this field (P1); then the field's work is submitted (V6: a
+    // new frame's scan-out copy goes in the same submit).
+    renderer_->scan_field(xfb);
     renderer_->flush();
-    renderer_->scan_field(xfb);  // what the VI scans out at this field (P1)
     if (interp_) {  // V3: cuts, and in-betweens over a large move, by field (statistics)
       const gfx::Renderer::InterpStats& is = renderer_->interp_stats();
       const std::uint64_t cuts = is.cut_match + is.cut_shift;
@@ -150,17 +152,24 @@ bool RenderSide::present(std::uint64_t frame_polls, double now_ms) {
   copies_at_present_ = tap_.copies;
   const double t0 = emscripten_get_now();
   gfx::GpuTimer* timer = timer_ && timer_->on() ? timer_.get() : nullptr;
-  // A pass still open (the render thread may present in the middle of a field) is submitted first,
-  // so the frame's timestamps are all written before they are read (the pass is only split in two).
-  if (timer) renderer_->flush();
-  if (gpu_load_) window->burn(f->view, f->width, f->height, gpu_load_, timer);  // Q5 (development)
+  // V6: each picture is drawn into the renderer's batch (after its work so far and the
+  // scan-out mixes) and submitted with it, before it is taken as an ImageBitmap: one submit
+  // per picture (the render thread may present in the middle of a field: its pass so far, the
+  // mix, the present and the timer's resolve were four before).
+  if (gpu_load_) {  // Q5 (development)
+    renderer_->flush();
+    window->burn(f->view, f->width, f->height, gpu_load_, timer);
+  }
   if (between) {  // V3
-    window->present(between->view, between->width, between->height, timer);
+    window->present(between->view, between->width, between->height, timer, &renderer_->encoder());
+    renderer_->flush();
     if (mvp_js_send_frame("#mvp-canvas", 1)) window->reconfigure();
     ++presents_between_;
   }
-  window->present(f->view, f->width, f->height, timer);
-  if (timer) timer->end_frame();  // this frame's passes, timed on the GPU
+  window->present(f->view, f->width, f->height, timer, &renderer_->encoder());
+  if (timer) timer->end_frame_encode(renderer_->encoder());  // this frame's passes, timed on the GPU
+  renderer_->flush();
+  if (timer) timer->end_frame_submitted();
   if (mvp_js_send_frame("#mvp-canvas", 0)) window->reconfigure();
   present_ms_ += emscripten_get_now() - t0;
   ++presents_;
@@ -231,14 +240,14 @@ std::string RenderSide::status_json() const {
     std::snprintf(b, sizeof b,
                   ",\"gx\":{\"prims\":%llu,\"verts\":%llu,\"snaps\":%llu,\"same\":%llu,\"merged\":%llu,"
                   "\"encoded\":%llu,\"vbytes\":%llu,\"ibytes\":%llu,\"tex_hits\":%llu,\"cmds\":%llu,\"passes\":%llu,"
-                  "\"tex_copies\":%llu,\"clears\":%llu}",
+                  "\"tex_copies\":%llu,\"clears\":%llu,\"submits\":%llu}",
                   static_cast<unsigned long long>(ps.draws), static_cast<unsigned long long>(ps.vertices),
                   static_cast<unsigned long long>(ps.snapshots), static_cast<unsigned long long>(rs.same_state),
                   static_cast<unsigned long long>(rs.merged), static_cast<unsigned long long>(rs.encoded),
                   static_cast<unsigned long long>(rs.vertex_bytes), static_cast<unsigned long long>(rs.index_bytes),
                   static_cast<unsigned long long>(rs.texture_hits), static_cast<unsigned long long>(ps.commands),
                   static_cast<unsigned long long>(rs.passes), static_cast<unsigned long long>(rs.tex_copies),
-                  static_cast<unsigned long long>(rs.clears));
+                  static_cast<unsigned long long>(rs.clears), static_cast<unsigned long long>(rs.submits));
     s += b;
     // V3: in-between frames (gfx/wgpu/renderer.h, InterpStats): made, not made and why, shown.
     const gfx::Renderer::InterpStats& is = renderer_->interp_stats();

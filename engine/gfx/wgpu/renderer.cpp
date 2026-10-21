@@ -26,9 +26,9 @@ namespace mvp::gfx {
 namespace {
 
 constexpr std::uint32_t kUniformSlot = 512;              // DrawUniforms (416 bytes), 256-aligned
-constexpr std::uint64_t kVertexCapacity = 16u << 20;     // per pass
-constexpr std::uint64_t kIndexCapacity = 8u << 20;       // per pass (2 Mi indices)
-constexpr std::uint64_t kUniformCapacity = 2u << 20;     // per pass (4,096 draws)
+constexpr std::uint64_t kVertexCapacity = 16u << 20;     // per batch (V6; per pass before)
+constexpr std::uint64_t kIndexCapacity = 8u << 20;       // per batch (2 Mi indices)
+constexpr std::uint64_t kUniformCapacity = 2u << 20;     // per batch (4,096 draws, clears and copies)
 
 std::uint64_t mix64(std::uint64_t h) {
   h ^= h >> 33;
@@ -252,8 +252,8 @@ struct Renderer::TexEntry {
   wgpu::TextureView view;
   std::uint32_t w = 0, h = 0;
   std::uint64_t mem_hash = 0, epoch = 0;
-  std::uint64_t pass = 0;  // the render pass that last sampled it
-  std::uint64_t rec = 0;   // V3: the frame record that last sampled it
+  std::uint64_t sampled = 0;  // V6: the last draw that sampled it (Renderer::sample_serial_)
+  std::uint64_t rec = 0;      // V3: the frame record that last sampled it
 };
 
 struct Renderer::CopyEntry {
@@ -271,7 +271,7 @@ struct Renderer::CopyEntry {
     wgpu::TextureView view;
     std::uint32_t h = 0, scale = 1;
     std::uint8_t format = 0xFF;
-    std::uint64_t copy_serial = 0, tail_hash = 0, pass = 0, epoch = 0;
+    std::uint64_t copy_serial = 0, tail_hash = 0, sampled = 0, epoch = 0;
   };
   std::unique_ptr<Tall> tall;
 };
@@ -359,12 +359,15 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
   dummy_sampler_ = dev.CreateSampler(&sd);
   point_sampler_ = dummy_sampler_;
 
-  // Clear pipelines: one per (color, alpha, depth) write mask.
+  // Clear pipelines: one per (color, alpha, depth) write mask. V6: the clear's
+  // color and depth are a slot of the batch's constants (dynamic offset).
   {
     wgpu::BindGroupLayoutEntry ce{};
     ce.binding = 0;
     ce.visibility = wgpu::ShaderStage::Fragment | wgpu::ShaderStage::Vertex;
     ce.buffer.type = wgpu::BufferBindingType::Uniform;
+    ce.buffer.hasDynamicOffset = true;
+    ce.buffer.minBindingSize = 32;
     bd.entryCount = 1;
     bd.entries = &ce;
     bgl_clear_ = dev.CreateBindGroupLayout(&bd);
@@ -397,17 +400,24 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
       pd.depthStencil = &ds;
       clear_pipes_[m] = dev.CreateRenderPipeline(&pd);
     }
-    b.size = 32;
-    b.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    b.label = "clear";
-    clear_buf_ = dev.CreateBuffer(&b);
+    wgpu::BindGroupEntry ge{};
+    ge.binding = 0;
+    ge.buffer = ubuf_;
+    ge.size = 32;
+    wgpu::BindGroupDescriptor gd{};
+    gd.layout = bgl_clear_;
+    gd.entryCount = 1;
+    gd.entries = &ge;
+    clear_group_ = dev.CreateBindGroup(&gd);
   }
-  // EFB -> texture conversion.
+  // EFB -> texture conversion. V6: its parameters are a slot of the batch's constants.
   {
     wgpu::BindGroupLayoutEntry ce[3]{};
     ce[0].binding = 0;
     ce[0].visibility = wgpu::ShaderStage::Fragment;
     ce[0].buffer.type = wgpu::BufferBindingType::Uniform;
+    ce[0].buffer.hasDynamicOffset = true;
+    ce[0].buffer.minBindingSize = 32;
     ce[1].binding = 1;
     ce[1].visibility = wgpu::ShaderStage::Fragment;
     ce[1].texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
@@ -436,9 +446,6 @@ Renderer::Renderer(Gpu& gpu, const std::uint8_t* mem, std::uint32_t mem_size, st
     pd.vertex.entryPoint = "vs";
     pd.fragment = &fs;
     convert_pipe_ = dev.CreateRenderPipeline(&pd);
-    b.size = 32;
-    b.label = "convert";
-    convert_buf_ = dev.CreateBuffer(&b);
   }
   // The EFB starts cleared to black, depth far.
   EfbCopy c;
@@ -468,11 +475,22 @@ void Renderer::create_efb() {
   td.label = "efb depth";
   efb_depth_ = gpu_.device().CreateTexture(&td);
   efb_depth_view_ = efb_depth_.CreateView();
+  convert_group_ = nullptr;  // V6: it binds the EFB's views
+}
+
+void Renderer::begin_batch() {
+  if (batch_open_) return;
+  encoder_ = gpu_.device().CreateCommandEncoder();
+  batch_open_ = true;
+  ++batch_serial_;
+  vdata_.clear();
+  udata_.clear();
+  idata_.clear();
 }
 
 void Renderer::begin_pass() {
   if (pass_open_) return;
-  encoder_ = gpu_.device().CreateCommandEncoder();
+  begin_batch();
   wgpu::RenderPassColorAttachment ca{};
   ca.view = efb_color_view_;
   ca.loadOp = wgpu::LoadOp::Load;
@@ -490,9 +508,6 @@ void Renderer::begin_pass() {
   pass_ = encoder_.BeginRenderPass(&rp);
   pass_open_ = true;
   ++pass_serial_;
-  vdata_.clear();
-  udata_.clear();
-  idata_.clear();
   bound_pipeline_ = bound_textures_ = nullptr;
   bound_uoff_ = ~0u;
   bound_scissor_[0] = bound_scissor_[1] = bound_scissor_[2] = bound_scissor_[3] = ~0u;
@@ -534,11 +549,18 @@ void Renderer::emit_pending() {
   if (recording_) rec_draw();  // V3
 }
 
-void Renderer::flush() {
+void Renderer::end_pass() {
   if (!pass_open_) return;
   emit_pending();
   pass_.End();
   pass_ = nullptr;
+  pass_open_ = false;
+}
+
+void Renderer::flush() {
+  end_pass();
+  if (!batch_open_) return;
+  // The batch's draws sampled the bytes at these offsets: written before its submit.
   if (!vdata_.empty()) gpu_.queue().WriteBuffer(vbuf_, 0, vdata_.data(), vdata_.size());
   if (!idata_.empty()) gpu_.queue().WriteBuffer(ibuf_, 0, idata_.data(), idata_.size() * 4);
   if (!udata_.empty()) gpu_.queue().WriteBuffer(ubuf_, 0, udata_.data(), udata_.size());
@@ -548,7 +570,18 @@ void Renderer::flush() {
   wgpu::CommandBuffer cb = encoder_.Finish();
   gpu_.queue().Submit(1, &cb);
   encoder_ = nullptr;
-  pass_open_ = false;
+  batch_open_ = false;
+  ++stats_.submits;
+  // Every draw so far is submitted, except one still resolving its textures (its
+  // commands come in the next batch).
+  submitted_ = resolving_ ? sample_serial_ - 1 : sample_serial_;
+}
+
+std::uint32_t Renderer::push_slot(const void* data, std::size_t size) {
+  const std::uint32_t off = static_cast<std::uint32_t>(udata_.size());
+  udata_.resize(udata_.size() + kUniformSlot, 0);
+  std::memcpy(udata_.data() + off, data, size);
+  return off;
 }
 
 MVP_PROF_NOINLINE const Renderer::Pipeline& Renderer::pipeline(const PipelineConfig& c) {
@@ -740,7 +773,7 @@ MVP_PROF_NOINLINE wgpu::TextureView Renderer::texture(const TextureDesc& t, std:
   std::unique_ptr<TexEntry>& slot = textures_[key];
   if (slot && slot->epoch == epoch_) {
     ++stats_.texture_hits;
-    slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+    slot->sampled = sample_serial_;
     if (recording_) slot->rec = rec_[rec_cur_].id;
     return slot->view;
   }
@@ -748,7 +781,7 @@ MVP_PROF_NOINLINE wgpu::TextureView Renderer::texture(const TextureDesc& t, std:
   const std::uint64_t mh = src ? hash_bytes(src, bytes) : 0;
   if (slot && slot->mem_hash == mh) {
     slot->epoch = epoch_;
-    slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+    slot->sampled = sample_serial_;
     if (recording_) slot->rec = rec_[rec_cur_].id;
     ++stats_.texture_hits;
     return slot->view;
@@ -756,9 +789,9 @@ MVP_PROF_NOINLINE wgpu::TextureView Renderer::texture(const TextureDesc& t, std:
   if (!src) return dummy_view_;
   // V3: new contents for a texture this frame already sampled: the in-between shows the new ones.
   if (recording_ && slot && slot->rec == rec_[rec_cur_].id) ++istats_.retextured;
-  // The open pass may already sample this texture's old contents: submit it
-  // before the upload replaces them.
-  if (slot && pass_open_ && slot->pass == pass_serial_) flush();
+  // Commands not submitted yet may sample this texture's old contents: submit them
+  // before the upload replaces them (V6: the batch; the open pass before).
+  if (slot && unsubmitted(slot->sampled)) flush();
   if (!slot) {
     slot = std::make_unique<TexEntry>();
     wgpu::TextureDescriptor td{};
@@ -791,7 +824,7 @@ MVP_PROF_NOINLINE wgpu::TextureView Renderer::texture(const TextureDesc& t, std:
   }
   slot->mem_hash = mh;
   slot->epoch = epoch_;
-  slot->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+  slot->sampled = sample_serial_;
   if (recording_) slot->rec = rec_[rec_cur_].id;
   ++stats_.textures_decoded;
   return slot->view;
@@ -832,8 +865,10 @@ wgpu::TextureView Renderer::tall_copy(CopyEntry& e, const TextureDesc& t) {
   }
   const bool new_tail = fresh || c->tail_hash != tail || c->format != t.format;
   if (new_tail || c->copy_serial != e.serial) {
-    // The open pass may already sample the old contents: submit it first.
-    if (!fresh && pass_open_ && c->pass == pass_serial_) flush();
+    // Commands not submitted yet may sample the old rows below the copy: submit them
+    // before the upload replaces those (V6: the copy's rows are copied in the batch,
+    // after them, so they need no submit).
+    if (!fresh && new_tail && unsubmitted(c->sampled)) flush();
     if (new_tail) {
       std::vector<std::uint8_t> rgba(static_cast<std::size_t>(t.width) * t.height * 4);
       decode_texture(t.format, t.width, t.height, src, rgba.data(), nullptr, 0, 0);
@@ -857,18 +892,18 @@ wgpu::TextureView Renderer::tall_copy(CopyEntry& e, const TextureDesc& t) {
       c->tail_hash = tail;
       c->format = t.format;
     }
-    wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
+    // V6: in the batch, between passes, after the copy's conversion (also in a batch).
+    end_pass();
+    begin_batch();
     wgpu::TexelCopyTextureInfo csrc{};
     csrc.texture = e.tex;
     wgpu::TexelCopyTextureInfo cdst{};
     cdst.texture = c->tex;
     wgpu::Extent3D ext{e.pw, e.ph, 1};
-    enc.CopyTextureToTexture(&csrc, &cdst, &ext);
-    wgpu::CommandBuffer cb = enc.Finish();
-    gpu_.queue().Submit(1, &cb);
+    encoder_.CopyTextureToTexture(&csrc, &cdst, &ext);
     c->copy_serial = e.serial;
   }
-  c->pass = pass_open_ ? pass_serial_ : pass_serial_ + 1;
+  c->sampled = sample_serial_;
   ++stats_.copy_textures_used;
   ++stats_.copy_tall;
   return c->view;
@@ -941,8 +976,8 @@ void Renderer::draw(const DrawCall& d) {
     ++stats_.skipped;
     return;
   }
-  if (pass_open_ && (vdata_.size() + vmax > kVertexCapacity || idata_.size() * 4 + ibytes > kIndexCapacity ||
-                     udata_.size() + kUniformSlot > kUniformCapacity))
+  if (batch_open_ && (vdata_.size() + vmax > kVertexCapacity || idata_.size() * 4 + ibytes > kIndexCapacity ||
+                      udata_.size() + kUniformSlot > kUniformCapacity))
     flush();
 
   // The same pixel state as the previous draw, in the same pass and texture
@@ -953,7 +988,10 @@ void Renderer::draw(const DrawCall& d) {
   if (same) {
     ++stats_.same_state;
   } else {
-    // Textures first: decoding uploads with the queue, which must precede the pass's submit (it does).
+    // Textures first: decoding uploads with the queue, which must precede the batch's submit (it does).
+    // V6: this draw's serial marks the textures it samples (see sample_serial_).
+    ++sample_serial_;
+    resolving_ = true;
     wgpu::BindGroupEntry te[16]{};
     for (int k = 0; k < 8; ++k) {
       te[k].binding = static_cast<std::uint32_t>(k);
@@ -968,6 +1006,7 @@ void Renderer::draw(const DrawCall& d) {
       te[k].textureView = texture(t, &w, &h);
       te[8 + k].sampler = sampler(t);
     }
+    resolving_ = false;
     last_.indirect = false;
     for (int s = 0; s < c.num_stages; ++s)
       if (c.stages[s].ind_cmd) {
@@ -1013,15 +1052,14 @@ void Renderer::draw(const DrawCall& d) {
   const Pipeline& pl = *last_.pipe;
 
   begin_pass();
-  if (recording_ && rec_[rec_cur_].pass_serial != pass_serial_) {  // V3: a new pass in the frame record
+  if (recording_ && rec_[rec_cur_].batch_serial != batch_serial_) {  // V3: a new batch in the frame record
     Record& r = rec_[rec_cur_];
     if (r.npasses == r.passes.size()) r.passes.emplace_back();
     RecPass& rp = r.passes[r.npasses];
     rp.draws.clear();
     rp.filled = false;
-    r.ops.push_back({RecKind::Pass, static_cast<std::uint32_t>(r.npasses)});
     ++r.npasses;
-    r.pass_serial = pass_serial_;
+    r.batch_serial = batch_serial_;
   }
   last_.state = d.state;
   last_.topology = c.topology;
@@ -1101,31 +1139,27 @@ void Renderer::clear_efb(const EfbCopy& c) {
   if (m == 0) return;
   float data[8] = {c.clear_rgba[0] / 255.0f, c.clear_rgba[1] / 255.0f, c.clear_rgba[2] / 255.0f,
                    has_alpha ? c.clear_rgba[3] / 255.0f : 1.0f, static_cast<float>(c.clear_z) / 16777215.0f, 0, 0, 0};
-  flush();
-  gpu_.queue().WriteBuffer(clear_buf_, 0, data, sizeof data);
-  wgpu::BindGroupEntry be{};
-  be.binding = 0;
-  be.buffer = clear_buf_;
-  be.size = 32;
-  wgpu::BindGroupDescriptor bgd{};
-  bgd.layout = bgl_clear_;
-  bgd.entryCount = 1;
-  bgd.entries = &be;
-  wgpu::BindGroup bg = gpu_.device().CreateBindGroup(&bgd);
-  begin_pass();
-  pass_.SetPipeline(clear_pipes_[m]);
-  pass_.SetBindGroup(0, bg);
   std::uint32_t x0 = std::min(c.src_x, kEfbWidth), y0 = std::min(c.src_y, kEfbHeight);
   std::uint32_t x1 = std::min(c.src_x + c.width, kEfbWidth), y1 = std::min(c.src_y + c.height, kEfbHeight);
   if (x1 <= x0 || y1 <= y0) return;
+  // V6: a draw in the open pass (its own pass and submit before): the draws before it
+  // land first and the draws after it see it, as with a pass of its own.
+  if (batch_open_ && udata_.size() + kUniformSlot > kUniformCapacity) flush();
+  begin_pass();
+  emit_pending();
+  const std::uint32_t uoff = push_slot(data, sizeof data);
+  pass_.SetPipeline(clear_pipes_[m]);
+  pass_.SetBindGroup(0, clear_group_, 1, &uoff);
   pass_.SetScissorRect(x0 * scale_, y0 * scale_, (x1 - x0) * scale_, (y1 - y0) * scale_);
   pass_.Draw(3);
+  // The next draw binds its pipeline, constants, textures and scissor again.
+  bound_pipeline_ = bound_textures_ = nullptr;
+  bound_uoff_ = ~0u;
+  bound_scissor_[0] = bound_scissor_[1] = bound_scissor_[2] = bound_scissor_[3] = ~0u;
   if (recording_) {  // V3
     const std::uint32_t rect[4] = {x0 * scale_, y0 * scale_, (x1 - x0) * scale_, (y1 - y0) * scale_};
     rec_clear(m, data, rect);
   }
-  // The clear must land before the next clear rewrites its buffer.
-  flush();
 }
 
 void Renderer::copy_to_texture(const EfbCopy& c) {
@@ -1163,21 +1197,26 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
   std::int32_t params[8] = {static_cast<std::int32_t>(c.src_x * scale_), static_cast<std::int32_t>(c.src_y * scale_),
                             c.half_scale ? 1 : 0, c.pixel_format == 3 ? 1 : 0,
                             static_cast<std::int32_t>(c.tex_format), c.intensity ? 1 : 0, 0, 0};
-  gpu_.queue().WriteBuffer(convert_buf_, 0, params, sizeof params);
-  wgpu::BindGroupEntry be[3]{};
-  be[0].binding = 0;
-  be[0].buffer = convert_buf_;
-  be[0].size = 32;
-  be[1].binding = 1;
-  be[1].textureView = efb_color_view_;
-  be[2].binding = 2;
-  be[2].textureView = efb_depth_view_;
-  wgpu::BindGroupDescriptor bgd{};
-  bgd.layout = bgl_convert_;
-  bgd.entryCount = 3;
-  bgd.entries = be;
-  wgpu::BindGroup bg = gpu_.device().CreateBindGroup(&bgd);
-  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
+  // V6: a pass of the batch (its own submit before), after the EFB's pass.
+  if (batch_open_ && udata_.size() + kUniformSlot > kUniformCapacity) flush();
+  end_pass();
+  begin_batch();
+  const std::uint32_t uoff = push_slot(params, sizeof params);
+  if (!convert_group_) {
+    wgpu::BindGroupEntry be[3]{};
+    be[0].binding = 0;
+    be[0].buffer = ubuf_;
+    be[0].size = 32;
+    be[1].binding = 1;
+    be[1].textureView = efb_color_view_;
+    be[2].binding = 2;
+    be[2].textureView = efb_depth_view_;
+    wgpu::BindGroupDescriptor bgd{};
+    bgd.layout = bgl_convert_;
+    bgd.entryCount = 3;
+    bgd.entries = be;
+    convert_group_ = gpu_.device().CreateBindGroup(&bgd);
+  }
   wgpu::RenderPassColorAttachment ca{};
   ca.view = e->view;
   ca.loadOp = wgpu::LoadOp::Clear;
@@ -1186,13 +1225,11 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
   rp.colorAttachmentCount = 1;
   rp.colorAttachments = &ca;
   if (timer_) rp.timestampWrites = timer_->pass();  // Q5
-  wgpu::RenderPassEncoder pass = enc.BeginRenderPass(&rp);
+  wgpu::RenderPassEncoder pass = encoder_.BeginRenderPass(&rp);
   pass.SetPipeline(convert_pipe_);
-  pass.SetBindGroup(0, bg);
+  pass.SetBindGroup(0, convert_group_, 1, &uoff);
   pass.Draw(3);
   pass.End();
-  wgpu::CommandBuffer cb = enc.Finish();
-  gpu_.queue().Submit(1, &cb);
   if (recording_) {  // V3
     e->rec = rec_[rec_cur_].id;
     rec_copy(e->view, e->pw, e->ph, params);
@@ -1200,7 +1237,7 @@ void Renderer::copy_to_texture(const EfbCopy& c) {
 }
 
 void Renderer::efb_copy(const EfbCopy& c) {
-  flush();
+  end_pass();  // V6: the copy goes into the batch, after the EFB's pass
   const std::uint32_t x0 = std::min(c.src_x, kEfbWidth), y0 = std::min(c.src_y, kEfbHeight);
   const std::uint32_t w = std::min(c.width, kEfbWidth - x0), h = std::min(c.height, kEfbHeight - y0);
   if (w && h) {
@@ -1222,18 +1259,18 @@ void Renderer::efb_copy(const EfbCopy& c) {
       f.addr = c.dest & 0x01FFFFFFu;
       f.serial = ++serial_;
       latest_ = &f;
-      wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
+      begin_batch();
       wgpu::TexelCopyTextureInfo src{};
       src.texture = efb_color_;
       src.origin = {x0 * scale_, y0 * scale_, 0};
       wgpu::TexelCopyTextureInfo dst{};
       dst.texture = f.tex;
       wgpu::Extent3D ext{pw, ph, 1};
-      enc.CopyTextureToTexture(&src, &dst, &ext);
-      wgpu::CommandBuffer cb = enc.Finish();
-      gpu_.queue().Submit(1, &cb);
+      encoder_.CopyTextureToTexture(&src, &dst, &ext);
       // V3: the frame ends here: its in-between picture, then the next frame's record
-      // (which starts with this copy's clear).
+      // (which starts with this copy's clear). V6: the replay and the record's start
+      // (their own submits) read what the frame drew: the batch is submitted first.
+      if (interp_on_) flush();
       if (recording_) rec_end(x0, y0, w, h, f.serial);
       if (interp_on_) rec_begin(c);
     } else {
@@ -1310,16 +1347,17 @@ void Renderer::scan_field(std::uint32_t addr) {
   int slot = 0;
   while (slot == scan_slot_[1] || slot == scan_slot_[2]) ++slot;
   ++scan_stats_.new_frames;
-  flush();
-  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
+  // V6: in the batch, after the XFB copy (also in a batch), and submitted with it (the
+  // presents that show it submit their own commands).
+  end_pass();
+  begin_batch();
   wgpu::TexelCopyTextureInfo src{};
   src.texture = f->tex;
   wgpu::TexelCopyTextureInfo dst{};
   dst.texture = scan_[slot].tex;
   wgpu::Extent3D ext{f->width, f->height, 1};
-  enc.CopyTextureToTexture(&src, &dst, &ext);
-  wgpu::CommandBuffer cb = enc.Finish();
-  gpu_.queue().Submit(1, &cb);
+  encoder_.CopyTextureToTexture(&src, &dst, &ext);
+  flush();
   scan_slot_[0] = slot;
   scan_serial_[0] = f->serial;
   scan_[slot].serial = f->serial;
@@ -1377,7 +1415,6 @@ const Renderer::Frame* Renderer::scanout() {
   bgd.entryCount = 3;
   bgd.entries = be;
   wgpu::BindGroup bg = gpu_.device().CreateBindGroup(&bgd);
-  wgpu::CommandEncoder enc = gpu_.device().CreateCommandEncoder();
   wgpu::RenderPassColorAttachment ca{};
   ca.view = mixed_.view;
   ca.loadOp = wgpu::LoadOp::Clear;
@@ -1386,13 +1423,11 @@ const Renderer::Frame* Renderer::scanout() {
   rp.colorAttachmentCount = 1;
   rp.colorAttachments = &ca;
   if (timer_) rp.timestampWrites = timer_->pass();  // Q5
-  wgpu::RenderPassEncoder pass = enc.BeginRenderPass(&rp);
+  wgpu::RenderPassEncoder pass = encoder().BeginRenderPass(&rp);  // V6: in the batch (a submit of its own before)
   pass.SetPipeline(mix_pipe_);
   pass.SetBindGroup(0, bg);
   pass.Draw(3);
   pass.End();
-  wgpu::CommandBuffer cb = enc.Finish();
-  gpu_.queue().Submit(1, &cb);
   mixed_.serial = a.serial;
   mixed_.addr = a.addr;
   mixed_key_ = key;

@@ -61,9 +61,13 @@ class Window {
   // footprint), so nothing shimmers. Smaller: sharp bilinear (each source pixel
   // a block of whole window pixels, blended only along the block edges), so a
   // 1x picture stays crisp at any size without uneven pixels.
-  // Q5: `timer` times the pass on the GPU (gpu_timer.h).
+  // Q5: `timer` times the pass on the GPU (gpu_timer.h). V6: `into`: the blit goes into
+  // that encoder (the renderer's batch, so the frame's last commands and the present are
+  // one submit) and the caller submits it; otherwise into a submit of its own. In the
+  // browser the canvas's picture is what was submitted when the task ends (or when the
+  // picture is taken as an ImageBitmap): submit before that.
   void present(const wgpu::TextureView& src, std::uint32_t src_width, std::uint32_t src_height,
-               GpuTimer* timer = nullptr);
+               GpuTimer* timer = nullptr, const wgpu::CommandEncoder* into = nullptr);
 
   // Q1: the picture's aspect ratio on screen. The game draws a 640 x 448 frame
   // for a 4:3 television (its 3D cameras use a 4:3 aspect), so 4:3 by default;
@@ -97,8 +101,19 @@ class Window {
   wgpu::Surface surface_;
   wgpu::TextureFormat format_ = wgpu::TextureFormat::BGRA8Unorm;
   wgpu::RenderPipeline blit_;
+  wgpu::BindGroupLayout blit_layout_;  // V6: blit_'s, fetched once
   wgpu::Sampler sampler_;
   wgpu::Buffer params_;
+  float params_now_[8] = {};  // V6: what params_ holds (written when it changes)
+  // V6: the blit's bind groups by source view (the few textures shown in turn: the
+  // scan-out slots, the mixed and in-between pictures), each holding its view so its
+  // handle cannot be reused while the entry exists.
+  struct BlitGroup {
+    wgpu::TextureView view;
+    wgpu::BindGroup group;
+  };
+  BlitGroup blit_groups_[8];
+  unsigned blit_next_ = 0;
   wgpu::Buffer burn_params_;   // Q5 (development): burn()'s own parameters
   wgpu::Texture burn_target_;  // ... and its scratch target
   std::uint32_t burn_w_ = 0, burn_h_ = 0;

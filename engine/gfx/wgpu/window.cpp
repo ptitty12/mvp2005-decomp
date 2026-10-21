@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <cstring>
 
 #include "gfx/wgpu/gpu.h"
 #include "gfx/wgpu/gpu_timer.h"
@@ -179,6 +180,7 @@ bool Window::attach(Gpu& gpu, std::string* err) {
   pd.fragment = &fs;
   pd.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
   blit_ = gpu.device().CreateRenderPipeline(&pd);
+  blit_layout_ = blit_.GetBindGroupLayout(0);
 
   wgpu::SamplerDescriptor samp{};
   samp.magFilter = wgpu::FilterMode::Linear;
@@ -232,7 +234,7 @@ bool Window::pump() {
 }
 
 void Window::present(const wgpu::TextureView& src, std::uint32_t src_width, std::uint32_t src_height,
-                     GpuTimer* timer) {
+                     GpuTimer* timer, const wgpu::CommandEncoder* into) {
   if (!configured_ || src_width == 0 || src_height == 0) return;
   wgpu::SurfaceTexture st{};
   surface_.GetCurrentTexture(&st);
@@ -249,21 +251,34 @@ void Window::present(const wgpu::TextureView& src, std::uint32_t src_width, std:
   const float pw = std::min(ww, wh * aspect), ph = std::min(wh, ww / aspect);
   const float x0 = (ww - pw) * 0.5f / ww, y0 = (wh - ph) * 0.5f / wh;
   const float params[8] = {x0, y0, 1.0f - x0, 1.0f - y0, sw, sh, pw, ph};
-  gpu_->queue().WriteBuffer(params_, 0, params, sizeof params);
-
-  wgpu::BindGroupEntry entries[3]{};
-  entries[0].binding = 0;
-  entries[0].textureView = src;
-  entries[1].binding = 1;
-  entries[1].sampler = sampler_;
-  entries[2].binding = 2;
-  entries[2].buffer = params_;
-  entries[2].size = 32;
-  wgpu::BindGroupDescriptor bgd{};
-  bgd.layout = blit_.GetBindGroupLayout(0);
-  bgd.entryCount = 3;
-  bgd.entries = entries;
-  wgpu::BindGroup bg = gpu_->device().CreateBindGroup(&bgd);
+  // V6: written when they change, and the bind group of a source shown before reused
+  // (each was a write and a bind group per present).
+  if (std::memcmp(params, params_now_, sizeof params) != 0) {
+    gpu_->queue().WriteBuffer(params_, 0, params, sizeof params);
+    std::memcpy(params_now_, params, sizeof params);
+  }
+  const wgpu::BindGroup* found = nullptr;
+  for (const BlitGroup& g : blit_groups_)
+    if (g.view.Get() == src.Get() && g.group) found = &g.group;
+  if (!found) {
+    wgpu::BindGroupEntry entries[3]{};
+    entries[0].binding = 0;
+    entries[0].textureView = src;
+    entries[1].binding = 1;
+    entries[1].sampler = sampler_;
+    entries[2].binding = 2;
+    entries[2].buffer = params_;
+    entries[2].size = 32;
+    wgpu::BindGroupDescriptor bgd{};
+    bgd.layout = blit_layout_;
+    bgd.entryCount = 3;
+    bgd.entries = entries;
+    BlitGroup& g = blit_groups_[blit_next_++ % 8];
+    g.view = src;
+    g.group = gpu_->device().CreateBindGroup(&bgd);
+    found = &g.group;
+  }
+  const wgpu::BindGroup& bg = *found;
 
   wgpu::RenderPassColorAttachment ca{};
   ca.view = st.texture.CreateView();
@@ -274,13 +289,16 @@ void Window::present(const wgpu::TextureView& src, std::uint32_t src_width, std:
   rp.colorAttachmentCount = 1;
   rp.colorAttachments = &ca;
   if (timer) rp.timestampWrites = timer->pass();  // Q5
-  wgpu::CommandEncoder enc = gpu_->device().CreateCommandEncoder();
+  wgpu::CommandEncoder own;
+  if (!into) own = gpu_->device().CreateCommandEncoder();
+  const wgpu::CommandEncoder& enc = into ? *into : own;
   wgpu::RenderPassEncoder pass = enc.BeginRenderPass(&rp);
   pass.SetPipeline(blit_);
   pass.SetBindGroup(0, bg);
   pass.Draw(3);
   pass.End();
-  wgpu::CommandBuffer cb = enc.Finish();
+  if (into) return;  // V6: the caller submits it (and presents nothing natively: the browser's path)
+  wgpu::CommandBuffer cb = own.Finish();
   gpu_->queue().Submit(1, &cb);
 #ifndef __EMSCRIPTEN__
   surface_.Present();  // the browser presents the canvas when the task ends
@@ -319,7 +337,7 @@ void Window::burn(const wgpu::TextureView& src, std::uint32_t src_width, std::ui
   entries[2].buffer = burn_params_;
   entries[2].size = 32;
   wgpu::BindGroupDescriptor bgd{};
-  bgd.layout = blit_.GetBindGroupLayout(0);
+  bgd.layout = blit_layout_;
   bgd.entryCount = 3;
   bgd.entries = entries;
   wgpu::BindGroup bg = gpu_->device().CreateBindGroup(&bgd);
