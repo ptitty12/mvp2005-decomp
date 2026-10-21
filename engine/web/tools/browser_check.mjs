@@ -641,7 +641,7 @@ async function runOnce(context, run) {
       summary.grabs ??= [];
       summary.grabs.push({ at, field, kinds: pics.map((p) => (p.between ? 'between' : 'frame')) });
       pics.forEach((p, k) => {
-        const path = join(out, `${label}-r${run}-grab-${at}-${String(k).padStart(2, '0')}-${p.between ? 'between' : 'frame'}.png`);
+        const path = join(out, `${label}-r${run}-grab-${at}-${String(k).padStart(3, '0')}-${p.between ? 'between' : 'frame'}.png`);
         writeFileSync(path, Buffer.from(p.url.slice(p.url.indexOf(',') + 1), 'base64'));
       });
       console.log(`grab at field ${field}: ${pics.map((p) => (p.between ? 'B' : 'F')).join('')}`);
