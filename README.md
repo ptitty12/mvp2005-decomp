@@ -36,7 +36,7 @@ in-game memory card.
 - **Engine** (`engine/`):
   - The whole DOL translates in the browser in about half a second, then is cached in the browser.
   - In a real game with the ABS challenge on, the emulation thread needs about 7.5 ms per 16.7 ms field on the dev PC. A simulated machine twice as slow, or Chrome held to four efficiency cores, still runs at full speed with 60 new pictures a second.
-  - The renderer runs on its own thread (about 4.3 ms a field on the dev PC). The picture can be drawn at 1x, 2x or 3x the console's resolution, and Auto picks one for the GPU.
+  - The renderer runs on its own thread (about 3.8 ms a field on the dev PC). The picture can be drawn at 1x, 2x or 3x the console's resolution, and Auto picks one for the GPU.
   - **120 fps** on displays of 100 Hz or more: the Motion setting (Auto by default) draws an in-between picture between each two game frames, with every moving object halfway. The game itself still runs at 60 Hz, so online play is unaffected.
 - **Online play:** two browsers in lockstep over WebRTC.
   - The owner's VPS runs the lobby, signaling and a TURN relay, deployed with Dokploy.

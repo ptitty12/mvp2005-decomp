@@ -544,5 +544,7 @@
   - **V5, render thread** -18% (dev PC) / -21% (4 E-cores), pictures byte-identical.
   - **V4, emulation thread** -12 to -13% (fast function copies, real wasm loops, constant addresses, heap code translated, snapshots by pages), guest state bit-identical. The translated module is 58 -> 112 MB; cold translation 0.63 -> 1.2 s.
   - The ABS batting state (MLB 2026 pack), 58 s of play: emulation per field 10.85 ms (session start, single-threaded because of the mod) -> 6.74 ms; render thread 5.2 -> 4.2 ms; pictures lost 3.4/s -> 0.02/s. 4 E-cores: emulation 20.1 -> 11.8 ms, speed 0.79x -> 1.0x.
-  - Logs: docs/engine/V1_LOG.md, V3_LOG.md, V4_LOG.md, V5_LOG.md (V6 when it lands).
+  - **V6, Chrome's GPU process** -33% (dev PC) / -41% (4 E-cores): one command encoder per batch (submits 17 -> 3 a field), clears inside passes, one bind group per draw, 16-bit indices, staging uploads (`staging=0` turns them off). Render thread a further -12 to -18%. Pictures byte-identical, in-betweens included.
+  - After everything (same scene): dev PC emulation 6.8 ms, render thread 3.8 ms, 0 pictures lost; 4 E-cores 11.3 / 6.6 ms at full speed, 0.03% lost.
+  - Logs: docs/engine/V1_LOG.md, V3_LOG.md, V4_LOG.md, V5_LOG.md, V6_LOG.md.
   | Owner: redeploy in Dokploy to get all of it. On a 120 Hz or faster display, Motion Auto turns the in-between frames on by itself; on your 59 Hz monitor nothing changes in how it looks, it just runs lighter.
