@@ -166,6 +166,9 @@ const castSize = opt('--cast-size', '') ? opt('--cast-size', '').split('x').map(
 // --trace F:MS (Chromium): a Chrome performance trace (V8's sampling profiler in every thread, the GPU
 // process's tasks) from field F for MS ms, written to OUT/trace-LABEL.json (summarize: trace_summary.mjs).
 const traceAt = opt('--trace', '') ? opt('--trace', '').split(':').map(Number) : null;
+// V6: --trace-cats A,B: more trace categories (e.g. gpu.dawn,disabled-by-default-gpu.dawn for the GPU process's
+// WebGPU work), added to the default ones.
+const traceCats = opt('--trace-cats', '').split(',').filter(Boolean);
 const discDir = opt('--disc-dir', '');
 const asAdmin = flag('--admin');
 const serverStates = opt('--server-states', '');
@@ -502,7 +505,8 @@ async function runOnce(context, run) {
     await tracing.send('Tracing.start', {
       transferMode: 'ReturnAsStream',
       traceConfig: { includedCategories: ['disabled-by-default-v8.cpu_profiler', 'v8.execute', 'v8', 'gpu',
-                                          'devtools.timeline', 'disabled-by-default-devtools.timeline', 'toplevel'] },
+                                          'devtools.timeline', 'disabled-by-default-devtools.timeline', 'toplevel',
+                                          ...traceCats] },
     });
     traceStart = Date.now();
     console.log(`trace started at field ${lastField}`);
