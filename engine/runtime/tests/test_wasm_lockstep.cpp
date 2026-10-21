@@ -55,7 +55,10 @@ static void install_fp_handler(Machine& m) {
 
 // V4 (`fixed`): the module has the runtime's addresses as constants, MEM1's
 // (the native machine's) included (xlat::WasmFixed), as the browser emits it.
-static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false) {
+// V4 (`fast`): calls reach functions without resume labels and resumes their
+// resumable copies (WasmEmitOptions::fast_entries): no unwind ends in a frame,
+// so the in-frame resumes become unwinds to the dispatcher and resume entries.
+static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false, bool fast = false) {
   xlat::synth::Program prog = xlat::synth::make();
   auto syms = xlat::SymbolTable::parse(prog.symbols);
   auto dol = vfs::Dol::parse(prog.dol);
@@ -69,6 +72,7 @@ static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false) {
     opt.hle.push_back({table[k].name, table[k].address, static_cast<int>(k), table[k].kind == HleKind::Before});
   opt.precise_io = true;  // exact registers at the MMIO stop
   opt.inline_ops = inline_ops;
+  opt.fast_entries = fast;
   Machine ref, nat;
   if (fixed) {
     set_wasm_mem1(nat.mem1(), Machine::kMem1Size);
@@ -113,9 +117,15 @@ static void run_case(bool inline_ops, bool mem1 = false, bool fixed = false) {
   CHECK(r.stop.write);
   CHECK(r.stop.addr == 0xCC000000u);
   CHECK(r.events > 20);
-  CHECK(g_unwinds == unwinds + 2);
-  CHECK(g_inframe_resumes == inframe + 2);
-  CHECK(g_resume_entries == entries + 3);
+  if (fast) {
+    CHECK(g_unwinds == unwinds + 4);
+    CHECK(g_inframe_resumes == inframe);
+    CHECK(g_resume_entries == entries + 7);  // the two in-frame resumes, each a level further up
+  } else {
+    CHECK(g_unwinds == unwinds + 2);
+    CHECK(g_inframe_resumes == inframe + 2);
+    CHECK(g_resume_entries == entries + 3);
+  }
   // main's two instructions after jumper's return, and the six of the handler.
   CHECK(g_interpreted == interpreted + 2 + 6);
   CHECK(hr.exceptions == 1);
@@ -143,6 +153,12 @@ TEST_CASE("Q6: the same with the memory helpers' own MEM1 path") {
 TEST_CASE("V4: the same with the runtime's addresses and MEM1 fixed in the module") {
   run_case(true, true, true);
   run_case(false, true, true);
+}
+
+TEST_CASE("V4: the same with fast entries and resumable copies (as the browser emits it)") {
+  run_case(true, true, true, true);
+  run_case(false, true, true, true);
+  run_case(true, false, false, true);
 }
 
 TEST_CASE("V4: a module made for other runtime addresses is refused") {

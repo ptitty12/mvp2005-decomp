@@ -23,6 +23,12 @@ struct WasmLoadStats {
 };
 
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error);
+// V4: the same with the wasm bytes at [bytes, bytes + len) instead of m.bytes (a
+// cached blob, not copied). `keep_js_copy`: the JavaScript side keeps a copy of
+// the bytes as Module.mvpModuleBytes (the browser's cache writes it later), so the
+// caller can free its own at once and the engine's heap does not hold them.
+bool load_wasm_module(const xlat::WasmModule& m, const std::uint8_t* bytes, std::size_t len, bool keep_js_copy,
+                      WasmLoadStats* stats, std::string* error);
 
 // P2: the write-gather pipe's buffer translated modules append to directly
 // (xlat::WasmWgpLayout). Give it to the machine's Hardware (set_wgp_state).

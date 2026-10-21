@@ -89,6 +89,15 @@ struct WasmEmitOptions {
   bool fp_exact = false;
   // V4: constants for the runtime's addresses (WasmFixed); all zero: the globals.
   WasmFixed fixed;
+  // V4: a single-entry function with resume labels is emitted twice: what calls
+  // and the entry table reach has no resume labels (an unwinding return leaves,
+  // so it has no dispatcher unless its loops or jump tables need one: no loop
+  // around the whole body, no br_table at its entry), and a copy with them takes
+  // the resume entries (rt::g_resume_labels). Native frames hold no guest state,
+  // so where an unwind ends changes nothing the guest can see (runtime/native.h):
+  // unwinds that a frame resumed in place now reach the dispatcher, which
+  // re-enters the copies. The module is about twice the size.
+  bool fast_entries = false;
 };
 
 // A guest address and the table slot (relative to the module's table base) of

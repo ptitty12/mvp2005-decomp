@@ -87,7 +87,9 @@ export async function readCached(key: string, alloc: (size: number) => Uint8Arra
   }
 }
 
-async function writeFile(d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array): Promise<void> {
+// V4: the file is the parts one after the other (the module's header and its bytes,
+// without joining them into one more copy).
+async function writeFile(d: FileSystemDirectoryHandle, name: string, parts: Uint8Array[]): Promise<void> {
   const fh = await d.getFileHandle(name, { create: true });
   const sync = (fh as unknown as { createSyncAccessHandle?: () => Promise<SyncHandle> }).createSyncAccessHandle;
   if (typeof sync === 'function') {  // Workers: fast and everywhere OPFS is
@@ -95,7 +97,14 @@ async function writeFile(d: FileSystemDirectoryHandle, name: string, bytes: Uint
     try {
       h.truncate(0);
       let at = 0;
-      while (at < bytes.length) at += h.write(bytes.subarray(at), { at });
+      for (const bytes of parts) {
+        let k = 0;
+        while (k < bytes.length) {
+          const wrote = h.write(bytes.subarray(k), { at });
+          k += wrote;
+          at += wrote;
+        }
+      }
       h.flush();
     } finally {
       h.close();
@@ -103,13 +112,15 @@ async function writeFile(d: FileSystemDirectoryHandle, name: string, bytes: Uint
     return;
   }
   const w = await fh.createWritable();
-  await w.write(bytes as Uint8Array<ArrayBuffer>);
+  for (const bytes of parts) await w.write(bytes as Uint8Array<ArrayBuffer>);
   await w.close();
 }
 
 // Stores the blob under `key` and removes every other entry. Returns the
 // milliseconds it took, or an error message.
-export async function writeCached(key: string, bytes: Uint8Array): Promise<{ ms: number } | { error: string }> {
+export async function writeCached(key: string, bytes: Uint8Array | Uint8Array[]): Promise<{ ms: number } | { error: string }> {
+  const parts = Array.isArray(bytes) ? bytes : [bytes];
+  const total = parts.reduce((s, p) => s + p.length, 0);
   const t0 = performance.now();
   const d = await dir();
   if (!d) return { error: 'no origin private file system in this browser' };
@@ -117,8 +128,8 @@ export async function writeCached(key: string, bytes: Uint8Array): Promise<{ ms:
     for await (const name of (d as unknown as { keys(): AsyncIterable<string> }).keys())
       if (!name.startsWith(`${key}.`)) await d.removeEntry(name).catch(() => undefined);
     await d.removeEntry(`${key}.ok`).catch(() => undefined);
-    await writeFile(d, `${key}.bin`, bytes);
-    await writeFile(d, `${key}.ok`, new TextEncoder().encode(String(bytes.length)));
+    await writeFile(d, `${key}.bin`, parts);
+    await writeFile(d, `${key}.ok`, [new TextEncoder().encode(String(total))]);
     return { ms: performance.now() - t0 };
   } catch (e) {
     return { error: String(e) };

@@ -5,6 +5,7 @@
 export interface MvpEngine {
   HEAPU8: Uint8Array;
   wasmMemory?: WebAssembly.Memory;  // the threaded build (P2): views made after another thread grew it
+  mvpModuleBytes?: Uint8Array;      // V4: the translated module's bytes, kept for the cache (outside the heap)
   UTF8ToString(ptr: number, maxBytes?: number): string;
   specialHTMLTargets: Record<string, unknown>;
   _malloc(size: number): number;

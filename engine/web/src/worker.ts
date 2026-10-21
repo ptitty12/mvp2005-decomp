@@ -295,13 +295,16 @@ async function storeModule(key: string): Promise<void> {
   const head = M!._mvp_module_blob();
   if (!head) return;
   const len = M!._mvp_module_bytes_len(), n = head + len;
-  // A copy outside the engine's heap (which can grow while the write awaits).
-  const bytes = new Uint8Array(n);
+  // Copies outside the engine's heap (which can grow while the write awaits).
   const hp = M!._mvp_module_blob_ptr(), bp = M!._mvp_module_bytes_ptr();
-  bytes.set(heap().subarray(hp, hp + head), 0);
-  bytes.set(heap().subarray(bp, bp + len), head);
+  const header = heap().slice(hp, hp + head);
+  // V4: the module's bytes stayed on this side when it was loaded (the heap gave them back).
+  const kept = M!.mvpModuleBytes;
+  M!.mvpModuleBytes = undefined;
+  const body = kept && kept.length === len ? kept : bp ? heap().slice(bp, bp + len) : null;
   M!._mvp_module_release();
-  const r = await writeCached(key, bytes);
+  if (!body) return;
+  const r = await writeCached(key, [header, body]);
   post({ type: 'cache', report: { key, hit: false, bytes: n, ...('ms' in r ? { storedMs: r.ms } : { error: r.error }) } });
 }
 

@@ -170,7 +170,7 @@ EMSCRIPTEN_KEEPALIVE void mvp_rt_tw(Cpu* c, u32 w, u32 pc) {
 // the table base, or -1 with the message in the console.
 EM_JS(int, mvp_js_instantiate,
       (const void* bytes, unsigned len, unsigned slots, unsigned unwinding, unsigned resume, unsigned hook,
-       unsigned wgp, unsigned gp_pages, unsigned mem1, double* times),
+       unsigned wgp, unsigned gp_pages, unsigned mem1, int keep, double* times),
       {
         var names = ["on_entry", "safepoint", "read8", "read16", "read32", "write8", "write16", "write32", "exec",
                      "call_indirect", "absolute_call", "resume", "hle_call", "hle_before", "trap", "rfi",
@@ -180,8 +180,9 @@ EM_JS(int, mvp_js_instantiate,
           var t0 = performance.now();
           var view = new Uint8Array(wasmMemory.buffer, bytes, len);
           // A shared memory (the threaded engine, P2): WebAssembly.Module takes no shared view.
-          if (typeof SharedArrayBuffer != 'undefined' && wasmMemory.buffer instanceof SharedArrayBuffer)
+          if ((typeof SharedArrayBuffer != 'undefined' && wasmMemory.buffer instanceof SharedArrayBuffer) || keep)
             view = view.slice();
+          if (keep) Module['mvpModuleBytes'] = view;  // V4: for the cache, outside the engine's heap
           var mod = new WebAssembly.Module(view);
           var t1 = performance.now();
           var rt = {};
@@ -224,6 +225,7 @@ WgpState* wasm_wgp_state() { return &g_wgp; }
 void set_wasm_mem1(const std::uint8_t* base, std::uint32_t size) {
   g_mem1.base = static_cast<u32>(reinterpret_cast<std::uintptr_t>(base));
   g_mem1.limit = base && size >= 8 ? size - 7 : 0;  // whole accesses of up to 8 bytes
+  if (!base) g_loaded_fixed.mem1_limit = 0;  // no machine: the loaded module's MEM1 is gone with it (tests)
   if (base && g_loaded_fixed.mem1_limit &&
       (g_mem1.base != g_loaded_fixed.mem1_base || g_mem1.limit != g_loaded_fixed.mem1_limit)) {
     // V4: the loaded module reads and writes MEM1 at its fixed place: a machine elsewhere cannot run it.
@@ -248,6 +250,11 @@ xlat::WasmFixed wasm_fixed_addrs() {
 }
 
 bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::string* error) {
+  return load_wasm_module(m, m.bytes.data(), m.bytes.size(), false, stats, error);
+}
+
+bool load_wasm_module(const xlat::WasmModule& m, const std::uint8_t* bytes, std::size_t len, bool keep_js_copy,
+                      WasmLoadStats* stats, std::string* error) {
   static_assert(sizeof(GuestFn) == 4, "wasm32: a function pointer is a table index");
   if (m.fixed.any()) {  // V4: its constants must be this runtime's addresses
     const xlat::WasmFixed now = wasm_fixed_addrs();
@@ -260,13 +267,14 @@ bool load_wasm_module(const xlat::WasmModule& m, WasmLoadStats* stats, std::stri
     }
   }
   alignas(8) double times[2] = {0, 0};
-  int base = mvp_js_instantiate(m.bytes.data(), static_cast<unsigned>(m.bytes.size()), m.slots,
+  int base = mvp_js_instantiate(bytes, static_cast<unsigned>(len), m.slots,
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_unwinding)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_resume)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_entry_hook)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_wgp)),
                                 static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(ppc::g_gp_pages)),
-                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), times);
+                                static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&g_mem1)), keep_js_copy ? 1 : 0,
+                                times);
   if (base < 0) {
     if (error) *error = "the translated module did not compile or instantiate (see the console)";
     return false;

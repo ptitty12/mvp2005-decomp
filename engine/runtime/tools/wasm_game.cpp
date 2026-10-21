@@ -11,6 +11,7 @@
 //   MVP_WASM_OUT=FILE    also write the module (only ever under build/)
 //   MVP_WASM_NAMES=1     add a name section (function names for profilers)
 //   MVP_WASM_FIXED=0     the runtime's addresses as imported globals (V4: constants by default)
+//   MVP_WASM_FAST=0      one function per guest function (V4: fast entries and resumable copies)
 #include <emscripten.h>
 
 #include <chrono>
@@ -58,6 +59,8 @@ void mvp_register_game() {
   // V4: the runtime's addresses (MEM1's included: the machine exists by now) as
   // constants, as the browser's engine emits them; MVP_WASM_FIXED=0 keeps the globals.
   if (const char* v = std::getenv("MVP_WASM_FIXED"); !v || *v != '0') opt.fixed = rt::wasm_fixed_addrs();
+  // V4: Fast entries with resumable copies, as the browser's engine; MVP_WASM_FAST=0: one function each.
+  if (const char* v = std::getenv("MVP_WASM_FAST"); !v || *v != '0') opt.fast_entries = true;
   auto t2 = std::chrono::steady_clock::now();
   xlat::WasmModule mod;
   if (!xlat::emit_wasm(cfg, opt, &mod, &err)) {
