@@ -453,9 +453,10 @@ async function runOnce(context, run) {
              paused: s.paused, pad: s.pad, probe: s.audioProbe(), discTrace: s.discTrace,
              packs: s.packs?.mounted ?? null, ioLog: s.ioLog, digest: s.digest,
              hint: s.hint ?? null, autoScale: s.autoScale ?? null,
-             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time/.test(l)).slice(0, 20),
+             log: s.log.filter((l) => /^picture: |WebGPU error|^timeline: review: host time|^mvp: /.test(l)).slice(0, 20),
              stateLog: s.log.filter((l) => /^state: /.test(l)).slice(0, 40),
-             card: s.card ?? null, cardLog: s.log.filter((l) => /^card: /.test(l)).slice(0, 20) };
+             card: s.card ?? null, cardLog: s.log.filter((l) => /^card: /.test(l)).slice(0, 20),
+             display: s.display ? s.display() : null };  // V1: what reached the screen (presenter.ts)
   });
   const windows = [];
   const audioSamples = { n: 0, nonsilent: 0, maxRms: 0, maxPeak: 0, firstNonsilentField: null };
@@ -531,7 +532,8 @@ async function runOnce(context, run) {
                      // P2, threaded: the render thread's working time and the emulation's fence waits so far (ms)
                      renderBusyMs: st.render?.busy_ms, fenceMs: st.thread?.fence_ms, fences: st.thread?.fences,
                      gpu: st.gpu, scale: st.scale, presentsNew: st.presents_new,  // Q5
-                     writeWaitMs: st.thread?.write_wait_ms, writeWaits: st.thread?.write_waits });
+                     writeWaitMs: st.thread?.write_wait_ms, writeWaits: st.thread?.write_waits,
+                     display: state.display });  // V1: the page's counts so far (presenter.ts)
     }
     const field = state.stats?.status.fields ?? 0;
     lastField = field;

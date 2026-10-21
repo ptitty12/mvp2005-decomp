@@ -132,6 +132,7 @@ export interface RunOptions {
   fastUntil?: number;  // development (P1): run unpaced up to this VI field, then paced
   pacing?: 'chase' | 'raf';  // P1: 'raf' = batches of up to 4 fields per animation frame (the earlier loop)
   slowMotion?: boolean;  // Q2: true = even slow motion (every frame shown) when the machine cannot keep up
+  presentQueue?: boolean;  // V1: the page shows the threaded engine's pictures from a queue (presenter.ts)
   ioLog?: boolean;     // development: log every guest DVD read with its host timing (P1)
   inputLog?: boolean;  // development (Q3): the inputs the guest consumed, as an mvp-input script, in `stopped`
   threads?: boolean;   // P2: false = the inline renderer even where the threaded engine could run

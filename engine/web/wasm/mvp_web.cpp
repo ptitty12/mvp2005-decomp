@@ -303,6 +303,7 @@ struct Engine {
   // Rendering: inline (rs), or on the render thread (threaded, P2).
   web::RenderSide rs;
   bool threaded = false;
+  bool every_field = false;  // V1: every field of a batch is presented (the page queues pictures)
   std::uint32_t xfb = 0;
 
   // Host time spent inside rt::run, for the frame-time numbers.
@@ -1167,6 +1168,12 @@ EMSCRIPTEN_KEEPALIVE int mvp_run_fields(int n) {
 #endif
       rt::run(g.m->cpu());
       if (g.state_due) state_step();
+#ifdef MVP_WEB_THREADS
+      // V1: a field before the batch's last shows its own picture (the page queues them), so
+      // a batch of two fields shows two pictures instead of the second one only.
+      if (g.every_field && g.threaded && !g.hold && g.fields_run - run_start < want)
+        web::render_present_field(g_frame_polls);
+#endif
       double dt = now_ms() - f0;
       if (g_host_slow > 1) {
         double work = dt;
@@ -1272,6 +1279,10 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_trace_take() {
   g_text = g.rs.trace_take();
   return g_text.c_str();
 }
+
+// V1: present every field of a batch, not only its last (threaded engine; the page shows
+// the pictures from a queue on its own refreshes, presenter.ts).
+EMSCRIPTEN_KEEPALIVE void mvp_present_every_field(int on) { g.every_field = on != 0; }
 
 // Q1: the renderer's internal resolution, 1-3 times the console's (the page's
 // Picture setting); it applies from the next frame the game starts.

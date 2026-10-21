@@ -525,6 +525,14 @@ void handle(const gfx::RenderRing::Record& r) {
       return;
     }
     case kPresent: {
+      if (!S->vsync) {
+        // V1: the page shows pictures from a queue on its own refreshes (presenter.ts), so
+        // each present is shown here and now: none replaces another, and the picture is
+        // the one at this point of the stream (the next field's copy has not run yet).
+        std::memcpy(&S->due_polls, r.data, sizeof S->due_polls);
+        show();
+        return;
+      }
       if (S->frame_due) ++S->held;  // the previous batch's frame was not shown: this one replaces it
       std::memcpy(&S->due_polls, r.data, sizeof S->due_polls);
       if (!S->frame_due) S->due_at = emscripten_get_now();
@@ -999,6 +1007,12 @@ void render_batch_begin() {
   }
   S->emu_active.store(1, std::memory_order_seq_cst);
   kick();
+}
+
+// V1: a field's picture in the middle of a batch (the page queues every picture): the
+// batch goes on, so the render thread keeps waiting for records in place.
+void render_present_field(std::uint64_t frame_polls) {
+  if (!disabled()) put(kPresent, frame_polls);
 }
 
 bool render_present(std::uint64_t frame_polls) {

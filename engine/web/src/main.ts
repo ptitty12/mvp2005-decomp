@@ -59,6 +59,7 @@ import {
 import { PackPanel, type PacksState } from './packs.js';
 import { States, describeNeeds, fetchNamedState, type GameSetup, type StateHeader } from './states.js';
 import { MemoryCards } from './card.js';
+import { Presenter, type DisplayStats } from './presenter.js';
 import type { CacheReport, DiscSource, FromWorker, NetStatus, Pad, PaceState, RunOptions, Status, ToWorker } from './protocol.js';
 
 // The server's image in this browser's storage (P1): found there, or downloaded now.
@@ -105,6 +106,7 @@ interface PageState {
   packs?: PacksState; // roster packs (E6, packs.ts)
   pace?: PaceState;   // Q5: the pace (pacer.ts), as the Worker reports it
   overlay?: { shown: boolean; local: StatsSummary; peer: StatsSummary | null; text: string };  // Q5 (netstats.ts)
+  display?: () => DisplayStats;  // V1: what reached the screen (presenter.ts), threaded engine only
   hint?: { shown: boolean; text: string; dismissed: boolean };  // Q5: the note for a machine that cannot keep up
   autoScale?: { ceiling: number; steps: unknown[]; lastBusy: number | null };  // Q5: the Picture's Auto and the GPU
   card?: { inserted: 'kept' | 'new' | 'none'; writes: number; sent: number };  // the memory card (card.ts)
@@ -303,6 +305,7 @@ function updateHint(): void {
 }
 
 let worker: Worker | null = null;
+let presenter: Presenter | null = null;  // V1: the threaded engine's pictures (presenter.ts)
 let pendingAudioPort: MessagePort | null = null;
 // Controllers and keyboard (Q3): ports 0 and 1 are players 1 and 2 (online: only this page's player, port 0).
 const input = new HostInput(window, (pad: Pad, port: number) => {
@@ -362,6 +365,9 @@ function onWorker(msg: FromWorker): void {
       break;
     case 'phase':
       state.phases[msg.name] = msg.ms;
+      // V1: the single-threaded engine (no render thread) sends its pictures unevenly: queue them.
+      if (msg.name === 'engine' && presenter && !params.has('present') &&
+          (msg.detail as { threads?: boolean } | undefined)?.threads === false) presenter.setMode('queue');
       if (msg.name === 'translate') state.translate = msg.detail;
       showPhases();
       break;
@@ -502,8 +508,12 @@ function startEngine(disc: DiscSource): void {
     const ctx = canvas.getContext('bitmaprenderer');
     if (ctx) {
       const chan = new MessageChannel();
-      chan.port1.onmessage = (ev: MessageEvent<ImageBitmap>) => ctx.transferFromImageBitmap(ev.data);
+      presenter = new Presenter(ctx, params.get('present') === 'queue' ? 'queue' : 'now');
+      options.presentQueue = presenter.s.mode === 'queue';
+      const p = presenter;
+      chan.port1.onmessage = (ev: MessageEvent<ImageBitmap>) => p.push(ev.data);
       frames = chan.port2;
+      state.display = () => p.stats();
     }
   } else if (hasOffscreen && options.render) {
     canvas.width = width;
@@ -539,7 +549,8 @@ function startEngine(disc: DiscSource): void {
   state.card = { inserted: options.card === undefined ? 'none' : options.card === 'new' ? 'new' : 'kept', writes: 0, sent: 0 };
   modsPanel.lock();
   send({ type: 'start', disc, canvas: off, width, height, options: { ...options, netplay, packs },
-         vsync: vsync ? (vsync.buffer as SharedArrayBuffer) : undefined, frames }, transfer);
+         // V1: with the page's queue the render thread shows every picture at once (no refresh count)
+         vsync: vsync && !options.presentQueue ? (vsync.buffer as SharedArrayBuffer) : undefined, frames }, transfer);
   if (pendingAudioPort) {
     send({ type: 'audio-port', port: pendingAudioPort }, [pendingAudioPort]);
     pendingAudioPort = null;
@@ -868,6 +879,7 @@ const vsync = (self as unknown as { crossOriginIsolated?: boolean }).crossOrigin
               typeof SharedArrayBuffer !== 'undefined' ? new Int32Array(new SharedArrayBuffer(4)) : null;
 
 function tick(now: number): void {
+  presenter?.tick(now);  // V1: first, so the picture goes with this refresh
   input.poll();
   if (!startBox.hidden && !input.capture && input.manager.confirmPressed()) playBtn.click();  // "press A to play" with a controller
   if (vsync) {

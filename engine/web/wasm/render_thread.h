@@ -81,6 +81,7 @@ void render_field(std::uint64_t field, std::uint32_t xfb);
 void render_sync();          // the fence: returns when the render thread finished every record so far
 void render_batch_begin();   // a run batch starts (the render thread waits in place for records)
 bool render_present(std::uint64_t frame_polls);  // ends the batch; true once a frame has reached the canvas
+void render_present_field(std::uint64_t frame_polls);  // V1: a field's picture inside a batch (the batch goes on)
 void render_batch_end();     // Q5: ends the batch without a present (the run made no new field: nothing new to show)
 void render_flush();
 void render_resize(int width, int height);

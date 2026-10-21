@@ -554,6 +554,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
     stateRequest('load', () => withBytes(data, (p, n) => M!._mvp_state_load(p, n)));
   }
   M._mvp_render_scale(options.scale ?? 1);  // Q1: the Picture setting
+  if (mt && options.presentQueue) M._mvp_present_every_field(1);  // V1: each field's picture goes to the page's queue
   if (options.gpuLoad) M._mvp_gpu_load(options.gpuLoad);  // Q5 (development): a GPU that cannot keep up
   if (options.tracePresent) M._mvp_trace(1);
   if (options.digest) M._mvp_digest(1, options.digestDetail?.[0] ?? 1, options.digestDetail?.[1] ?? 0);
