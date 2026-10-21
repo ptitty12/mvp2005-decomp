@@ -39,6 +39,7 @@
 //   gpuLoad=N       development (Q5): extra GPU work per present, in proportion to the picture's pixels
 //                   (N passes), to try the Picture setting's Auto on a GPU that cannot keep up
 //   gpuTimer=0      development (Q5): the render passes are not timed on the GPU (Auto then goes by size alone)
+//   staging=0       development (V6): the renderer uploads by queue writes instead of staging buffers
 //   paceMargin=X    development (Q5): the online pace's margin over this machine's capacity (default 0.98)
 //   paceTune=K:V,.. development (Q5b): the pacer's options (pacer.ts) and the paced loop's (worker.ts)
 //   stats=1         the statistics overlay shown from the start (Q5; otherwise the Stats button or `)
@@ -170,6 +171,7 @@ const options: RunOptions = {
   gpView: params.get('gpview') !== '0',
   gpuLoad: Number(params.get('gpuLoad') ?? 0) || undefined,
   gpuTimer: params.get('gpuTimer') !== '0',
+  staging: params.get('staging') !== '0',
   paceMargin: Number(params.get('paceMargin') ?? 0) || undefined,
   paceTune: params.get('paceTune') ?? undefined,
   discCache: {

@@ -507,31 +507,34 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   {
     // Runs of moved draws, joined over gaps of under 4 KiB (fewer writes).
     constexpr std::size_t kJoin = 4096;
-    std::size_t from = 0, to = 0;
-    bool open_run = false;
+    spans_.clear();
     for (std::size_t k = 0; k < cur.draws.size(); ++k) {
       if (!moved_[k]) continue;
       const RecDraw& d = cur.draws[k];
       const std::size_t s = static_cast<std::size_t>(d.base) * d.pipe->stride;
       const std::size_t e = s + static_cast<std::size_t>(d.vertices) * d.pipe->stride;
-      if (open_run && s <= to + kJoin) {
-        to = std::max(to, e);
-        continue;
-      }
-      if (open_run) {
-        q.WriteBuffer(ivbuf_, from, cur.v.data() + from, to - from);
-        istats_.upload_bytes += to - from;
-      }
-      from = s;
-      to = e;
-      open_run = true;
-    }
-    if (open_run) {
-      q.WriteBuffer(ivbuf_, from, cur.v.data() + from, to - from);
-      istats_.upload_bytes += to - from;
+      if (!spans_.empty() && s <= spans_.back().to + kJoin) spans_.back().to = std::max(spans_.back().to, e);
+      else spans_.push_back({s, e});
     }
     istats_.frame_bytes += cur.v.size();
   }
+  // V6: through a staging buffer (copied at the start of the replay's commands) when one is
+  // mapped, else queue writes.
+  std::uint64_t staged_bytes = 0;
+  for (const Span& sp : spans_) staged_bytes += (sp.to - sp.from + 7) & ~std::size_t(7);
+  StagingPool::Entry* st = staged_bytes ? take_staging(staged_bytes) : nullptr;
+  if (st) {
+    st->ready = false;
+    std::uint64_t at = 0;
+    for (const Span& sp : spans_) {
+      st->buf.WriteMappedRange(at, cur.v.data() + sp.from, sp.to - sp.from);
+      at += (sp.to - sp.from + 7) & ~std::size_t(7);
+    }
+    st->buf.Unmap();
+  } else {
+    for (const Span& sp : spans_) q.WriteBuffer(ivbuf_, sp.from, cur.v.data() + sp.from, sp.to - sp.from);
+  }
+  for (const Span& sp : spans_) istats_.upload_bytes += sp.to - sp.from;
   if (!cur.copies.empty() && !iconvert_group_) {
     wgpu::BindGroupEntry be[3]{};
     be[0].binding = 0;
@@ -551,6 +554,13 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   ++replays_;
   subst_.clear();
   wgpu::CommandEncoder enc = dev.CreateCommandEncoder();
+  if (st) {
+    std::uint64_t at = 0;
+    for (const Span& sp : spans_) {
+      enc.CopyBufferToBuffer(st->buf, at, ivbuf_, sp.from, sp.to - sp.from);
+      at += (sp.to - sp.from + 7) & ~std::size_t(7);
+    }
+  }
   wgpu::RenderPassEncoder pass;
   bool open = false;
   const void* bpipe = nullptr;
@@ -700,6 +710,7 @@ bool Renderer::interp_make(Record& cur, Record& prev) {
   }
   wgpu::CommandBuffer cb = enc.Finish();
   q.Submit(1, &cb);
+  if (st) staging_submitted(st, staged_bytes);
   bt.from = prev.serial;
   bt.to = cur.serial;
   bt.frame.serial = cur.serial;

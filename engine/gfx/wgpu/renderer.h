@@ -26,6 +26,7 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -56,6 +57,9 @@ class Renderer : public Backend {
 
   // Q5: time the render passes on the GPU (gpu_timer.h); null: not timed.
   void set_timer(GpuTimer* t) { timer_ = t; }
+
+  // V6: uploads through staging buffers (below; default), else queue writes.
+  void set_staging(bool on) { staging_on_ = on; }
 
   // Q1: the internal resolution, 1-3 times the console's in each direction. A
   // change applies at the next XFB copy that clears the EFB (the game clears it
@@ -190,6 +194,9 @@ class Renderer : public Backend {
     std::uint64_t tmem_textures = 0;        // preloaded (TMEM) textures decoded
     std::uint64_t vertex_bytes = 0, index_bytes = 0;  // uploaded
     std::uint64_t submits = 0;  // V6: batches submitted
+    std::uint64_t staged = 0;    // V6: ... whose uploads went through a staging buffer
+    std::uint64_t unstaged = 0;  // V6: ... whose uploads were queue writes (no staging buffer was mapped)
+    std::uint64_t staging_bytes = 0;  // V6: the staging buffers' size in all
   };
   const Stats& stats() const { return stats_; }
 
@@ -279,6 +286,30 @@ class Renderer : public Backend {
   std::uint64_t sample_serial_ = 0, submitted_ = 0;
   bool resolving_ = false;
   bool unsubmitted(std::uint64_t mark) const { return mark > submitted_; }
+  // V6: staging buffers, mapped for writing, that carry a batch's uploads: its bytes are
+  // written into the mapped memory (one copy) and copied on the GPU, in a command buffer
+  // submitted before the batch's, into the live buffers; then the buffer is mapped again.
+  // Queue writes cost the render thread about 0.25 ms per MB (2.6 MB a field). The
+  // browser's GPU process copies a buffer's whole mapped range when it is unmapped, so a
+  // buffer is mapped again for a little more than its last use, not for all of it. Shared
+  // with the map callbacks (which may come after the renderer is gone).
+  struct StagingPool {
+    struct Entry {
+      wgpu::Buffer buf;
+      std::uint64_t size = 0;
+      std::uint64_t mapped = 0;        // bytes mapped (from 0) when ready
+      std::atomic<bool> ready{false};  // mapped for writing (set by the map callback)
+    };
+    std::vector<std::unique_ptr<Entry>> entries;
+    std::uint64_t bytes = 0;
+  };
+  std::shared_ptr<StagingPool> staging_ = std::make_shared<StagingPool>();
+  bool staging_on_ = true;
+  static constexpr std::uint64_t kStagingMax = 32u << 20;  // the pool's bytes at most
+  static constexpr std::uint64_t kStageMin = 256u << 10;   // smaller uploads: queue writes (no buffer held for them)
+  StagingPool::Entry* take_staging(std::uint64_t need);  // a mapped one that fits, else null
+  // Its copies of `used` bytes submitted: mapped again.
+  void staging_submitted(StagingPool::Entry* e, std::uint64_t used);
   // The last draw, recorded but not encoded yet: a next draw with the same
   // pipeline, textures, constants and scissor appends its vertices and indices
   // to it (the game sends thousands of small primitives with one state). Its
@@ -488,6 +519,10 @@ class Renderer : public Backend {
   std::vector<std::uint32_t> pnext_, cnext_, match_, far_;
   std::vector<std::uint8_t> taken_;
   std::vector<std::uint8_t> moved_;  // V6: per recorded draw: a vertex at a halfway position
+  struct Span {
+    std::size_t from, to;
+  };
+  std::vector<Span> spans_;          // V6: the replay's uploads
 };
 
 }  // namespace mvp::gfx

@@ -551,22 +551,80 @@ void Renderer::end_pass() {
   pass_open_ = false;
 }
 
+Renderer::StagingPool::Entry* Renderer::take_staging(std::uint64_t need) {
+  StagingPool& pool = *staging_;
+  if (!staging_on_ || need < kStageMin) return nullptr;
+  StagingPool::Entry* best = nullptr;
+  for (auto& e : pool.entries)
+    if (e->ready.load(std::memory_order_acquire) && e->mapped >= need && (!best || e->mapped < best->mapped))
+      best = e.get();
+  if (best) return best;
+  // Half again the need, in 64 KiB: room for a batch that grows a little.
+  const std::uint64_t size = (need + need / 2 + 0xFFFF) & ~std::uint64_t(0xFFFF);
+  if (pool.bytes + size > kStagingMax) return nullptr;
+  wgpu::BufferDescriptor bd{};
+  bd.size = size;
+  bd.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+  bd.mappedAtCreation = true;
+  bd.label = "staging";
+  auto e = std::make_unique<StagingPool::Entry>();
+  e->buf = gpu_.device().CreateBuffer(&bd);
+  if (!e->buf) return nullptr;
+  e->size = size;
+  e->mapped = size;
+  e->ready = true;
+  pool.bytes += size;
+  stats_.staging_bytes = pool.bytes;
+  pool.entries.push_back(std::move(e));
+  return pool.entries.back().get();
+}
+
+void Renderer::staging_submitted(StagingPool::Entry* e, std::uint64_t used) {
+  e->mapped = std::min(e->size, (used + used / 4 + 0xFFFF) & ~std::uint64_t(0xFFFF));
+  e->buf.MapAsync(wgpu::MapMode::Write, 0, e->mapped, wgpu::CallbackMode::AllowSpontaneous,
+                  [e, pool = staging_](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                    if (status == wgpu::MapAsyncStatus::Success) e->ready.store(true, std::memory_order_release);
+                  });
+}
+
 void Renderer::flush() {
   end_pass();
   if (!batch_open_) return;
   // The batch's draws read the bytes at these offsets: written before its submit (what
   // the batch added; V6).
-  if (vdata_.size() > vup_) gpu_.queue().WriteBuffer(vbuf_, vup_, vdata_.data() + vup_, vdata_.size() - vup_);
-  if (idata_.size() & 1) idata_.push_back(0);  // writes are whole 4-byte words (no draw reads it)
-  if (idata_.size() > iup_) gpu_.queue().WriteBuffer(ibuf_, iup_ * 2, idata_.data() + iup_, (idata_.size() - iup_) * 2);
-  if (udata_.size() > uup_) gpu_.queue().WriteBuffer(ubuf_, uup_, udata_.data() + uup_, udata_.size() - uup_);
-  stats_.vertex_bytes += vdata_.size() - vup_;
-  stats_.index_bytes += (idata_.size() - iup_) * 2;
+  if (idata_.size() & 1) idata_.push_back(0);  // copies are whole 4-byte words (no draw reads it)
+  const std::uint64_t vb = vdata_.size() - vup_, ib = (idata_.size() - iup_) * 2, ub = udata_.size() - uup_;
+  const std::uint64_t io = (vb + 255) & ~std::uint64_t(255), uo = io + ((ib + 255) & ~std::uint64_t(255));
+  StagingPool::Entry* st = vb + ib + ub ? take_staging(uo + ub) : nullptr;
+  wgpu::CommandBuffer cbs[2];
+  std::uint32_t ncb = 0;
+  if (st) {
+    // V6: through a staging buffer, copied on the GPU before the batch's commands.
+    st->ready = false;
+    if (vb) st->buf.WriteMappedRange(0, vdata_.data() + vup_, vb);
+    if (ib) st->buf.WriteMappedRange(io, idata_.data() + iup_, ib);
+    if (ub) st->buf.WriteMappedRange(uo, udata_.data() + uup_, ub);
+    st->buf.Unmap();
+    wgpu::CommandEncoder copy = gpu_.device().CreateCommandEncoder();
+    if (vb) copy.CopyBufferToBuffer(st->buf, 0, vbuf_, vup_, vb);
+    if (ib) copy.CopyBufferToBuffer(st->buf, io, ibuf_, iup_ * 2, ib);
+    if (ub) copy.CopyBufferToBuffer(st->buf, uo, ubuf_, uup_, ub);
+    cbs[ncb++] = copy.Finish();
+    ++stats_.staged;
+  } else {
+    if (vb + ib + ub) ++stats_.unstaged;
+    if (vb) gpu_.queue().WriteBuffer(vbuf_, vup_, vdata_.data() + vup_, vb);
+    if (ib) gpu_.queue().WriteBuffer(ibuf_, iup_ * 2, idata_.data() + iup_, ib);
+    if (ub) gpu_.queue().WriteBuffer(ubuf_, uup_, udata_.data() + uup_, ub);
+  }
+  stats_.vertex_bytes += vb;
+  stats_.index_bytes += ib;
   vup_ = vdata_.size();
   iup_ = idata_.size();
   uup_ = udata_.size();
-  wgpu::CommandBuffer cb = encoder_.Finish();
-  gpu_.queue().Submit(1, &cb);
+  cbs[ncb++] = encoder_.Finish();
+  gpu_.queue().Submit(ncb, cbs);
+  if (st) staging_submitted(st, uo + ub);  // mapped again once the GPU has copied from it
   encoder_ = nullptr;
   batch_open_ = false;
   ++stats_.submits;

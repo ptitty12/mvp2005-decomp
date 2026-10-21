@@ -436,6 +436,7 @@ async function start(disc: DiscSource, canvas: OffscreenCanvas | null, width: nu
       };
     });
     if (options.gpuTimer === false) M._mvp_gpu_timing(0);  // Q5 (development)
+    if (options.staging === false) M._mvp_gpu_staging(0);  // V6 (development)
     withBytes(new TextEncoder().encode('#mvp-canvas\0'), (p) => M!._mvp_gfx_init(p, width, height));
   } else {
     post({ type: 'gfx', ok: false, message: options.render ? 'WebGPU is not available in this browser' : 'rendering off' });

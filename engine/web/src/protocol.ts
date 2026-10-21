@@ -146,6 +146,7 @@ export interface RunOptions {
   gpView?: boolean;    // development (Q1): false = the renderer reads guest memory as it is (gfx/gp_memory.h)
   gpuLoad?: number;    // development (Q5): extra GPU work per present, in proportion to the picture's pixels
   gpuTimer?: boolean;  // development (Q5): false = the render passes are not timed on the GPU
+  staging?: boolean;   // development (V6): false = the renderer uploads by queue writes, not staging buffers
   paceMargin?: number; // development (Q5): the online pace's margin (pacer.ts; default 0.98)
   paceTune?: string;   // development (Q5b): the pacer's and the paced loop's tuning, `key:value,...` (worker.ts)
   scale?: number;      // Q1: the internal resolution, 1-3 times the console's (the Picture setting)

@@ -38,6 +38,7 @@ export interface MvpEngine {
   _mvp_interp(on: number): void;  // V3: in-between frames (the Motion setting)
   _mvp_gpu_load(passes: number): void;  // Q5 (development): extra GPU work per present
   _mvp_gpu_timing(on: number): void;  // Q5 (development): 0 = no GPU timestamps (before mvp_gfx_init)
+  _mvp_gpu_staging(on: number): void;  // V6 (development): 0 = uploads by queue writes (before mvp_gfx_init)
   _mvp_mod_enable(spec: number): number;
   _mvp_mod_seed(seed: number): void;
   _mvp_mod_intro(ms: number): void;  // the page's announcement before each review

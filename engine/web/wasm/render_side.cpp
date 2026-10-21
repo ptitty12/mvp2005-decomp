@@ -28,6 +28,7 @@ EM_JS(int, mvp_js_has_frames, (), { return Module['mvpFrames'] ? 1 : 0; });
 namespace mvp::web {
 
 bool g_gpu_timing = true;
+bool g_gpu_staging = true;
 
 void XfbTap::efb_copy(const gfx::EfbCopy& c) {
   if (c.to_xfb) {
@@ -55,6 +56,7 @@ void RenderSide::attach() {
   if (!gpu || !window || !mem_ || renderer_) return;
   renderer_ = std::make_unique<gfx::Renderer>(*gpu, mem_, mem_size_, static_cast<std::uint32_t>(scale_));
   renderer_->set_gp_memory(&gp_);
+  renderer_->set_staging(g_gpu_staging);  // V6
   if (g_gpu_timing) {
     timer_ = std::make_unique<gfx::GpuTimer>(*gpu);  // Q5: the GPU's time (off without timestamp queries)
     if (timer_->on()) renderer_->set_timer(timer_.get());
@@ -240,14 +242,16 @@ std::string RenderSide::status_json() const {
     std::snprintf(b, sizeof b,
                   ",\"gx\":{\"prims\":%llu,\"verts\":%llu,\"snaps\":%llu,\"same\":%llu,\"merged\":%llu,"
                   "\"encoded\":%llu,\"vbytes\":%llu,\"ibytes\":%llu,\"tex_hits\":%llu,\"cmds\":%llu,\"passes\":%llu,"
-                  "\"tex_copies\":%llu,\"clears\":%llu,\"submits\":%llu}",
+                  "\"tex_copies\":%llu,\"clears\":%llu,\"submits\":%llu,\"staged\":%llu,\"unstaged\":%llu,\"staging_mb\":%.1f}",
                   static_cast<unsigned long long>(ps.draws), static_cast<unsigned long long>(ps.vertices),
                   static_cast<unsigned long long>(ps.snapshots), static_cast<unsigned long long>(rs.same_state),
                   static_cast<unsigned long long>(rs.merged), static_cast<unsigned long long>(rs.encoded),
                   static_cast<unsigned long long>(rs.vertex_bytes), static_cast<unsigned long long>(rs.index_bytes),
                   static_cast<unsigned long long>(rs.texture_hits), static_cast<unsigned long long>(ps.commands),
                   static_cast<unsigned long long>(rs.passes), static_cast<unsigned long long>(rs.tex_copies),
-                  static_cast<unsigned long long>(rs.clears), static_cast<unsigned long long>(rs.submits));
+                  static_cast<unsigned long long>(rs.clears), static_cast<unsigned long long>(rs.submits),
+                  static_cast<unsigned long long>(rs.staged), static_cast<unsigned long long>(rs.unstaged),
+                  static_cast<double>(rs.staging_bytes) / 1048576.0);
     s += b;
     // V3: in-between frames (gfx/wgpu/renderer.h, InterpStats): made, not made and why, shown.
     const gfx::Renderer::InterpStats& is = renderer_->interp_stats();
