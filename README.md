@@ -3,249 +3,238 @@
 > Thank you\
 > -Human
 
-# mvp2005-decomp: MVP Baseball 2005 in the browser
+# MVP Baseball 2005 in the browser
 
-MVP Baseball 2005 for the Nintendo GameCube (`GV4E69`, USA, rev 0), brought
-to the web. The goals, in priority order (owner, 2026-10-14):
+MVP Baseball 2005 for the Nintendo GameCube (`GV4E69`, USA, rev 0), playable in a
+web browser: alone, against a friend in another browser, or with a modern roster.
 
-1. **The game runs in a web browser.**
-2. **Online multiplayer in the browser.** Matchmaking runs on the owner's
-   server; each player's game runs locally in their own browser.
-3. **New rosters and teams are easy to add.**
+The browser runs the **retail game's own code**. The player's disc image is
+checked, its `main.dol` is translated from PowerPC to WebAssembly on the
+player's machine, and an engine written for this project stands in for the
+GameCube: memory, the Nintendo SDK's OS, disc, controllers, timing, audio, and
+a GX-to-WebGPU renderer.
 
-Above all, it is built on a foundation that creates no tech debt: mods never
-need rework because the decompilation moved on.
+This is a personal project in a public repository. It holds source, tooling and
+docs only. It holds no game data, and nothing derived from the disc, not even the
+translated code.
 
-This is a personal project, and the repository is public. It holds source,
-tooling and docs only, never game data. Every player brings a disc image dumped
-from their own copy, and everything derived from it stays in their browser.
+## What it is, and what it is not
+
+| It is | It is not |
+|---|---|
+| A static recompiler (PowerPC to WebAssembly) plus a hardware and SDK runtime, built for one game | A general GameCube emulator. It refuses any disc but GV4E69 rev 0 |
+| The retail binary, running unchanged, with mods applied through hooks at fixed retail addresses | A source port. The game's own C/C++ is not needed to play, and mods never build against it |
+| Deterministic: every player's browser computes the same game from the same inputs | Bit-exact to a real GameCube. The owner chose "runs right, and the same for both players" (DECISIONS F1, 2026-10-16) |
+| Backed by a matching decompilation that names things and proves how they work | A finished decompilation. That stopped being the goal on day four (below) |
+
+## Where it stands (2026-10-21)
+
+**Playable.** A full nine-inning game runs in Chrome, Edge and Firefox at full
+speed on a desktop (i7-14700K, RTX 4070 SUPER), with sound, controllers and the
+in-game memory card.
+
+- **Engine** (`engine/`):
+  - The whole DOL translates in the browser in about half a second, then is cached in the browser.
+  - The emulation thread needs about 7.5 ms per 16.7 ms field on the dev PC. A machine 1.3 times slower (the owner's ThinkPad stand-in) keeps full speed; one twice as slow runs at about 0.97x.
+  - The renderer runs on its own thread. The picture can be drawn at 1x, 2x or 3x the console's resolution, and Auto picks one for the GPU.
+- **Online play:** two browsers in lockstep over WebRTC.
+  - The owner's VPS runs the lobby, signaling and a TURN relay, deployed with Dokploy.
+  - Input delay is chosen from the measured link.
+  - When one machine is slower, both run at a shared pace instead of stuttering.
+- **Rosters and teams:** roster and team packs (format v1, `docs/MODDING.md`) patch the game's own database tables.
+  - Packs are checked and hashed, and both online players must use the same set.
+  - The server can host packs.
+  - A full MLB 2026 pack (all 30 clubs and their minor leagues, real headshots and 2026 stat lines) was built locally from public data. Its pipeline is on a side branch, not on main, and the built pack is never committed: the headshots are copyrighted.
+- **Gameplay mods:** a versioned hook API with one shipped mod, the ABS challenge (`docs/mods/ABS_CHALLENGE.md`).
+  - The umpire misses some calls, and either side can challenge them.
+  - A challenge cuts to a rewound half-speed replay, then the call is upheld or overturned.
+- **Save states:** F2 saves and F4 loads, in the browser or from a file.
+  - The admin's states live on the server.
+- **The site:**
+  - The page copies MVP 2005's own gray menu look.
+  - Anyone can play with their own disc image.
+  - A private player link gives friends the owner's disc. It is never public.
+  - An admin link gives the owner the disc page, save states and a memory card kept on the server.
+
+What's still rough is tracked in `PROGRESS.md` and the logs in `docs/engine/`. The
+main gap is weaker machines: below about 0.75x of the dev PC the game slows down.
 
 ## How it works
 
-Two tracks feed one product ([`docs/ROADMAP.md`](docs/ROADMAP.md)):
+```
+ player's disc image (picked file, or the owner's server for player-link holders)
+   │  identity check: GV4E69 rev 0, main.dol SHA-1 da6becdb...
+   ▼
+ translator ── main.dol ─► one WebAssembly module (cached in the browser's private storage)
+   │
+   ▼
+ emulation thread (Worker)                              render thread (pthread)
+   translated game code + runtime:                        GX state machine
+   memory, OS/SDK HLE, disc, VI/AI/DSP/PE  ──GX ring──►   (CPU transform + TEV)
+   models, a virtual clock, the input queue               → WebGPU (EFB, copies, XFB)
+   │            │                                            │ ImageBitmap per frame
+   │            └─ audio ring ─► AudioWorklet (drift resampler, time-stretch)
+   ▼                                                         ▼
+ lockstep netplay (WebRTC data channel)                 page (canvas, input, panels)
+```
 
-- **The engine** (`engine/`, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
-  The browser runs the *retail* game code. A translator turns the PowerPC code
-  of the player's own `main.dol` into WebAssembly. A runtime supplies the rest:
-  memory, OS, disc, controllers, timing, audio, and a GX-to-WebGPU renderer.
-  - Netplay keeps two browsers in lockstep on controller inputs over WebRTC.
-  - The owner's VPS runs the lobby, signaling and a TURN relay.
-- **The knowledge track** (`src/`, `include/`, `config/`). A matching
-  decompilation: C/C++ that the original compilers turn back into a
-  byte-identical `main.dol` (SHA-1 `da6becdbea614d03c4b5eae9f8a0fb08e0a184dd`).
-  It is aimed at what the engine and the mods need:
-  - the SDK functions the engine replaces;
-  - everything that can make two netplay runs differ;
-  - the roster and team data;
-  - the main loop.
+- **Translator** (`engine/translator/`): from the CFG of `main.dol`, using
+  `config/GV4E69/symbols.txt` for function boundaries. It writes one WebAssembly
+  module (or C++ for native builds). Guest registers live in locals, with resume
+  labels so that threads and host yields can unwind and re-enter.
+- **Runtime** (`engine/runtime/`): the machine, the IPL environment, HLE for SDK
+  functions, the hardware models the game reads (VI, PI, CP/PE, AI, DSP/AX, DVD,
+  EXI memory card), a virtual clock (1.25 cycles per instruction), and save states.
+- **Renderer** (`engine/gfx/`): GX commands to draws (CPU vertex transform, TEV to
+  WGSL), then Dawn/WebGPU natively and in the browser.
+- **Web shell** (`engine/web/`): the page, the Worker, the threaded engine, audio,
+  controllers, the pacing, the disc download, packs and mods panels.
+- **Server** (`engine/server/`): TypeScript. Lobby, signaling, TURN config, the
+  disc for player-link holders, packs, the admin's states and memory card. Deploy
+  guide: `docs/engine/DEPLOY_DOKPLOY.md`.
+- **Determinism** is an invariant. Host time and host input reach the game only
+  through the per-frame input queue and the virtual clock. Every change is checked
+  against recorded "guest lines" (instruction count and a hash of main memory at
+  fixed fields), natively and in the browser.
 
-  [`tools/goals/targets.py`](tools/goals/targets.py) measures those targets.
+Design and decisions: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The browser
+build: [`docs/engine/WEB.md`](docs/engine/WEB.md). Netplay:
+[`docs/engine/NETPLAY.md`](docs/engine/NETPLAY.md).
 
-**Mods depend only on three contracts that never change:**
-- the retail binary's code and addresses;
-- the game's own data formats (roster and team packs patch the database tables
-  the game reads);
-- the engine's versioned APIs.
+## How it got here
 
-They never depend on decomp source, so decomp progress can't break them.
+The project did not start out to build an engine. It started as a classic
+matching decompilation and changed course when the owner's real goals were
+written down.
 
-## Status
+| Dates (2026) | What happened |
+|---|---|
+| Oct 10 | **A matching decomp.** Recon of the disc. The toolchain was identified: SN ProDG 3.9.3 (GCC 2.95.3) for the game and EA libraries, Metrowerks CW 1.2.5n for the Dolphin SDK. A dtk-template scaffold rebuilt a byte-identical DOL from split assembly. The plan was to finish the decomp, then port the source (Phase 3) |
+| Oct 10-13 | **An agent fleet matched most functions.** An Opus lead, up to 13 Sonnet workers, Codex agents and a permuter farm reached 87% of functions but 52% of code bytes in four days. The long tail was big, float-heavy game code. The weekly usage cap, not difficulty, set the pace |
+| Oct 14 | **The pivot.** The owner set the real goals: play in a browser, play online, add rosters easily, with no tech debt. A source port needs 100% of the code in portable C, and mods written against decomp source would break whenever it moved. So the engine track began: run the retail binary. The decomp became the knowledge track (SDK names, determinism sources, roster formats) and the near-miss tail was paused. The same day, our own translator booted the DOL natively, Dawn drew the title screen, and the game booted in Chrome |
+| Oct 15 | A full nine-inning game, native and deterministic. Lockstep netplay and the VPS server, deployed by the owner. Then the owner's first play test: "unplayable, way too choppy" |
+| Oct 15-17 | **Making it feel right.** Q1-Q7 and P1/P2: menu flicker, sound that stretches instead of cutting out, controllers with a guided setup, the disc downloaded once instead of streamed, the renderer on its own thread, multi-second freezes traced to an idle-skip bug (CLK2), emulation 30% faster, pacing between unequal machines online, a frozen block after a scale change |
+| Oct 16 | **F1:** deterministic across players matters, bit-exactness to the console doesn't. That unlocked a faster floating-point model |
+| Oct 17-20 | **Mods and polish.** The hook API and the ABS challenge, the MLB 2026 roster pipeline, packs on the server, save states, the in-game memory card, an open site with player and admin links, MVP 2005's menu look, thin-line fixes at 2x/3x |
+| Oct 21 | Frame pacing and high-refresh work (this README's update; see `PROGRESS.md`) |
 
-| Track | Where it stands (2026-10-14) | Next |
-|---|---|---|
-| Engine | Not started | E0: survey the GameCube recompilers, then a native boot spike |
-| Knowledge | 87.4% of functions matched; the targets the engine needs are mostly matched but not yet named (below) | K1: name the SDK functions the game calls |
-
-| Knowledge target | Functions | Named | Matched | Done |
-|---|---:|---:|---:|---:|
-| K1 SDK boundary | 299 | 143 | 251 | 48% |
-| K2 roster data | 60 | 4 | 56 | 7% |
-| K3 determinism | 192 | 0 | 112 | 0% |
-| K4 main loop | 81 | 1 | 70 | 1% |
-
-The milestones (E0-E7, K1-K5), their exit criteria and the ordered next steps
-are in [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
-### Decompilation progress
-
-![Decompilation progress: percent of code matched, a treemap of units shaded by match percent, and progress over time](docs/progress/progress.svg)
-
-The card above is live. This table is a snapshot of `main` at `d0a166c2`
-(2026-10-14):
-
-| Measure | Done | Total | Share |
-|---|---:|---:|---:|
-| Functions matched | 21,109 | 24,158 | 87.4% |
-| Code bytes matched | 3,075,304 | 5,896,176 | 52.2% |
-| Code built from source (units linked from our C/C++) | 386,148 | 5,896,176 | 6.5% |
-| Units built from source | 234 | 847 | 27.6% |
-| Data bytes matched | 12,710 | 1,369,010 | 0.9% |
-
-- **Matched** means objdiff scores the function 100% against the original
-  object code. **Built from source** means the whole unit (every function and
-  its data) links from our source, and the final DOL still has the retail hash.
-- Of the 2.82 MB of code still unmatched, 2.50 MB has no source yet. The engine
-  doesn't need it, because it runs the retail code. The decomp covers it as the
-  targets reach it.
-
-| Source folder | What it is | Functions matched | Code matched |
-|---|---|---:|---:|
-| `src/game/` | Game code in main `.text` | 12,451 / 14,246 | 49.7% of 3.31 MB |
-| `src/fe/` | Front-end / franchise UI (`.frontend_codeoverlay`) | 3,132 / 3,408 | 55.2% of 960 KB |
-| `src/db/` | Database / roster / trade (`.database_codeoverlay`) | 1,520 / 1,779 | 50.2% of 494 KB |
-| `src/ealib/`, `src/ealibs/` | EA shared libraries (EAGL, RealCore, AV/VP6, ...) | 1,368 / 1,665 | 50.4% of 469 KB |
-| `src/animation/` | Animation choosers and goals (one retail unity TU) | 967 / 1,057 | 46.6% of 239 KB |
-| `src/dolphin/`, `src/sdk/` | Nintendo Dolphin SDK | 696 / 839 | 79.8% of 175 KB |
-| `src/snd/` | EA SND 9.02.04 + csis | 437 / 480 | 69.6% of 92 KB |
-| `src/gamelib/` | EA gamelib (allocator, datafile, animlib) | 359 / 402 | 49.4% of 85 KB |
-| `src/libc/`, `src/libm/`, `src/libgcc/`, `src/libsn/` | SN runtime: newlib, fdlibm, libgcc, libsn | 179 / 273 | 82.0% of 70 KB |
-
-The card updates itself. A scheduled task on the owner's PC runs
-`tools/progress_bot.py` every 2 minutes; it builds `main`, redraws the card,
-verifies and pushes a `docs: update progress card` commit. The
-**[live fleet dashboard](https://github.com/ptitty12/mvp2005-decomp/tree/dashboard)**
-shows matching speed, each worker's activity and the merge backlog.
+The old phase plan is kept as history in [`docs/ROADMAP.md`](docs/ROADMAP.md) §6.
 
 ## The decompilation (knowledge track)
 
-### Toolchain
+The decomp is how the engine work understands the game. It names the SDK functions
+the runtime replaces, finds everything that could make two netplay runs differ, maps
+the roster tables, and gives mod hook points readable names. Byte-identical matching
+is still how a decompiled function is proven correct.
 
-Found in recon (`docs/RECON_REPORT.md`):
+| Measure (main, 2026-10-14; unchanged since the pivot) | Done | Total | Share |
+|---|---:|---:|---:|
+| Functions matched | 21,141 | 24,158 | 87.5% |
+| Code bytes matched | 3,091,588 | 5,896,176 | 52.4% |
+| Units built entirely from source | 234 | 850 | 27.5% |
 
-- **Game code and EA libraries:** SN Systems ProDG 3.9.3 (`GNU C++ 2.95.3 SN
-  BUILD v1.76`). Game code uses `-Os -G0 -fno-rtti -fno-exceptions
-  -ffloat-store`; the EA libraries mostly use `-O2`. Flags are pinned per
-  library, and sometimes per unit, with evidence in `docs/DECISIONS.md`.
-- **Dolphin SDK:** Metrowerks CodeWarrior GC/1.2.5n (GC/2.0 for VM and the
-  debugger driver), with per-file flags such as `-opt nopeephole`.
-- **Link:** SN `ngcld` 1.5.1.692 with a static linker script
-  (`config/GV4E69/ldscript.ld`). `tools/mkdol.py` packs the DOL.
+![Decompilation progress: percent of code matched, a treemap of units shaded by match percent, and progress over time](docs/progress/progress.svg)
 
-Built on dtk-template, decomp-toolkit and objdiff, patched for ProDG
-(`tools/project.py`). The game has no symbols or map.
+The knowledge targets (`python tools/goals/targets.py`): K1 SDK boundary 99% named;
+K2 roster data, K3 determinism and K4 main loop are mostly matched, but most of
+their functions are still unnamed.
 
-### Building
+**Toolchain.** Game code and EA libraries: SN ProDG 3.9.3 (`GNU C++ 2.95.3 SN BUILD
+v1.76`, `-Os -G0 -fno-rtti -fno-exceptions -ffloat-store`; EA libraries mostly
+`-O2`). Dolphin SDK: Metrowerks CodeWarrior GC/1.2.5n (GC/2.0 for VM and the debugger
+driver). Link: SN `ngcld` 1.5.1.692 with `config/GV4E69/ldscript.ld`. The build uses
+dtk-template, decomp-toolkit and objdiff, patched for ProDG (`tools/project.py`). The
+game shipped with no symbols or map.
 
-Put a disc image (`.iso`, `.ciso`, `.rvz`, ...) or the extracted `mvp.elf` in
-`orig/GV4E69/` (gitignored), then:
+**Building the decomp.** Put a disc image or the extracted `mvp.elf` in
+`orig/GV4E69/` (gitignored), then run `python configure.py` and `ninja` on native
+Windows (ProDG and MWCC are Win32 programs). The build checks the result against the
+retail SHA-1 `da6becdbea614d03c4b5eae9f8a0fb08e0a184dd` and writes the objdiff
+report.
 
-```sh
-python configure.py
-ninja
-```
+**What counts as matched** is decided by tools, not agents. `tools/verify/verify.py`
+checks protected files, the retail hash, the hard rules (no inline asm, naked
+functions or `.incbin`) and score regressions. `tools/match/check_literals.py`
+catches a "100%" function that loads the wrong constant or calls the wrong target.
 
-`ninja` rebuilds `build/GV4E69/main.dol` from compiled source plus the
-remaining split assembly, checks it against `config/GV4E69/build.sha1`, and
-writes the objdiff report `build/GV4E69/report.json`. The host is native
-Windows: ProDG and MWCC are Win32 programs. The engine has no build yet (E0).
-
-### What counts as matched
-
-The verifier decides, not any agent:
-
-- `tools/verify/verify.py` checks four things:
-  - protected-file integrity;
-  - the retail SHA-1;
-  - the hard rules (no inline asm, naked functions or `.incbin`; only approved pragmas);
-  - no score drops against a baseline.
-- `tools/match/check_literals.py` catches a "100%" function that loads the
-  wrong float, string, global or call target. `tools/team/integrate.py` refuses
-  commits that add one.
-- CI runs the integrity check on GitHub. The full build runs only on the
-  owner's machine, because game files never leave it.
+**Building the engine:** [`docs/engine/WEB.md`](docs/engine/WEB.md) §1 (browser)
+and [`docs/engine/E0B_LOG.md`](docs/engine/E0B_LOG.md) (native). Toolchain versions are in
+[`docs/engine/TOOLCHAIN.md`](docs/engine/TOOLCHAIN.md).
 
 ## Who does the work
 
-AI agents write every line of code and docs. The owner dumped the disc, sets
-the goals, approves the decisions that are theirs (`docs/DECISIONS.md`), and
-never runs commands.
+AI agents write every line of code and docs. The owner dumped the disc from their
+own copy, sets the goals, makes the decisions that are theirs
+(`docs/DECISIONS.md`), deploys, plays, and never runs commands.
 
-- **Claude Code:**
-  - an Opus 5.5 **lead** plans batches from the knowledge targets, owns shared
-    headers and config, and merges and verifies;
-  - Sonnet 5.5 **workers** match and name functions in their own worktrees;
-  - **side sessions** build the engine and the tools;
-  - Fable 5.1 takes hard functions "when needed".
+- **Claude Code:** Opus 5.5 leads and builds the engine in side sessions, Sonnet 5.5
+  workers match and name functions, and Fable 5.1 takes hard functions when needed.
 - **Codex** agents work under the same rules (`AGENTS.md`).
-- **Coordination:** `tools/coord.py` keeps a shared roster, unit claims, an
-  inbox and one integration lock (`docs/COORDINATION.md`).
-- **Background jobs** run as scheduled tasks on the owner's PC: the progress
-  bot, the dashboard and the permuter farm.
+- **Coordination:** `tools/coord.py` keeps a shared roster, unit claims, an inbox and
+  one integration lock (`docs/COORDINATION.md`).
 
 ## Rules, in short
 
-The full rules are in [`CLAUDE.md`](CLAUDE.md). The most important:
+The full rules are in [`CLAUDE.md`](CLAUDE.md).
 
-- Never commit or publish game data, or anything derived from the disc (the owner's
-  deployment may serve the owner's own disc image to players with its player link, and the owner's own
-  save states to the owner alone):
-  - assets;
-  - translated game code;
-  - memory dumps, screenshots and recordings.
-- Mods depend only on the three contracts above, never on decomp source.
-- Decomp: no inline asm in any form, and no tricks that force a match. One unit
-  per commit, plus name commits and contract commits. The verifier decides.
-- Engine: determinism is an invariant. Every component has tests that need no
-  game data.
-- No GPL code copied in (Dolphin is a reference, not a source).
+- **No game data:**
+  - Nothing from the disc, and nothing derived from it, is committed or published: assets, translated code, memory dumps, screenshots, recordings.
+  - The owner's own deployment may serve the owner's disc to player-link holders.
+  - It may serve the owner's save states to the owner alone.
+- Mods depend only on three stable contracts: the retail binary's addresses, the
+  game's data formats, and the engine's versioned APIs. Never on decomp source.
+- Engine: determinism is an invariant. Every component has tests that need no game
+  data.
+- Decomp: no inline asm in any form, and no tricks that force a match. The verifier
+  decides.
+- No GPL code copied in. Dolphin is a reference, not a source.
 - Agents never change the verifier, CI or `.claude/`.
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `engine/` | The browser engine: translator, runtime, renderer, audio, virtual disc, mods, netplay, web shell, VPS services. Starts at E0 |
-| `src/` | Decompiled C/C++, one file per split unit (`game/tu_<addr>.cpp` until the original file name is known) |
-| `include/` | Shared headers. Struct comments record their evidence |
-| `config/GV4E69/` | dtk config (`splits.txt`, `symbols.txt`), linker script, DOL layout, retail hash, EA reference names and datafile schemas |
-| `configure.py`, `tools/project.py` | Build generator (dtk-template with the ProDG pipeline) |
-| `tools/goals/` | `targets.py`: the knowledge targets and their progress |
-| `tools/verify/` | The verifier and its protected-file hashes. Owner-only |
-| `tools/match/` | Matching helpers ([README](tools/match/README.md)) |
-| `tools/scout/`, `tools/swarm/`, `tools/team/` | Unit packets and renaming, merge drivers, integration and the lead's batch scripts |
-| `tools/recon/` | Disc and binary analysis ([README](tools/recon/README.md)) |
-| `tools/*.py` | `coord.py`, `progress_bot.py`, `progress_chart.py`, `fleet_dashboard.py`, `mkdol.py`, dtk-template helpers |
-| `docs/` | Roadmap, architecture, decisions, patterns, logs and research |
-| `prompts/` | Agent briefs |
+| `engine/` | The engine: translator, runtime, renderer, audio, virtual disc, mods, netplay, web shell, server ([README](engine/README.md)) |
+| `deploy/` | Docker compose for the owner's VPS (Dokploy) |
+| `src/`, `include/` | Decompiled C/C++, one file per split unit, and shared headers |
+| `config/GV4E69/` | dtk config (`splits.txt`, `symbols.txt`), linker script, retail hash, EA reference names, datafile schemas |
+| `configure.py`, `tools/project.py` | The decomp's build generator |
+| `tools/` | Matching helpers, recon, roster tools (`rosters/`), knowledge targets (`goals/`), the verifier (`verify/`, owner-only), coordination and fleet scripts |
+| `docs/` | Roadmap, architecture, decisions, engine logs (`docs/engine/`), modding, game data, patterns |
 | `orig/`, `build/` | Disc files and build output. Gitignored, never committed |
 
 ## Docs
 
 | File | What's in it |
 |---|---|
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | The goal, the strategy, milestones with exit criteria, next steps |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Engine design: translator, runtime, renderer, audio, virtual disc, mods, netplay, decisions |
-| [`CLAUDE.md`](CLAUDE.md) | The rules every agent follows |
-| [`AGENTS.md`](AGENTS.md) | Entry point for Codex and other non-Claude agents |
-| [`PROGRESS.md`](PROGRESS.md) | Snapshot and session log, newest last |
-| [`HANDOFF.md`](HANDOFF.md) | The lead's hand-off: state, how to resume, queues, scripts |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Decisions (toolchain, flags, splits, policy, direction) and open questions for the owner |
-| [`docs/COORDINATION.md`](docs/COORDINATION.md) | The Claude/Codex coordination protocol (`tools/coord.py`) |
-| [`docs/GAME_DATA.md`](docs/GAME_DATA.md) | EA datafile, database tables, schedules and archive formats |
-| [`docs/PATTERNS.md`](docs/PATTERNS.md) | Source patterns that produced byte-identical matches with ProDG/g++ 2.95 |
-| [`docs/NEARMISS.md`](docs/NEARMISS.md) | Parked near-misses and what was tried |
-| [`docs/SPEEDUPS.md`](docs/SPEEDUPS.md) | Speed-up ideas, observations and what was tried |
-| [`docs/REUSE.md`](docs/REUSE.md), [`docs/REFERENCE_SOURCES.md`](docs/REFERENCE_SOURCES.md) | Public code we can use, and every outside source checked, with verdicts |
-| [`docs/RECON_REPORT.md`](docs/RECON_REPORT.md), [`docs/RECON_CHECKLIST.md`](docs/RECON_CHECKLIST.md) | Recon report: disc, sections, toolchain evidence, subsystems (2026-10-10 snapshot) |
-| [`docs/UNITS.md`](docs/UNITS.md) | First-pass unit anchors (2026-10-10 snapshot; the live split is `config/GV4E69/splits.txt`) |
-| [`docs/SWARM_SESSION_2026-10-13.md`](docs/SWARM_SESSION_2026-10-13.md), [`docs/audits/`](docs/audits/), [`docs/notes/`](docs/notes/) | Session reports, audits and per-function notes |
-| [`docs/dtk/`](docs/dtk/) | decomp-toolkit / dtk-template reference docs |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | The goals, the two tracks, milestones E0-E7 and K1-K5, history |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Engine design and decisions D1-D8 |
+| [`docs/engine/`](docs/engine/) | One log per engine milestone and quality pass (E0-E6, Q1-Q8, P1-P2, CLK2), plus WEB.md, NETPLAY.md, DEPLOY_DOKPLOY.md |
+| [`docs/MODDING.md`](docs/MODDING.md), [`docs/mods/`](docs/mods/) | Roster and team pack format v1; gameplay mods |
+| [`docs/DETERMINISM.md`](docs/DETERMINISM.md), [`docs/ROSTERS.md`](docs/ROSTERS.md), [`docs/GAME_DATA.md`](docs/GAME_DATA.md) | What can make runs differ; the roster database; EA data formats |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Every decision, with open questions for the owner |
+| [`PROGRESS.md`](PROGRESS.md) | Session log, newest last |
+| [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md), [`docs/COORDINATION.md`](docs/COORDINATION.md) | Agent rules and coordination |
+| [`docs/PATTERNS.md`](docs/PATTERNS.md), [`docs/NEARMISS.md`](docs/NEARMISS.md), [`docs/SPEEDUPS.md`](docs/SPEEDUPS.md) | Matching know-how from the decomp phase |
+| [`docs/RECON_REPORT.md`](docs/RECON_REPORT.md), [`docs/REFERENCE_SOURCES.md`](docs/REFERENCE_SOURCES.md), [`docs/REUSE.md`](docs/REUSE.md) | Recon, every outside source checked, and what code we may reuse |
 
-## Credits and references
+## Credits
 
 - [decomp-toolkit](https://github.com/encounter/decomp-toolkit),
   [dtk-template](https://github.com/encounter/dtk-template) and
-  [objdiff](https://github.com/encounter/objdiff) by encounter. The template's
-  license is in `docs/dtk/LICENSE-dtk-template`.
+  [objdiff](https://github.com/encounter/objdiff) by encounter (template license in
+  `docs/dtk/LICENSE-dtk-template`).
+- [Dawn](https://dawn.googlesource.com/dawn) and emdawnwebgpu (WebGPU), [Emscripten](https://emscripten.org/),
+  [SDL3](https://www.libsdl.org/) (native window and audio). Notices for code compiled into the
+  browser engine ship in its `licenses/` folder.
 - [decomp-permuter](https://github.com/simonlindholm/decomp-permuter) and
   [m2c](https://github.com/matt-kempster/m2c), used from external clones.
-- [mitsevox/mvp2005](https://github.com/mitsevox/mvp2005) (CC0): ported
-  Dolphin SDK, libc, libm, libsn and SND sources, and EA reference names.
-- [adonis-singh/re4](https://github.com/adonis-singh/re4): Dolphin SDK
-  bodies (dolsdk2004) and ProDG compiler notes.
-- [dbalatoni13/nfsmw](https://github.com/dbalatoni13/nfsmw): prior art for
-  ProDG matching on an EA GameCube title.
+- [mitsevox/mvp2005](https://github.com/mitsevox/mvp2005) (CC0): ported SDK, libc,
+  libm, libsn and SND sources, and EA reference names.
+- [adonis-singh/re4](https://github.com/adonis-singh/re4): Dolphin SDK bodies and
+  ProDG notes. [dbalatoni13/nfsmw](https://github.com/dbalatoni13/nfsmw): prior art
+  for ProDG matching on an EA GameCube title.
 
-MVP Baseball 2005 is a trademark of its owners. This project is not
-affiliated with EA, Nintendo or MLB. It contains no game data and hosts
-nothing derived from it: every player supplies their own disc.
+MVP Baseball 2005 is a trademark of its owners. This project is not affiliated
+with EA, Nintendo or MLB. It contains no game data and hosts nothing derived
+from it. Every player supplies their own disc.
