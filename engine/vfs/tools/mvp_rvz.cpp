@@ -24,9 +24,21 @@
 // which is where the 340 ms frame comes from. The decompressed-chunk cache matters
 // as much: before it existed the 2 MiB image cost 1269 ms over the file path.
 //
-// The default is 128 KiB: over the server it is within 30% of the uncompressed
-// image at 81% of its size, and the frame worse-case matches it. A local-only image
-// can use 2 MiB to save 70 MB, at the cost of that server penalty.
+// The default is 128 KiB and level 9: over the server it is within 30% of the
+// uncompressed image at ~81% of its size, and the frame worse-case matches it. A
+// local-only image can use 2 MiB. For the smallest image, ignore latency and pack
+// with --chunk 2097152 --level 19: 912 MB (66%), but a 420 ms file path and a much
+// worse worst-case frame. Level is nearly free at run time (zstd decode speed barely
+// moves with it), so it is only ever a packing-time cost:
+//
+//   level   size @128 KiB   pack time
+//   3       1119 MB (81.1%) 26 s
+//   9       1113 MB (80.7%) 32 s
+//   15      1100 MB (79.8%) 2m33s
+//   19      1095 MB (79.4%) 5m42s
+//
+// Stripping is not available: the disc is 100% covered by its files (461 bytes
+// unused), because NKit had already removed the junk, so there is nothing to drop.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -40,7 +52,7 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: mvp-rvz pack <image> <out.rvz> [--level N] [--chunk N] [--none]\n"
-               "  --level N  Zstandard level (default 3; negative is legal)\n"
+               "  --level N  Zstandard level (default 9; negative is legal)\n"
                "  --chunk N  chunk size in bytes (default 128 KiB; see the note above)\n"
                "  --none     store chunks uncompressed\n");
   return 2;
@@ -55,7 +67,7 @@ int main(int argc, char** argv) {
 
   const std::string in = argv[2];
   const std::string out = argv[3];
-  int level = 3;
+  int level = 9;
   // 128 KiB: the server path's measurement above. Not RvzSource::kDefaultChunkSize,
   // which is the format's reference size (what Dolphin writes), not our choice.
   std::uint32_t chunk = 0x20000;
