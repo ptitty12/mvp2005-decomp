@@ -339,7 +339,7 @@ struct Unk803E6950 {
     int m2C;
 };
 
-extern "C" int fn_803E6A70(Unk803E6950* o, int index, int a, int b, int c);
+extern "C" int DrawArray(Unk803E6950* o, int index, int a, int b, int c);
 
 inline int FindSet(Unk803E6950* o, const char* name, int a, int b, int c)
 {
@@ -350,7 +350,7 @@ inline int FindSet(Unk803E6950* o, const char* name, int a, int b, int c)
             break;
         }
     }
-    return fn_803E6A70(o, found, a, b, c);
+    return DrawArray(o, found, a, b, c);
 }
 
 extern "C" int fn_803DBDD8(void* m, int a);
@@ -875,7 +875,7 @@ extern "C" int fn_803E69D8(Unk803E6950* o, const char* name, int a, int b, int c
 extern char lbl_8060CB34[];
 extern "C" int fn_803E7320(int level, const char* fmt, ...);
 
-extern "C" int fn_803E6A70(Unk803E6950* o, int idx, int val, int flag, int extra)
+extern "C" int DrawArray(Unk803E6950* o, int idx, int val, int flag, int extra)
 {
     int r = 0;
     if (idx != -1) {

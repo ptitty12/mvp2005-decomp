@@ -975,3 +975,6 @@ fn_803F8B24	Seek
 fn_803F9114	VerifyHeaderChecksum
 fn_80402FCC	Unicode2Ascii
 fn_803D8918	SetupFrameBuffers
+fn_803E6A70	DrawArray
+fn_804053F0	snPause
+fn_803E910C	DynamicLoader::GetAddr
