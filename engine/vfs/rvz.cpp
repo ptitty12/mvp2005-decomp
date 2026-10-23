@@ -176,6 +176,10 @@ std::unique_ptr<RvzSource> RvzSource::open(std::unique_ptr<Source> inner, std::s
   } else if (chunk % kDefaultChunkSize != 0) {
     return fail("RVZ: chunk size is not a multiple of 2 MiB");
   }
+  // A file is untrusted input: the chunk size bounds what one read may allocate, and
+  // a real image's chunk is 2 MiB (Dolphin's own maximum). Without this, a mutated
+  // field asks for a multi-gigabyte allocation before anything else notices.
+  if (chunk > (64u << 20)) return fail("RVZ: chunk size is implausibly large");
 
   const std::uint32_t n_part = be32(h.data() + 0xD8);
   if (n_part != 0)
@@ -183,6 +187,8 @@ std::unique_ptr<RvzSource> RvzSource::open(std::unique_ptr<Source> inner, std::s
 
   const std::uint64_t iso_size = be64(h.data() + 0x24);
   if (iso_size == 0) return fail("RVZ: zero disc size");
+  // Untrusted input: a mutated size field must not become a huge extent.
+  if (iso_size > (16ull << 30)) return fail("RVZ: disc size is implausibly large");
 
   const std::uint32_t n_raw = be32(h.data() + 0xFC);
   const std::uint64_t raw_off = be64(h.data() + 0x100);
@@ -263,6 +269,9 @@ std::unique_ptr<RvzSource> RvzSource::open(std::unique_ptr<Source> inner, std::s
     g.packed = be32(e + 8);
     if (g.stored != 0 && g.file_off + g.stored > s->inner_->size())
       return fail("RVZ: a group is outside the file");
+    // rvz_packed_size is the size before RVZ packing is decoded, so it cannot exceed
+    // what one chunk decompresses to; unchecked it is another huge allocation.
+    if (g.packed > chunk) return fail("RVZ: a group's unpacked size exceeds a chunk");
     s->groups_.push_back(g);
   }
   return s;

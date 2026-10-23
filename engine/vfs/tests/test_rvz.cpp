@@ -152,3 +152,48 @@ TEST_CASE("rvz: a malformed image is refused with a reason") {
   cut.resize(0x124 + 8);
   CHECK_FALSE(open_rvz(cut, &error));
 }
+
+// The image a page loads can arrive corrupted (a broken download, a bad LAN hop, or
+// a hostile file). Opening a damaged one must fail with a reason or produce a source
+// that reads safely; it must never crash, and it must never be talked into an
+// enormous allocation by a mutated size field.
+TEST_CASE("rvz: a mutated image is rejected or read safely, never crashes") {
+  const auto disc = make_disc(kChunk * 4 + 77);
+  const auto good = pack_disc(disc, 3);
+  std::uint32_t s = 0xC0FFEEu;
+  auto rnd = [&s]() {
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    return s;
+  };
+
+  int opened = 0, rejected = 0;
+  for (int iter = 0; iter < 500; ++iter) {
+    auto m = good;
+    const int flips = 1 + int(rnd() % 4);
+    for (int i = 0; i < flips; ++i) m[rnd() % m.size()] = static_cast<std::uint8_t>(rnd());
+    if (rnd() % 4 == 0) m.resize(rnd() % m.size());  // and sometimes truncate
+
+    std::string error;
+    auto src = open_rvz(m, &error);
+    if (!src) {
+      ++rejected;
+      CHECK_FALSE(error.empty());  // a refusal always says why
+      continue;
+    }
+    ++opened;
+    CHECK(src->size() <= (16ull << 30));  // no mutated field yields a huge extent
+    std::vector<u8> buf(4096);
+    for (int k = 0; k < 48 && src->size() > 0; ++k) {
+      const std::uint64_t off = rnd() % src->size();
+      const std::size_t n =
+          std::size_t(std::min<std::uint64_t>(buf.size(), src->size() - off));
+      src->read(off, buf.data(), n);  // may legitimately fail; must not crash
+    }
+    u8 b = 0;
+    CHECK_FALSE(src->read(src->size(), &b, 1));
+  }
+  CHECK(opened + rejected == 500);
+  CHECK(opened > 0);  // some mutants are still well-formed enough to open
+}
