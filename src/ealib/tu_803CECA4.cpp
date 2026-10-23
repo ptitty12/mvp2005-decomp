@@ -246,7 +246,7 @@ void fn_803D37A0(Unk803CECA4Tmp* p, int c);
 Unk803CECA4Tmp* fn_803D4818(Unk803CECA4Tmp* p);
 void fn_803D485C(Unk803CECA4Tmp* p, int c);
 void* fn_803BD8A8(int a);
-void fn_803BD844(void* p);
+void FreeBuffer(void* p);
 void fn_803CEECC(Unk803CECA4Rec* rec, int a, int b, int c, float t);
 }
 
@@ -261,7 +261,7 @@ extern "C" void fn_803CECE4(Unk803CECA4Obj* self, int a, float x, float y)
     fn_803CEECC((Unk803CECA4Rec*)self->mC, a, self->m10, 0, y);
 }
 
-extern "C" int fn_803CED14(Unk803CECA4Obj* self, int a, int b, float t)
+extern "C" int EvalSQT(Unk803CECA4Obj* self, int a, int b, float t)
 {
     fn_803CEECC((Unk803CECA4Rec*)self->mC, a, self->m10, b, t);
     return 1;
@@ -416,7 +416,7 @@ extern "C" void fn_803CFCAC(Unk803D1730Obj* self, int c)
     if (self->m24)
         lbl_80626DD0->v12(self->m24);
     if (self->m2C) {
-        fn_803BD844(fn_803BD8A8(0));
+        FreeBuffer(fn_803BD8A8(0));
     }
     if (self->mC)
         lbl_80626DD0->v7(self->mC);
@@ -673,7 +673,7 @@ extern "C" void fn_803D2A78(Unk803D2A14Obj* self, int c)
 {
     self->m0 = lbl_80686478;
     if (self->m1C) {
-        fn_803BD844(fn_803BD8A8(1));
+        FreeBuffer(fn_803BD8A8(1));
     }
     if (self->mC) {
         lbl_80626DD0->v7(self->mC);

@@ -14,12 +14,12 @@ extern "C" int fn_803AC11C();
 extern "C" int SNDSYS_vectortoreal();
 extern "C" int fn_803AC164(int a, char* buf, int size);
 extern "C" int fn_803B9D50(Unk8001BA78* a);
-extern "C" int fn_803B9D84();
+extern "C" int Init();
 extern "C" int fn_803AC944();
 extern "C" int fn_803ABEE4(int a);
 extern "C" void fn_803ABDD0(int a, int b);
 extern "C" void fn_803ABEDC(int a);
-extern "C" void fn_803ABD58(int a);
+extern "C" void SetOutputMode(int a);
 
 /* near-miss: r30/r31 are swapped (retail keeps `this` in r30 and the ok flag in r31); everything else is identical */
 int Unk8001C314::fn_8001CACC()
@@ -42,7 +42,7 @@ int Unk8001C314::fn_8001CACC()
                 }
             }
             if (ok) {
-                if (fn_803B9D84() < 0) {
+                if (Init() < 0) {
                     ok = 0;
                 }
             }
@@ -106,7 +106,7 @@ int Unk8001C314::fn_8001CC9C()
 {
     fn_803ABDD0(0, 0x20);
     fn_803ABEDC(0);
-    fn_803ABD58(8);
+    SetOutputMode(8);
     return 1;
 }
 

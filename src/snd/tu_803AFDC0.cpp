@@ -27,7 +27,7 @@ extern "C" void MIX_sethighpass(int idx, int n);
 extern "C" void MIX_setlowpass(int idx, float v);
 extern "C" void SNDMIX_setdrygain(int idx, int ch, float v);
 extern "C" void MIX_settimemult(int idx, int v);
-extern "C" int fn_803B115C(int a, int p);
+extern "C" int SNDPLATFORM_memfree(int a, int p);
 
 struct Unk803B0714 {
     char pad[0x2580];
@@ -213,7 +213,7 @@ extern "C" int fn_803B0360()
     return 0x25e4;
 }
 
-extern "C" int fn_803B0368(int slot, Unk803B0714* p)
+extern "C" int SNDPLATFORM_packetplaycreate(int slot, Unk803B0714* p)
 {
     memset(p, 0, 0x25e4);
     p->m259C[0] = (int)fn_803B1118(0, 0x4800);
@@ -232,7 +232,7 @@ extern "C" int fn_803B0368(int slot, Unk803B0714* p)
 extern "C" int fn_803B0714(int idx)
 {
     Unk803B0714* p = lbl_8069E200.mVoices[idx];
-    fn_803B115C(0, p->m259C[0]);
+    SNDPLATFORM_memfree(0, p->m259C[0]);
     int i;
     for (i = 0; i <= 5; i++)
         p->m259C[i] = 0;
@@ -329,7 +329,7 @@ extern "C" void* fn_803B1118(int unused, int size)
     return SNDARAM_alloc(size);
 }
 
-extern "C" int fn_803B115C(int unused, int p)
+extern "C" int SNDPLATFORM_memfree(int unused, int p)
 {
     if (sndgs.sso.vec.aramfree == 0)
         SNDARAM_free(p);

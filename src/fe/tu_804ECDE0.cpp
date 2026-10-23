@@ -42,7 +42,7 @@ struct FeT9 {
 };
 extern FeT9 lbl_805FB188;
 extern "C" int strcmp(const char* a, const char* b);
-extern "C" void fn_80402FCC(char* dst, const void* src);
+extern "C" void Unicode2Ascii(char* dst, const void* src);
 void fn_800E633C(char* s);
 void fn_800E6158();
 void fn_800E6258(int a, int b);
@@ -371,8 +371,8 @@ extern "C" FE_OVERLAY void fn_804F3718(FeNm* self)
         char b[16];
         char* k1 = lbl_805FB1C8;
         char* k2 = lbl_805FB1D0;
-        fn_80402FCC(a, self->m654->v31());
-        fn_80402FCC(b, self->m658->v31());
+        Unicode2Ascii(a, self->m654->v31());
+        Unicode2Ascii(b, self->m658->v31());
         fn_800E633C(a);
         fn_800E633C(b);
         if (strcmp(a, k1) == 0 && strcmp(b, k2) == 0) {

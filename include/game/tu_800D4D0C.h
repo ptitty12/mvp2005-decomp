@@ -182,7 +182,7 @@ struct Unk8037C7FC {
 Unk8037C7FC* fn_8037C7FC();
 extern int lbl_80687C5C;
 extern "C" void fn_800D4538(Unk800D4D0C_D* t, int a);
-extern "C" void fn_80402FCC(char* dst, const void* src);
+extern "C" void Unicode2Ascii(char* dst, const void* src);
 int fn_80409DAC(const char* s);
 void* fn_80090880(void* obj, int id);
 extern void* lbl_8061977C;

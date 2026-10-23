@@ -53,6 +53,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -79,6 +80,7 @@
 #include "translator/symbols.h"
 #include "translator/wasm_emit.h"
 #include "vfs/disc_check.h"
+#include "vfs/rvz.h"
 #include "vfs/source.h"
 #include "web/wasm/module_cache.h"
 #include "web/wasm/web_audio.h"
@@ -525,14 +527,21 @@ EMSCRIPTEN_KEEPALIVE const char* mvp_last_error() { return g.error.c_str(); }
 
 namespace {
 
-// CISO or ISO, then the identity check (GV4E69 rev 0, by the DOL's SHA-1).
+// CISO, RVZ or ISO, then the identity check (GV4E69 rev 0, by the DOL's SHA-1).
 bool open_image(std::unique_ptr<vfs::Source> src) {
   vfs::Source* raw = src.get();
   std::unique_ptr<vfs::Source> image;
   char magic[4] = {};
-  if (raw->size() >= 4 && raw->read(0, magic, 4) && std::string(magic, 4) == "CISO") {
+  const bool have_magic = raw->size() >= 4 && raw->read(0, magic, 4);
+  if (have_magic && std::string(magic, 4) == "CISO") {
     image = vfs::CisoSource::open(std::move(src), &g.error);
     g.image_kind = "CISO";
+    if (!image) return false;
+  } else if (have_magic && std::memcmp(magic, "RVZ", 3) == 0 && magic[3] == 1) {
+    // A compressed image (vfs/rvz.cpp): the player picks it and it is decompressed
+    // chunk by chunk as the disc is read, exactly like a plain image.
+    image = vfs::RvzSource::open(std::move(src), &g.error);
+    g.image_kind = "RVZ";
     if (!image) return false;
   } else {
     image = std::move(src);

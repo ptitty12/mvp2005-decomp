@@ -74,7 +74,7 @@ struct RcVO {
     virtual void v0();
 };
 
-extern "C" int fn_803F7584(void*, int, void*, int*);
+extern "C" int GetFileBlocks(void*, int, void*, int*);
 extern "C" int fn_803F6754(short**);
 
 struct RcEv;
@@ -231,13 +231,13 @@ extern RcFeE lbl_806AADFC;
 extern RcFeS lbl_806AB5B8;
 extern int lbl_806EF464;
 extern "C" void fn_803EFBA4(void*);
-extern "C" int fn_803F89B0(void*, int, void*);
-extern "C" int fn_803F8A2C(void*);
+extern "C" int FindFirst(void*, int, void*);
+extern "C" int FindNext(void*);
 extern "C" char* strcpy(char*, const char*);
 extern "C" void* memset(void*, int, unsigned);
 extern "C" char WildCardCompare(const char* wild, const char* str);
 
-extern "C" RcFeE* fn_803F2240(int, const char*, int);
+extern "C" RcFeE* Find(int, const char*, int);
 
 struct RcEvM : RcEv {
     int m40;
@@ -252,14 +252,14 @@ extern RcEvM lbl_806AB364;
 extern char lbl_806AB378[];
 extern const void* lbl_806AB554[3];
 
-extern "C" void fn_803F2000()
+extern "C" void UpdateTaskFindFile()
 {
     switch (lbl_806AB364.m8) {
     case 0:
         lbl_806AB364.mC = lbl_806AB364.m8;
         lbl_806AB364.m8 = 0xC;
     case 0xC: {
-        RcFeE* r = fn_803F2240((int)lbl_806AB378, lbl_806AB378 + 0xC, 1);
+        RcFeE* r = Find((int)lbl_806AB378, lbl_806AB378 + 0xC, 1);
         if (r->m4 == 0xB) {
             lbl_806AB364.m8 = 0x7B;
             lbl_806AB364.mC = 0;
@@ -277,7 +277,7 @@ extern "C" void fn_803F2000()
         break;
     }
     case 0xD: {
-        RcFeE* r = fn_803F2240((int)&lbl_806AB364.m14, (const char*)&lbl_806AB364 + 0x20, 0);
+        RcFeE* r = Find((int)&lbl_806AB364.m14, (const char*)&lbl_806AB364 + 0x20, 0);
         if (r->m4 == 0xB) {
             lbl_806AB364.m8 = 0x7B;
             lbl_806AB364.mC = 0;
@@ -312,7 +312,7 @@ extern "C" void fn_803F2000()
     }
 }
 
-extern "C" RcFeE* fn_803F2240(int a0, const char* pat, int a2)
+extern "C" RcFeE* Find(int a0, const char* pat, int a2)
 {
     RcFeInit(&lbl_806AADFC, 0, 0);
     memset(lbl_806AADFC.m90, 0, 0x24);
@@ -340,9 +340,9 @@ extern "C" RcFeE* fn_803F2240(int a0, const char* pat, int a2)
         lbl_806AB5B8.m10 = 0;
         memset(lbl_806AB5B8.m14, 0, 4);
         memset(lbl_806AB5B8.m18, 0, 2);
-        r = fn_803F89B0(lbl_806EEA2C, a0, &lbl_806AB5B8);
+        r = FindFirst(lbl_806EEA2C, a0, &lbl_806AB5B8);
     } else
-        r = fn_803F8A2C(lbl_806EEA2C);
+        r = FindNext(lbl_806EEA2C);
     int found = 0;
     while (r == 0 && found == 0) {
             int t = WildCardCompare(pat, lbl_806AB5B8.m4);
@@ -356,7 +356,7 @@ extern "C" RcFeE* fn_803F2240(int a0, const char* pat, int a2)
                 lbl_806AADFC.m40 = (int)lbl_806AB5B8.m4;
                 strcpy(lbl_806AADFC.m90, lbl_806AB5B8.m4);
             } else
-                r = fn_803F8A2C(lbl_806EEA2C);
+                r = FindNext(lbl_806EEA2C);
     }
     return &lbl_806AADFC;
 }
@@ -393,7 +393,7 @@ extern "C" char WildCardCompare(const char* wild, const char* str)
 /* near-miss: 2 slots; the m14 / m34 stores of the 0x65 state are in the other order */
 enum RcFindState { RFS_INIT = 0, RFS_START = 0x65, RFS_WAIT = 0x69, RFS_DONE = 0x7c };
 
-extern "C" void fn_803F28A4()
+extern "C" void UpdateTaskTrcCardExists()
 {
     switch ((RcFindState)lbl_806AAF2C.m8) {
     case RFS_INIT:
@@ -451,8 +451,8 @@ extern "C" void fn_803F28A4()
     }
 }
 
-/* near-miss: 2 slots; same m14 / m34 store order issue as fn_803F28A4 */
-extern "C" void fn_803F2A70()
+/* near-miss: 2 slots; same m14 / m34 store order issue as UpdateTaskTrcCardExists */
+extern "C" void UpdateTaskTrcGetCardInfo()
 {
     switch (lbl_806AAF58.m8) {
     case 0:
@@ -537,7 +537,7 @@ struct RcMsk {
 extern "C" int fn_803F6AE0(int, ...);
 extern "C" void* memset(void*, int, unsigned);
 
-extern "C" void fn_803F6460(RcMsk* o, int mask, int flag, int arg3)
+extern "C" void LC_SetOptions(RcMsk* o, int mask, int flag, int arg3)
 {
     int arr[16];
     int n = 0;
@@ -598,7 +598,7 @@ extern "C" void fn_803F6460(RcMsk* o, int mask, int flag, int arg3)
         o->m30 = fn_803F6AE0(o->m20, 0);
 }
 
-extern "C" void fn_803F67C8()
+extern "C" void CheckVersion()
 {
     short* a = lbl_806EEA68(1);
     short* b = lbl_806EEA68(2);
@@ -731,7 +731,7 @@ extern "C" void fn_803F7098(int* o)
 
 extern "C" void fn_803F70AC(RcRefObj* x, int a, void* b)
 {
-    int r = fn_803F7584((void*)x->m4, a, b, 0);
+    int r = GetFileBlocks((void*)x->m4, a, b, 0);
     x->m8 += r;
     x->mC += 1;
     x->m14 = 1;
@@ -828,7 +828,7 @@ struct RcBlock48_61 { int words[12]; };
 extern RcEventBig61 lbl_806AAEB0, lbl_806AB434;
 extern int lbl_806AB44C[];
 extern "C" int CARDSetFastMode(int);
-extern "C" void fn_803F24E8()
+extern "C" void UpdateTaskTrcStartGame()
 {
     int ready;
     if (lbl_806AAD9C.pending != 0) {

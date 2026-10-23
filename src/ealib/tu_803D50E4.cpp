@@ -124,7 +124,7 @@ struct Unk803D74ECObj {
     char padA0[0xCC - 0xA0];
     int* mCC;
 };
-extern "C" void fn_803DA4B8(int a, int b);
+extern "C" int fn_803DA4B8(int a, int b);
 extern void (*lbl_8062C66C)(void* p, int size);
 extern "C" void fn_803E6708(void* p, int c);
 struct Unk803D7600Obj {
@@ -161,7 +161,7 @@ struct Unk803D5D34Obj {
     Unk803D5D34Blk** m5C;
 };
 extern "C" {
-void fn_803E7320(int ch, const char* s, ...);
+int fn_803E7320(int ch, const char* s, ...);
 void fn_803E0F9C(void* p);
 void fn_803E1E88(void* p);
 void fn_803D68AC(void* obj, void* mtx);
@@ -467,8 +467,8 @@ extern "C" {
 void PSMTX44Concat(Mtx4* a, Mtx4* b, Mtx4* c);
 int fn_803D9DF4();
 void fn_803D9528();
-void fn_803E6D00(void* a, void* b);
-void fn_803E6C28(void* a, int b);
+int fn_803E6D00(void* a, void* b);
+int fn_803E6C28(void* a, int b);
 }
 
 extern "C" void fn_803D71F0(int p)

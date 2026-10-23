@@ -19,7 +19,7 @@ extern RcIfB* lbl_806EEA2C;
 extern "C" void* memset(void*, int, unsigned);
 extern "C" void fn_80377408(void*);
 extern "C" int fn_803F8944(RcIfB*);
-extern "C" void fn_803F7604(RcIfB*);
+extern "C" int fn_803F7604(RcIfB*);
 extern "C" void fn_803EF23C(int, int);
 extern "C" void fn_803F009C(void*, int*);
 extern "C" int fn_803F0074(void*, int*);
@@ -33,21 +33,21 @@ struct RcSys {
 
 extern RcSys lbl_806AB4C8;
 extern "C" void fn_803F13A0();
-extern "C" void fn_803F149C();
-extern "C" void fn_803F1568();
-extern "C" void fn_803F16A0();
-extern "C" void fn_803F1760();
-extern "C" void fn_803F1874();
+extern "C" void UpdateTaskGetCardInfo();
+extern "C" void UpdateTaskMount();
+extern "C" void UpdateTaskUnmount();
+extern "C" void UpdateTaskOpen();
+extern "C" void UpdateTaskClose();
 extern "C" void fn_803F1924();
 extern "C" void fn_803F1AAC();
-extern "C" void fn_803F1C34();
-extern "C" void fn_803F1D04();
-extern "C" void fn_803F1DB0();
-extern "C" void fn_803F1F08();
-extern "C" void fn_803F2000();
-extern "C" void fn_803F24E8();
-extern "C" void fn_803F28A4();
-extern "C" void fn_803F2A70();
+extern "C" void UpdateTaskSeek();
+extern "C" void UpdateTaskFlush();
+extern "C" void UpdateTaskDelete();
+extern "C" void UpdateTaskSetAttribute();
+extern "C" void UpdateTaskFindFile();
+extern "C" void UpdateTaskTrcStartGame();
+extern "C" void UpdateTaskTrcCardExists();
+extern "C" void UpdateTaskTrcGetCardInfo();
 extern "C" void fn_803F2CA8();
 extern "C" void fn_803F391C();
 extern "C" void fn_803F4448();
@@ -250,13 +250,13 @@ extern "C" int fn_803EEC20()
                 lbl_806EEA40 = t;
                 switch (((int*)lbl_806AADAC[0])[1]) {
                     case 1:
-                        fn_803F24E8();
+                        UpdateTaskTrcStartGame();
                         break;
                     case 2:
-                        fn_803F28A4();
+                        UpdateTaskTrcCardExists();
                         break;
                     case 3:
-                        fn_803F2A70();
+                        UpdateTaskTrcGetCardInfo();
                         break;
                     case 5:
                         fn_803F391C();
@@ -283,19 +283,19 @@ extern "C" int fn_803EEC20()
                         fn_803F13A0();
                         break;
                     case 11:
-                        fn_803F149C();
+                        UpdateTaskGetCardInfo();
                         break;
                     case 12:
-                        fn_803F1568();
+                        UpdateTaskMount();
                         break;
                     case 13:
-                        fn_803F16A0();
+                        UpdateTaskUnmount();
                         break;
                     case 16:
-                        fn_803F1760();
+                        UpdateTaskOpen();
                         break;
                     case 17:
-                        fn_803F1874();
+                        UpdateTaskClose();
                         break;
                     case 20:
                         fn_803F1924();
@@ -304,19 +304,19 @@ extern "C" int fn_803EEC20()
                         fn_803F1AAC();
                         break;
                     case 19:
-                        fn_803F1C34();
+                        UpdateTaskSeek();
                         break;
                     case 22:
-                        fn_803F1D04();
+                        UpdateTaskFlush();
                         break;
                     case 18:
-                        fn_803F1DB0();
+                        UpdateTaskDelete();
                         break;
                     case 23:
-                        fn_803F1F08();
+                        UpdateTaskSetAttribute();
                         break;
                     case 24:
-                        fn_803F2000();
+                        UpdateTaskFindFile();
                         break;
                 }
                 if (lbl_806AB4C8.m0 != 0)
@@ -390,7 +390,7 @@ extern "C" RcSysV* fn_803EEEE0(int unused, int n)
     return ret;
 }
 
-extern "C" void fn_803EF05C(int unused, int msg, int arg)
+extern "C" void SendMessage(int unused, int msg, int arg)
 {
     lbl_806EEA38->v3();
     lbl_806EEA30 = msg;
@@ -437,14 +437,14 @@ extern "C" int fn_803EF0F0(int kind, int mask, int flag)
     return 0;
 }
 
-extern "C" int fn_803EF1C8()
+extern "C" int CheckCard()
 {
     if (fn_803F8944(lbl_806EEA2C) == 0)
         return 3;
     return 0;
 }
 
-extern "C" void fn_803EF1FC()
+extern "C" void ClearTask()
 {
     lbl_806AADAC[0] = 0;
     RcSysInit(&lbl_806AB4C8);

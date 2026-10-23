@@ -50,25 +50,25 @@ extern "C" {
 void SNDSYS_entercritical();
 void SNDSYS_leavecritical();
 int fn_803AAA18(int sndstrmhandle, int arg, const char* filename, int offset);
-void fn_803AAA3C(int sndstrmhandle);
+int fn_803AAA3C(int sndstrmhandle);
 AemsDef::PLAYERHANDLE* SNDAEMSI_playerplaystream(AemsDef::PLAYERHANDLE* out, AemsDef::PLAYERSTATE* ps, AemsDef::SAMPLEENTRY* se);
 int SNDAEMSI_playerupdatestream(AemsDef::PLAYERSTATE* ps);
 int fn_803A7ADC();
 void SNDAEMSI_streamsystemtask();
 void fn_803AC7F0(void (*fn)());
 void fn_803AC7C4(void (*fn)());
-void fn_803AA95C(int sndstrmhandle);
+int SNDSTRM_destroy(int sndstrmhandle);
 int fn_803AA934(SNDPLAYOPTS* spo, int a, int b, void* mem, int size);
-void fn_803A9204(SNDPLAYOPTS* spo);
+int SNDplaysetdef(SNDPLAYOPTS* spo);
 int SNDSTRM_overhead(int a, int b);
 void SNDAEMSI_playerunpausestream(AemsDef::PLAYERSTATE* ps);
-void fn_803AB56C(int handle, int value);
+int SNDSTRM_pitchmult(int handle, int value);
 void SNDSTRM_timemult(int handle, int value);
-void fn_803AB9F0(int handle, int arg, float v);
-void fn_803AAB7C(int handle, int arg, float v);
+int fn_803AB9F0(int handle, int arg, float v);
+int fn_803AAB7C(int handle, int arg, float v);
 void SNDSTRM_fxlevel(int handle, int arg, int value);
-void fn_803AB430(int handle, int value);
-void fn_803AB388(int handle, int value);
+int fn_803AB430(int handle, int value);
+int fn_803AB388(int handle, int value);
 void SNDSTRM_drylevel(int handle, int value);
 
 int SNDAEMSI_streamgethandle(int priority)
@@ -113,7 +113,7 @@ int SNDAEMSI_streamgethandle(int priority)
 
 void fn_803A6E90(int handle, int value)
 {
-    fn_803AB56C(handle, SNDI_clipint32(value, 0, 0xFFFF));
+    SNDSTRM_pitchmult(handle, SNDI_clipint32(value, 0, 0xFFFF));
 }
 
 void fn_803A6ED8(int handle, int value)
@@ -221,7 +221,7 @@ void SNDAEMSI_playerpausestream(AemsDef::PLAYERHANDLE h)
     AemsDef::SNDAEMSSTREAMCHANNEL* pchan = GetStreamChannel(h.u.streamhandle);
     if (pchan != NULL) {
         fn_803AB9F0(pchan->sndstrmhandle, -1, 0.0f);
-        fn_803AB56C(pchan->sndstrmhandle, 0);
+        SNDSTRM_pitchmult(pchan->sndstrmhandle, 0);
     }
 }
 
@@ -343,7 +343,7 @@ int SNDAEMS_streaminit(void* pmem, int memsize, int count)
     sndaems.streamchannels = count;
     memsize = (memsize - count * 0x60) / count;
     pmem = reinterpret_cast<char*>(pmem) + count * 0x60;
-    fn_803A9204(&spo);
+    SNDplaysetdef(&spo);
     spo.fxlevel0 = 0;
     memsize &= 0x7FFFFFFC;
     for (i = 0; i < count; i++) {
@@ -376,7 +376,7 @@ int fn_803A7ADC()
     fn_803AC7F0(SNDAEMSI_streamsystemtask);
     for (i = 0; i < sndaems.streamchannels; i++) {
         AemsDef::SNDAEMSSTREAMCHANNEL* p = &sndaems.pstreamchannel[i];
-        fn_803AA95C(p->sndstrmhandle);
+        SNDSTRM_destroy(p->sndstrmhandle);
     }
     sndaems.freestreams = CListDStack();
     sndaems.allocatedstreams = CListDStack();

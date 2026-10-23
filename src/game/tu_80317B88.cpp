@@ -73,9 +73,9 @@ extern const float lbl_805EA568;
 
 extern "C" {
 void fn_80328374(void* p, int a);
-void fn_803E6B3C(void* p);
+void OnWindowClose(void* p);
 void fn_803E6B74(void* p);
-void fn_803E6C28(void* p, int n);
+int fn_803E6C28(void* p, int n);
 int fn_803E69D8(void* p, const char* name, void* data, int size, int count);
 int fn_803E6950(void* p, const char* name);
 void fn_803E67A0(void* p, void* q);
@@ -86,7 +86,7 @@ int fn_803DBE38(void* p, int n);
 int fn_803DBE20(void* p, int n);
 int fn_803DBE68(void* p, int n);
 int fn_803DBE78(void* p, int n);
-void fn_803DBD54(void* p);
+int fn_803DBD54(void* p);
 void fn_803E6660(void* p);
 int fn_8040B574(const char* a, const char* b);
 void fn_8040B61C(void* p, int a);
@@ -193,7 +193,7 @@ void fn_80317C94(Fx* self)
     fn_803DBD54(tmp);
     char* m = self->m7C;
     fn_803E67A0(h, (char*)self + 0x3C);
-    fn_803E6B3C(h);
+    OnWindowClose(h);
     fn_803E6950(h, lbl_805E89D4);
     fn_803E69D8(h, lbl_805E89D4, lbl_8061FF54, 4, 1);
     fn_803E69D8(h, lbl_805E89E0, self->m30, 0xC, 0x4B0);
@@ -424,7 +424,7 @@ void fn_80318F3C(Fx* self, FxPart* pp)
 /* Texture-state refresh: rebuilds the vertex description (fn_803191AC, fn_8031A760). */
 void fn_803191AC(Fx* self, int tex) {
     char* r = self->mB8;
-    fn_803E6B3C(r);
+    OnWindowClose(r);
     fn_803E69D8(r, lbl_805E8A0C, (void*)tex, 0x58, -1);
     fn_803E6B74(r);
     fn_803E6C28(r, self->m28 * 6);
@@ -667,7 +667,7 @@ void fn_80319D78(FxB* self)
     char* h = self->mB4;
     char* m = self->m78;
     fn_803E67A0(h, (char*)self + 0x38);
-    fn_803E6B3C(h);
+    OnWindowClose(h);
     fn_803E6950(h, lbl_805E89D4);
     fn_803E69D8(h, lbl_805E89D4, lbl_8061FF78, 4, 1);
     fn_803E69D8(h, lbl_805E89E0, self->m2C, 0xC, 0x4B0);
@@ -788,7 +788,7 @@ void fn_8031A4F0(FxB* self, FxPart* pp)
 
 void fn_8031A760(FxB* self, int tex) {
     char* r = self->mB4;
-    fn_803E6B3C(r);
+    OnWindowClose(r);
     fn_803E69D8(r, lbl_805E8A0C, (void*)tex, 0x58, -1);
     fn_803E6B74(r);
     fn_803E6C28(r, self->m24 * 6);

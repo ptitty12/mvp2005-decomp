@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "common/bytes.h"
+#include "vfs/rvz.h"
 
 namespace mvp::vfs {
 
@@ -132,8 +133,14 @@ std::unique_ptr<Source> open_disc_image(const std::string& path, std::string* er
     return nullptr;
   }
   char magic[4] = {};
-  if (f->size() >= 4 && f->read(0, magic, 4) && std::memcmp(magic, "CISO", 4) == 0)
-    return CisoSource::open(std::move(f), error);
+  if (!(f->size() >= 4 && f->read(0, magic, 4))) return f;
+  if (std::memcmp(magic, "CISO", 4) == 0) return CisoSource::open(std::move(f), error);
+#ifdef MVP_HAVE_ZSTD
+  // RVZ: Dolphin's compressed container ("RVZ\x1"). Without zstd it stays a plain
+  // byte source and the identity check reports the bad magic instead.
+  if (std::memcmp(magic, "RVZ", 3) == 0 && static_cast<unsigned char>(magic[3]) == 1)
+    return RvzSource::open(std::move(f), error);
+#endif
   return f;
 }
 

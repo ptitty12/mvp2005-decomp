@@ -21,7 +21,7 @@ extern "C" void* SNDSTRMI_getrequestptr(int h);
 extern "C" void SNDLINKI_remove(SNDLINKLIST* list, void* node);
 extern "C" void SNDLINKI_push(SNDLINKLIST* list, void* node);
 extern "C" void STREAM_release(int handle, void* p);
-extern "C" int fn_803AA95C(int h);
+extern "C" int SNDSTRM_destroy(int h);
 /* near-miss: 60 vs 70 insns: retail keeps both arms of the `if (req->isgeneric)` tests (numframes load and the psamples loop) as separate code with different temporaries, presumably an endian-conversion macro that expands to the same value in both arms; ours merges the arms. temp-variable variants tried */
 extern "C" void SNDSTRMI_parsedata(SNDSTREAMCHANNEL* pssc, int* hdr);
 extern "C" void SNDSTRMI_parseheader(int h, int* hdr);
@@ -43,11 +43,11 @@ extern "C" int STREAM_queuefile(int sh, void* a, void* b, int tag);
 extern "C" int STREAM_queuemem(int sh, void* a, int b, int tag);
 extern "C" void SNDLINKI_pushtail(SNDLINKLIST* list, void* node);
 extern "C" void* SNDLINKI_pop(SNDLINKLIST* list);
-extern "C" void fn_803B3EA8(int shandle, int ch, int level);
+extern "C" int SNDfxlevel(int shandle, int ch, int level);
 
 /* Average data rate of a sample format (bytes per second). */
 
-extern "C" void fn_803AAE30(void* data);
+extern "C" void StreamFader(void* data);
 
 int iSNDsin(int angle)
 {
@@ -62,7 +62,7 @@ int iSNDsin(int angle)
     return -lbl_80625214[256 - idx];
 }
 
-extern "C" void fn_803A98B0(SNDSTREAMCHANNEL* pssc)
+extern "C" void StreamRemoveFaders(SNDSTREAMCHANNEL* pssc)
 {
     int i;
     for (i = 0; i < 6; i++) {
@@ -96,7 +96,7 @@ extern "C" int SNDSTRMI_destroyall()
 {
     int i;
     for (i = 0; i < sndgs.sso.set.maxstreams; i++)
-        fn_803AA95C(i);
+        SNDSTRM_destroy(i);
     return 0;
 }
 
@@ -306,7 +306,7 @@ extern "C" void fn_803AA934(void* a, int b, void* c, void* d, int e)
     SNDSTRMI_create(a, b, c, d, e, 0, 0);
 }
 
-extern "C" int fn_803AA95C(int h)
+extern "C" int SNDSTRM_destroy(int h)
 {
     SNDSYS_entercritical();
     SNDSTREAMCHANNEL* pssc = SNDSTRMI_getstreamptr(h);
@@ -315,7 +315,7 @@ extern "C" int fn_803AA95C(int h)
         return -8;
     }
     fn_803AAA3C(h);
-    fn_803A98B0(pssc);
+    StreamRemoveFaders(pssc);
     if (SNDSTRMI_numcreated() == 1) {
         iSNDserverremoveclient(SNDSTRMI_service);
         lbl_8069CA44 = 0;
@@ -372,7 +372,7 @@ again:
     return 0;
 }
 
-extern "C" void fn_803AAE30(void* data)
+extern "C" void StreamFader(void* data)
 {
     Snd::StreamSourceChannelState* s = (Snd::StreamSourceChannelState*)data;
     s->vol += s->fader.incrementPerUpdate;
@@ -424,7 +424,7 @@ extern "C" int SNDSTRM_autovol(int h, int time, int targetVol)
         s->fader.targetVol = target;
         s->fader.incrementPerUpdate = (target - s->vol) * Snd::gVariableTimerPeriod / time;
         if (s->fader.incrementPerUpdate != 0.0f) {
-            s->fader.variableTimerClient.pClientFunc = fn_803AAE30;
+            s->fader.variableTimerClient.pClientFunc = StreamFader;
             s->fader.variableTimerClient.pClientData = s;
             Snd::Util::AddVariableTimerClient(&s->fader.variableTimerClient);
         }
@@ -450,7 +450,7 @@ extern "C" int SNDSTRM_fxlevel(int h, int ch, int level)
             CHANPUB* c = &sndgs.chan[sndgs.chan[voice].voices[i]];
             c->pFxVolume[ch].fxLevel = pssc->pFxVolume[ch].fxLevel;
         }
-        fn_803B3EA8(pssc->shandle, ch, level);
+        SNDfxlevel(pssc->shandle, ch, level);
     }
     return 0;
 }

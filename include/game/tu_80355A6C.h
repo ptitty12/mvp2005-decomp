@@ -419,7 +419,7 @@ extern "C" void THREAD_destroy(void*);
 extern "C" void THREAD_yield(int);
 extern "C" void THREAD_setpriority(void*, int);
 extern "C" void THREAD_waitexit(void*, int);
-extern "C" void fn_804007D4(void*);
+extern "C" int fn_804007D4(void*);
 extern "C" void fn_804007FC(void*);
 extern "C" void fn_80400828(void*);
 extern "C" void fn_8040084C(void*);

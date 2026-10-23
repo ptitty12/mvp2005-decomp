@@ -206,7 +206,7 @@ struct EAGLSelfC {
 extern char lbl_80685C00[];
 extern char lbl_80685CB8[];
 
-extern "C" void fn_803BE6F4(unsigned* set, int k, int v);
+extern "C" void SetBone(unsigned* set, int k, int v);
 
 struct EAGLRecA {
     char pad0[6];
@@ -329,7 +329,7 @@ extern "C" int fn_803C3E9C(EAGLSelfRB* s, unsigned* bits, int* cnt, int* lo, int
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -400,7 +400,7 @@ extern "C" int fn_803C6A40(EAGLSelfRA* s, unsigned* bits, int* cnt, int* lo, int
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -506,7 +506,7 @@ extern "C" int fn_803C8320(EAGLSelfRB* s, unsigned* bits, int* cnt, int* lo, int
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;

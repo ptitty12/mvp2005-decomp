@@ -261,7 +261,7 @@ Lead decisions under the owner's 2026-10-14 delegation. Settled ones are also in
 | `engine/runtime/` | Memory, CPU state, scheduler, virtual clock, interrupts, SDK replacements |
 | `engine/gfx/` | GX command processor, TEV shader generation, texture decoding, WebGPU backend |
 | `engine/audio/` | AX/DSP replacement, mixer, AudioWorklet bridge |
-| `engine/vfs/` | Disc image readers (ISO, CISO), BIG/RefPack, mod overlay |
+| `engine/vfs/` | Disc image readers (ISO, CISO, RVZ), BIG/RefPack, mod overlay |
 | `engine/mods/` | Pack format, table patcher, authoring CLI |
 | `engine/net/` | Lockstep, input queue, desync detection, WebRTC client |
 | `engine/web/` | Browser shell (TypeScript): disc picker, settings, lobby UI |

@@ -208,7 +208,7 @@ struct Db8054C814_S {
 extern "C" void fn_8057DF80(int* p);
 extern "C" void fn_8055A3B0(Db8054C814_N* p);
 extern "C" void fn_8055EAFC(void* x);
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 extern "C" int fn_8054C958(Db8054C814_S* o, int a, int b);
 int fn_8054C814(Db8054C814_S* o);
 /* end Q18 decls */

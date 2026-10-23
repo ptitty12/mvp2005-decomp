@@ -47,7 +47,7 @@ extern "C" int fn_803FC438(int h, Str* s);
 Str* fn_8040B61C(Str* s, const char* name); /* strcpy: returns s */
 Str* fn_8040B448(Str* s, const char* t);    /* strcat: returns s */
 extern "C" int fn_803FED48(int h, int a, int b, int* out);
-extern "C" void fn_803FEDB8(int h, int a);
+extern "C" int fn_803FEDB8(int h, int a);
 extern "C" void MEM_free(int h);
 int fn_804089B4(char* buf, const char* fmt, ...);
 extern "C" int fn_8009E1D4(char* p, int a, int b);

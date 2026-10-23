@@ -145,7 +145,7 @@ struct Db80554540_S {
 };
 
 extern "C" int fn_8007F84C__FP13Unk8007F198_B(void* g);
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 extern "C" void fn_8055FF28(int id, void* o, int i);
 struct Db805542F0_Sub {
     char pad0[0x32E0];

@@ -963,7 +963,7 @@ void fn_80059BDC(int h, int kind, Unk80052794_Obj* obj)
 }
 
 /* near-miss: retail keeps the constant 3 in r4 for both the m18 store and the
- * fn_803A9204 argument (one fewer callee-saved register); this loads it twice. */
+ * SNDplaysetdef argument (one fewer callee-saved register); this loads it twice. */
 Unk8005BA1C_Voice::Unk8005BA1C_Voice(int unused, int vol, int a3, int a4, int a5, int a6, int a7)
     : m4(a7), m8(a5), mC(a4), m10(a3), m18(3), m1C(a6), m24(0), m30(-1)
 {
@@ -972,7 +972,7 @@ Unk8005BA1C_Voice::Unk8005BA1C_Voice(int unused, int vol, int a3, int a4, int a5
     m20 = 0;
     m28 = -1;
     m2C = -1;
-    fn_803A9204(&m50, m18);
+    SNDplaysetdef(&m50, m18);
     m50 = vol <= 0x7F ? (vol < 0 ? 0 : vol) : 0x7F;
 }
 
@@ -990,7 +990,7 @@ int fn_8005A19C(Unk8005BA1C_Voice* v)
 {
     if (v->m1C == 0) {
         fn_803AAA3C(v->m0);
-        fn_803AA95C(v->m0);
+        SNDSTRM_destroy(v->m0);
     }
     v->m0 = -1;
     v->m18 = 3;

@@ -305,7 +305,7 @@ void fn_8030ACCC(Unk80308874_List* p);
 void* fn_8026C75C(void* p, int a, int b);
 void fn_8026C864(void* p, int c);
 void fn_80319310(int a, void* p, int k);
-void fn_803E6B3C(void* p);
+void OnWindowClose(void* p);
 void fn_803E6B74(void* p);
 void fn_8030C11C(Unk80308874_At10* p);
 void fn_803DD73C(int h, int k);
@@ -318,19 +318,19 @@ unsigned int strlen(const char* s);
 char* strncpy(char* d, const char* s, unsigned n);
 int rand(void);
 void* fn_803DD628(void* self, void* info);
-void fn_803DD7C8(void* tex, int a);
+int fn_803DD7C8(void* tex, int a);
 int fn_803E69D8(void* p, const char* name, void* data, int size, int count);
 void fn_8031259C(void* g);
 void fn_803125D0(void* g);
-void fn_803E6C28(void* p, int n);
+int fn_803E6C28(void* p, int n);
 void fn_8040B61C(void* d, const char* s);
 Unk802F8324_VT8* fn_80319330(void* sub, int k);
 int fn_802B2DB8(void* p);
 void fn_8031479C(void* g);
 void fn_803DBD84(void* p, int k);
 void fn_803E6708(void* p, int k);
-void fn_803DBE2C(void* p, int k);
-void fn_803DBE38(void* p, int k);
+int fn_803DBE2C(void* p, int k);
+int fn_803DBE38(void* p, int k);
 void fn_803DBF00(void* p, int k);
 void fn_803E67A0(void* h, void* p);
 int fn_803E6950(void* h, const char* s);
@@ -872,7 +872,7 @@ extern "C" void fn_8030B45C(void* pp, int xi)
 
 void fn_8030B5F4(void* p)
 {
-    fn_803E6B3C((char*)p + 0x94);
+    OnWindowClose((char*)p + 0x94);
 }
 
 void fn_8030B618(void* p)
