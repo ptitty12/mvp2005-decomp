@@ -237,7 +237,7 @@ extern "C" void LOCALE_create(unsigned char* t, int flag)
 
 extern "C" int fn_80402C08(const unsigned short* a, const unsigned char* b);
 
-extern "C" void fn_80402FCC(char* out, const unsigned short* in)
+extern "C" void Unicode2Ascii(char* out, const unsigned short* in)
 {
     while (*in != 0) {
         if (*in > 0xFF || (*in == 0x5C && in[1] == 0x78)) {

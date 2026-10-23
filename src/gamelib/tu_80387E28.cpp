@@ -392,7 +392,7 @@ struct E9BD_Owner {
     int m290;
 };
 extern "C" {
-void fn_803BB02C(int a, int b, void* c, int d);
+void PoseSQTToGlobal(int a, int b, void* c, int d);
 void fn_803DF824(void* p, float a, float b, float c, float d, float e, float f, float g, float h, float i);
 void fn_803DF6AC(void* p, float a, float b, float c, float d);
 void fn_803DFEE0(void* p, float a, float b, float c, float d);
@@ -492,7 +492,7 @@ struct GlB40 { char d[0x40]; };
 struct GlB28 { GlV3 v; char pad[0x28 - 12]; };
 
 extern "C" void fn_80389BD8(void* a, int b, void* c, int d);
-extern "C" void fn_803DF9C8(void* m, void* a, void* b);
+extern "C" void ExtractRotTrans(void* m, void* a, void* b);
 extern "C" void fn_803DE51C(void* m, int a, void* b);
 
 extern "C" int fn_80389B34(void* x, int a, GlV3* p1, GlV3* p2, int p3, int flags);
@@ -515,7 +515,7 @@ extern "C" int fn_80389B34(void* x, int a, GlV3* p1, GlV3* p2, int p3, int flags
         void* r = p1;
         if (r == 0)
             r = &u;
-        fn_803DF9C8(&m, q, r);
+        ExtractRotTrans(&m, q, r);
     } else {
         fn_803DE51C(&m, p3, &t);
         if (p1 != 0)
@@ -532,11 +532,11 @@ extern "C" void fn_80389BD8(void* ov, int idx, void* matv, int flags)
     char* tbl = lbl_8068F200;
     int hit;
     if (flags & 2) {
-        fn_803BB02C(o->m14, o->m28C, tbl, 0);
+        PoseSQTToGlobal(o->m14, o->m28C, tbl, 0);
         hit = p->v10();
     } else {
         hit = p->v11();
-        fn_803BB02C(o->m14, o->m290, tbl, 0);
+        PoseSQTToGlobal(o->m14, o->m290, tbl, 0);
     }
     if (flags & 1) {
         if (flags & 2) {

@@ -64,7 +64,7 @@ extern "C" int strlen(const char*);
 extern "C" void fn_803E7074(void* a, void* b);
 extern "C" void fn_803E70B0(void* a, void* b, void (*c)(void*), void (*d)());
 extern "C" void fn_803BD8BC();
-extern "C" void fn_803BE744(void*);
+extern "C" void Constructor(void*);
 extern "C" void fn_803BE7B0();
 
 inline int EAGLTestBit(unsigned* bits, int idx)
@@ -80,14 +80,14 @@ struct EAGLSk {
 
 extern void (*lbl_80626DC8)(void*, void*, void*);
 extern "C" void fn_803DFB48(void*);
-extern "C" void fn_803BB02C(EAGLSk* sk, char* a, char* out, unsigned* mask);
+extern "C" void PoseSQTToGlobal(EAGLSk* sk, char* a, char* out, unsigned* mask);
 extern "C" void fn_803E00EC(void* p, float a, float b, float c, float d, float e, float f, float g, float h, float i, float j);
 
-extern "C" void fn_803DF66C(void* a, void* b);
+extern "C" void PostMult(void* a, void* b);
 extern "C" void fn_803BCE38(void* p, int n);
 extern "C" void fn_803BD800(int a, int b);
 
-extern "C" void fn_803BB02C(EAGLSk* sk, char* a, char* out, unsigned* mask)
+extern "C" void PoseSQTToGlobal(EAGLSk* sk, char* a, char* out, unsigned* mask)
 {
     if (mask != 0) {
         int n = sk->m8;
@@ -131,7 +131,7 @@ extern "C" void fn_803BB21C(EAGLSk* sk, char* a, char* out, unsigned* mask)
     if (mask != 0) {
         int n = sk->m8;
         int i;
-        fn_803BB02C(sk, a, out, 0);
+        PoseSQTToGlobal(sk, a, out, 0);
         for (i = 0; i < n; i++) {
             if (EAGLTestBit(mask, i)) {
                 lbl_80626DC8(out + i * 0x40, out + i * 0x40, (char*)sk + 0x40 + i * 0x70);
@@ -141,7 +141,7 @@ extern "C" void fn_803BB21C(EAGLSk* sk, char* a, char* out, unsigned* mask)
     } else {
         int n = sk->m8;
         int i;
-        fn_803BB02C(sk, a, out, 0);
+        PoseSQTToGlobal(sk, a, out, 0);
         for (i = 0; i < n; i++) {
             lbl_80626DC8(out + i * 0x40, out + i * 0x40, (char*)sk + 0x40 + i * 0x70);
             fn_803DFB48(out + i * 0x40);
@@ -155,7 +155,7 @@ struct EAGLSk2 {
     float* mC;
 };
 
-extern "C" void fn_803BB334(EAGLSk2* sk, float* out, unsigned* mask)
+extern "C" void GetStillPose(EAGLSk2* sk, float* out, unsigned* mask)
 {
     int n = sk->m8;
     int i;
@@ -236,7 +236,7 @@ extern "C" void fn_803BB334(EAGLSk2* sk, float* out, unsigned* mask)
     }
 }
 
-extern "C" void fn_803BB600(EAGLSk* sk, char* a, char* out, unsigned* mask)
+extern "C" void PoseGlobalToSkin(EAGLSk* sk, char* a, char* out, unsigned* mask)
 {
     int n = sk->m8;
     if (mask != 0) {
@@ -276,7 +276,7 @@ extern "C" void fn_803BB708(char* base, int idx, float* out)
 
 extern "C" void fn_803BB778(char* base, int idx, void* b)
 {
-    fn_803DF66C((char*)(idx * 0x70 + (int)base) + 0x40, b);
+    PostMult((char*)(idx * 0x70 + (int)base) + 0x40, b);
 }
 
 extern "C" void fn_803BCE00(DtorAt0* s, int chrg)
@@ -325,7 +325,7 @@ extern "C" int fn_803BD2B4(EAGLNameTab* t, const char* name, int* ins)
 
 struct Mtx4B { float m[16]; };
 
-extern "C" void fn_803BD358(Mtx4B* out, Mtx4B* a, Mtx4B* b)
+extern "C" void Multiply(Mtx4B* out, Mtx4B* a, Mtx4B* b)
 {
     Mtx4B t;
     t.m[0] = b->m[0] * a->m[0] + b->m[1] * a->m[4] + b->m[2] * a->m[8] + b->m[3] * a->m[12];
@@ -347,7 +347,7 @@ extern "C" void fn_803BD358(Mtx4B* out, Mtx4B* a, Mtx4B* b)
     *out = t;
 }
 
-extern "C" void fn_803BD61C(int arg)
+extern "C" void InitInternal(int arg)
 {
     void* (**al)(int, const char*) = &lbl_8062C668;
     EAGLDelObj** pcc = &lbl_80626DCC;
@@ -359,7 +359,7 @@ extern "C" void fn_803BD61C(int arg)
     lbl_80626DD0->v2(arg);
     void** p84 = &lbl_80627284;
     *p84 = (*al)(1, 0);
-    fn_803E70B0(lbl_806AAB80, lbl_8060D1B4, fn_803BE744, fn_803BE7B0);
+    fn_803E70B0(lbl_806AAB80, lbl_8060D1B4, Constructor, fn_803BE7B0);
 }
 
 extern "C" int fn_803BD6E4()
@@ -397,7 +397,7 @@ extern "C" void fn_803BD800(int a, int b)
     }
 }
 
-extern "C" void fn_803BD844(EAGLSlot* e)
+extern "C" void FreeBuffer(EAGLSlot* e)
 {
     e->m8--;
     if (e->m0 != 0 && e->m8 <= 0) {

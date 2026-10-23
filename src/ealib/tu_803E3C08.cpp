@@ -117,7 +117,7 @@ inline void SubDtor(Unk803E6660* o)
     lbl_8062C66C(o->m38, 0x104);
 }
 
-extern "C" void fn_803E4164(float* dst, const float* src)
+extern "C" void InitByHarmonics(float* dst, const float* src)
 {
     float* d = dst;
     for (int i = 0; i < 3; i++) {
@@ -179,7 +179,7 @@ extern float lbl_8060CABC;
 extern float lbl_8060CAC0;
 extern "C" void fn_803E41F4(float* dst, Unk803E4844_Quat* q, float s, float x, float y, float z);
 
-extern "C" void fn_803E4844(float* dst, const float* axis, Unk803E4844_Quat* q)
+extern "C" void UpdateByDirectionalLight(float* dst, const float* axis, Unk803E4844_Quat* q)
 {
     float one = lbl_8060CABC;
     float ax = axis[0];
@@ -896,7 +896,7 @@ extern "C" int fn_803E6A70(Unk803E6950* o, int idx, int val, int flag, int extra
     return r;
 }
 
-extern "C" int fn_803E6B3C(Unk803E6660* o)
+extern "C" int OnWindowClose(Unk803E6660* o)
 {
     fn_803D987C(o);
     o->m18 = 1;

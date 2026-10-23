@@ -239,7 +239,7 @@ void Unk80170518::fn_80170780(int a, int b, const void* name, int c)
 {
     m3C = a;
     m40 = b;
-    fn_80402FCC(m50, name);
+    Unicode2Ascii(m50, name);
     m60 = c;
     fn_8017095C(lbl_805CB05C);
     m30 = 2;

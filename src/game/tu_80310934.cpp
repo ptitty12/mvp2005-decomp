@@ -298,7 +298,7 @@ extern "C" {
 void fn_80312DB0(void* p);
 void* fn_803D7CDC(void* p);
 void fn_803D7D20(void* p);
-void fn_803BD61C(int a, int b);
+void InitInternal(int a, int b);
 void fn_803E73F4(int v);
 void* fn_8031DD54(void* p, int a, int b, int c, int d);
 void fn_803EB520(void* p);
@@ -1005,7 +1005,7 @@ extern "C" void fn_8031392C(Unk8031392C_Obj* p)
     p->m208 = 0;
     ((void (*)(void*, int, int, int, int, int))fn_803134A0)(p, 0x280, 0x1C0, 0x18, 0x20, 1);
     fn_80312DB0(p);
-    fn_803BD61C(0x43238, 0);
+    InitInternal(0x43238, 0);
     h = p->m38;
     h->mC = (Unk8031378C_DB*)fn_8031DD54(operator new(0xB4, 0), 0, 0, 3, 0);
     fn_803EB520(lbl_8062C620);

@@ -110,7 +110,7 @@ extern char lbl_80604BB8[];
 
 extern int lbl_80627290;
 extern void (*lbl_806279C8)(void);
-extern "C" void fn_803DBF98(void);
+extern "C" void DisableCoPlanarZMode(void);
 extern int lbl_80623CF4;
 extern char lbl_80623CF8[];
 extern Unk80623D04 lbl_80623D04;
@@ -160,7 +160,7 @@ extern "C" void fn_803728E8(Unk803E3C08* a, Unk80623D04* b)
         GXLoadPosMtxImm(&mtx, 0);
         GXSetCurrentMtx(0);
         fn_803DBBE0(a->m0[7].m4);
-        lbl_806279C8 = fn_803DBF98;
+        lbl_806279C8 = DisableCoPlanarZMode;
     }
     fn_803EA338(a->m0[2].m4, a->m0[2].m0, a->m0[1].m4, a->m0[3].m4);
     fn_803DDCD4();

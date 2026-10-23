@@ -656,12 +656,12 @@ extern "C" int fn_8038DE6C(VdMain* s)
     return r > (float)s->m44;
 }
 
-extern "C" int fn_8038E748(VdRes* o);
+extern "C" int IsAudioFinished(VdRes* o);
 
 extern "C" int fn_8038DF08(int* s)
 {
     VdRes* p = *(VdRes**)s;
-    return p ? fn_8038E748(p) : 1;
+    return p ? IsAudioFinished(p) : 1;
 }
 
 extern "C" int fn_8038DF3C(I* s, unsigned rate)
@@ -828,7 +828,7 @@ extern "C" int fn_8038E6F0(VdRes* o)
 VdC lbl_80699B94;
 
 
-extern "C" int fn_8038E748(VdRes* o)
+extern "C" int IsAudioFinished(VdRes* o)
 {
     VdQ16 a;
     VdQ16 b;

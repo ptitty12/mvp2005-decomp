@@ -845,7 +845,7 @@ extern "C" DB_OVERLAY void fn_805381F0(Unk805352B0_List* self)
 }
 
 struct Unk80090880;
-extern "C" void fn_80402FCC(char* dst, const void* src);
+extern "C" void Unicode2Ascii(char* dst, const void* src);
 char* fn_80090880(Unk80090880* p);
 unsigned fn_8007366C(const char* a, const char* b);
 extern Unk80090880* lbl_8061977C;
@@ -867,8 +867,8 @@ extern "C" DB_OVERLAY void fn_80538258(Unk805352B0_List* self)
         char bufB[0x64];
         char* a = ((Look)fn_80090880)(tbl, lbl_806013B0[i]);
         char* b = ((Look)fn_80090880)(tbl, lbl_806014AC[i]);
-        fn_80402FCC(bufA, a);
-        fn_80402FCC(bufB, b);
+        Unicode2Ascii(bufA, a);
+        Unicode2Ascii(bufB, b);
         unsigned id = fn_8007366C(bufA, bufB);
         if (sc->fn_8007A6A0(7, id) == 1)
             self->Push(id);

@@ -150,7 +150,7 @@ void GXInitTexObjCI(void* obj, void* data, unsigned short w, unsigned short h, i
 void GXInitTlutObj(void* obj, void* data, int fmt, unsigned short n);
 }
 
-extern "C" void fn_803E34AC(Unk803E3AFC_Obj* o)
+extern "C" void createfont(Unk803E3AFC_Obj* o)
 {
     int off = *(int*)((char*)o + 0x1C);
     Unk803E3AFC_Gfx* g = &o->m20;
@@ -229,7 +229,7 @@ extern "C" void fn_803E3AC8(Unk803E3AFC_Obj* o, Unk803E3280_Sprite* spr, float x
     fn_803E3280(o, &it, 1);
 }
 
-extern "C" void fn_803E3AFC(Unk803E3AFC_Obj* o)
+extern "C" void destroyfont(Unk803E3AFC_Obj* o)
 {
     Unk803E3AFC_Gfx* g = &o->m20;
     if (g->m5C) {

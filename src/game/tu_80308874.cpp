@@ -305,7 +305,7 @@ void fn_8030ACCC(Unk80308874_List* p);
 void* fn_8026C75C(void* p, int a, int b);
 void fn_8026C864(void* p, int c);
 void fn_80319310(int a, void* p, int k);
-void fn_803E6B3C(void* p);
+void OnWindowClose(void* p);
 void fn_803E6B74(void* p);
 void fn_8030C11C(Unk80308874_At10* p);
 void fn_803DD73C(int h, int k);
@@ -872,7 +872,7 @@ extern "C" void fn_8030B45C(void* pp, int xi)
 
 void fn_8030B5F4(void* p)
 {
-    fn_803E6B3C((char*)p + 0x94);
+    OnWindowClose((char*)p + 0x94);
 }
 
 void fn_8030B618(void* p)

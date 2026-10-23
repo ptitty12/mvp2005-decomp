@@ -49,7 +49,7 @@ extern "C" Unk803E9994_Ent fn_803E92E8(Unk803E9994_Hdr** c, int i);
 extern "C" int strcmp(const char* a, const char* b);
 extern "C" int strlen(const char* s);
 
-extern "C" void fn_803E6FB8(void* a, void* b)
+extern "C" void GaugesMgr_BeginShareDraft(void* a, void* b)
 {
     fn_803ED634(b, a, 0);
 }

@@ -34,7 +34,7 @@ extern "C" int CARDFormat(int);
 extern "C" int CARDFreeBlocks(int, int*, int*);
 extern "C" int CARDSetAttributes(int, int, int);
 extern "C" int fn_803F8CB4(void*, const char*, int*);
-extern "C" int fn_803F8A2C(void*);
+extern "C" int FindNext(void*);
 extern "C" void* memset(void*, int, unsigned);
 extern "C" int strncmp(const char*, const char*, unsigned);
 extern "C" void fn_803F6FC4(void*, int);
@@ -63,7 +63,7 @@ extern "C" int CARDProbeEx(int, int*, int*);
 extern "C" int fn_803F8434(void*, void*, void*, int, int*);
 extern int lbl_806EEA84;
 extern int lbl_806EEA80;
-/* Card status buffer (lbl_806ADDE0): fn_803F8A2C copies the +0x20..+0x2C words into the open record. */
+/* Card status buffer (lbl_806ADDE0): FindNext copies the +0x20..+0x2C words into the open record. */
 struct CardStatV {
     char pad[0x20];
     int m20;
@@ -85,7 +85,7 @@ struct RcRecB {
 };
 
 extern "C" int CARDCreate(int, const char*, int, void*);
-extern "C" int fn_803F80EC(void*, void*);
+extern "C" int FlushWriteBuffer(void*, void*);
 extern "C" int fn_803F8F80(void*, char*);
 
 extern "C" int CARDGetSectorSize(int, int*);
@@ -167,7 +167,7 @@ extern "C" int fn_803F74E0(void* o, unsigned short* h)
     return rc;
 }
 
-extern "C" int fn_803F7584(void* o, int a, void* b, int* out)
+extern "C" int GetFileBlocks(void* o, int a, void* b, int* out)
 {
     int n = fn_803F7EB4(o, b) + 0x44;
     if (RCI(b, 0x20) != 0)
@@ -298,7 +298,7 @@ struct RcBuf {
 extern "C" int fn_803F7EE4(void*, void*, void*, int, int*);
 extern "C" void* memcpy();
 
-extern "C" int fn_803F7BE8(void* o, char* f)
+extern "C" int WriteHeaderData(void* o, char* f)
 {
     RcSave* h = (RcSave*)(f + 0xC);
     int res = 0;
@@ -361,9 +361,9 @@ struct RcSlotV : RcSlotBase {
 extern "C" int CARDOpen(int, const char*, void*);
 extern "C" int CARDFastOpen(int, int, void*);
 extern "C" int fn_803F8FF8(void*, char*);
-extern "C" int fn_803F7BE8(void*, char*);
-extern "C" int fn_803F81F4(void*, char*);
-extern "C" int fn_803F9114(void*, void*);
+extern "C" int WriteHeaderData(void*, char*);
+extern "C" int SetHeaderInfo(void*, char*);
+extern "C" int VerifyHeaderChecksum(void*, void*);
 extern "C" int fn_803F87A8(void*, unsigned short*, int*);
 
 /* near-miss: 98%; the out pointer and the map flag swap callee-saved registers (r21/r22) */
@@ -378,7 +378,7 @@ extern "C" int fn_803F7958(void* o, unsigned short* h, int* name, int flags, voi
     int cnt = 0;
     ((RcSlotV*)s)->v1(h, name, flags);
     if (h[1] != 1)
-        cnt = fn_803F7584(o, (int)h, s + 0xC, (int*)(s + 0xD0));
+        cnt = GetFileBlocks(o, (int)h, s + 0xC, (int*)(s + 0xD0));
     int mapRc = 1;
     if (flags & 0x200) {
         if (h[1] == 1) {
@@ -421,10 +421,10 @@ extern "C" int fn_803F7958(void* o, unsigned short* h, int* name, int flags, voi
         } else {
             RCI(s, 0xe0) = 1;
             if (flags & 0x200) {
-                if (fn_803F7BE8(o, s) != 0 || fn_803F81F4(o, s) == -1)
+                if (WriteHeaderData(o, s) != 0 || SetHeaderInfo(o, s) == -1)
                     rc = 0xF;
             } else
-                rc = fn_803F9114(o, s);
+                rc = VerifyHeaderChecksum(o, s);
             if (rc != 0) {
                 CARDClose(s + 0x48);
                 RCI(s, 0x40) = 0;
@@ -451,7 +451,7 @@ extern "C" int fn_803F7EB4(void* a, void* b)
     return t[0] * 3 << 9;
 }
 
-extern "C" int fn_803F80EC(void* o, void* b)
+extern "C" int FlushWriteBuffer(void* o, void* b)
 {
     int r = 0;
     char* f = (char*)fn_803F74D8(o, b);
@@ -477,7 +477,7 @@ extern "C" int fn_803F80EC(void* o, void* b)
     return r;
 }
 
-extern "C" int fn_803F8604(void* o, void* b)
+extern "C" int CloseFile(void* o, void* b)
 {
     int rc = 0;
     char* f = (char*)fn_803F74D8(o, b);
@@ -485,7 +485,7 @@ extern "C" int fn_803F8604(void* o, void* b)
     if (RCI(f, 0xe0) == 0) {
         rc = fn_803F8F80(o, f);
     } else if (RCI(f, 0x3c) & 0x200) {
-        if (fn_803F80EC(o, b) == 0xf)
+        if (FlushWriteBuffer(o, b) == 0xf)
             rc = 0xf;
         do {
             r = CARDClose(f + 0x48);
@@ -543,7 +543,7 @@ struct RcCardFile {
 #define RC_SET_ICONSPD(s, n, f) ((s)->iconSpeed = (unsigned short)(((s)->iconSpeed & ~(3 << (2 * (n)))) | ((f) << (2 * (n)))))
 extern "C" int CARDSetStatus(int, int, void*);
 
-extern "C" int fn_803F81F4(void* o, char* fp)
+extern "C" int SetHeaderInfo(void* o, char* fp)
 {
     RcCardFile* f = (RcCardFile*)fp;
     memset(&f->stat, 0, 0x6c);
@@ -609,7 +609,7 @@ extern "C" int fn_803F8434(void* o, void* f, void* buf, int len, int* outlen)
     int rc = 0;
     int remain = len;
     if (RCI(rec, 0xd4) != 0)
-        fn_803F80EC(o, f);
+        FlushWriteBuffer(o, f);
     int cc = RCI(rec, 0xcc);
     int total = RCI(rec, 0x7c);
     int off;
@@ -693,7 +693,7 @@ extern "C" int fn_803F7EE4(void* o, void* f, void* buf, int len, int* outlen)
                 RCI(rec, 0xcc) += RCI(o, 0x2b4);
                 RCI(rec, 0xc8) = rc;
                 RCI(rec, 0xd4) = rc;
-                if ((unsigned)(fn_803F7584(o, (int)(rec + 8), rec + 0xc, 0) * RCI(o, 0x2b4)) < (unsigned)RCI(rec, 0xcc)) {
+                if ((unsigned)(GetFileBlocks(o, (int)(rec + 8), rec + 0xc, 0) * RCI(o, 0x2b4)) < (unsigned)RCI(rec, 0xcc)) {
                     do {
                         st = CARDRead(rec + 0x48, (void*)RCI(o, 0x2c0), RCI(o, 0x2b4), RCI(rec, 0xcc));
                         lbl_806EEA34->v6(1);
@@ -742,7 +742,7 @@ extern "C" int fn_803F87A8(void* o, unsigned short* h, int* name)
     return r;
 }
 
-extern "C" int fn_803F885C(void* o, unsigned short* h, int* name1, const char* name2)
+extern "C" int RenameFile(void* o, unsigned short* h, int* name1, const char* name2)
 {
     int r;
     do {
@@ -775,7 +775,7 @@ extern "C" int fn_803F894C(void* o, const char* a, const char* b)
     return r;
 }
 
-extern "C" void fn_803F89B0(void* o, int* a, RcRecA* p)
+extern "C" void FindFirst(void* o, int* a, RcRecA* p)
 {
     RCI(o, 4) = (int)p;
     p->m4 = 0;
@@ -785,10 +785,10 @@ extern "C" void fn_803F89B0(void* o, int* a, RcRecA* p)
     memset(p->m14, 0, 4);
     memset(p->m18, 0, 2);
     RCI(RCI(o, 4), 0) = a[0];
-    fn_803F8A2C(o);
+    FindNext(o);
 }
 
-extern "C" int fn_803F8A2C(void* o)
+extern "C" int FindNext(void* o)
 {
     while (((RcRecB*)RCI(o, 4))->m10 <= 0x7e) {
         int r;
@@ -810,13 +810,13 @@ extern "C" int fn_803F8A2C(void* o)
     return 4;
 }
 
-extern "C" int fn_803F8B24(void* o, void* b, int off, int whence)
+extern "C" int Seek(void* o, void* b, int off, int whence)
 {
     char* f = (char*)fn_803F74D8(o, b);
     if (RCI(f, 0xe0) == 0)
         return fn_803F8D8C((int)o, f, off, whence);
     if (RCI(f, 0xd4) != 0)
-        fn_803F80EC(o, b);
+        FlushWriteBuffer(o, b);
     switch (whence) {
     case 0:
         off += RCI(f, 0xd0);
@@ -983,7 +983,7 @@ extern "C" int fn_803F8FF8(void* o, char* f)
     return r;
 }
 
-extern "C" int fn_803F9114(void* o, void* f)
+extern "C" int VerifyHeaderChecksum(void* o, void* f)
 {
     int rc = 0xf;
     int blk = lbl_806EEA80;

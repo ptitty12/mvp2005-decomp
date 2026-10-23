@@ -455,7 +455,7 @@ int fn_8031C2A4(void* h, int id, int* found, float t);
 void fn_8031C328(void* h, int id);
 }
 extern "C" {
-void fn_803E6B3C(void* p);
+void OnWindowClose(void* p);
 void fn_803E6B74(void* p);
 void DCStoreRangeNoSync(void* p, int n);
 }
@@ -1025,7 +1025,7 @@ void fn_8030E78C(void* pp, int a)
     fn_8030FB5C((Unk8030C5D8_Em*)p);
     fn_8030FC1C((Unk8030FC1C_P*)p, (Unk8030FC1C_Src*)a);
     fn_803E67A0(h, (char*)p + 0x18C);
-    fn_803E6B3C(h);
+    OnWindowClose(h);
     fn_803E6950(h, lbl_805E89D4);
     fn_803E69D8(h, lbl_805E89D4, lbl_8061FDD0, 0x10, 1);
     fn_803E69D8(h, lbl_805E89E0, p->mB8, 0xC, n);
@@ -1184,14 +1184,14 @@ extern "C" int fn_8030F598(Unk8030F598_Obj* p)
     int changed = 0;
     if (dt != 0.0f) {
         changed = 1;
-        fn_803E6B3C((char*)p + 0x114);
+        OnWindowClose((char*)p + 0x114);
         fn_8030EF64((Unk8030EF64_Obj*)p, now, dt);
         fn_8030F0C8((Unk8030F0C8_Obj*)p, now, dt);
         fn_8030F2C4(p, target, dt);
     }
     if (target > p->m80) {
         if (!changed) {
-            fn_803E6B3C((char*)p + 0x114);
+            OnWindowClose((char*)p + 0x114);
             changed = 1;
         }
         int c = p->m80;

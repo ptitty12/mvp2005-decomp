@@ -362,7 +362,7 @@ extern "C" McPool* fn_803901C8()
 
 extern const int lbl_8060641C[];
 
-extern "C" int fn_80390214(int x)
+extern "C" int StaticIsSkillUpgradeObject(int x)
 {
     for (int i = 0; i < 3; i++) {
         if (lbl_8060641C[i] == x)

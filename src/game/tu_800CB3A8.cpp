@@ -7,7 +7,7 @@
 
 extern "C" void fn_80317120(int a, int b);
 extern "C" void fn_800D0D90(void* p);
-extern "C" void fn_80402FCC(char* dst, const char* src);
+extern "C" void Unicode2Ascii(char* dst, const char* src);
 extern "C" void fn_80403144(char* dst, const char* src);
 
 inline int AbsI(int x)
@@ -593,7 +593,7 @@ extern "C" int fn_800CE23C(void* unused, const char* s)
 extern "C" int fn_800CE294(Unk800CB3A8_Grid* g, int col)
 {
     char buf[100];
-    fn_80402FCC(buf, g->m90 + (g->m60 * g->m54 + col) * g->m44 * 2);
+    Unicode2Ascii(buf, g->m90 + (g->m60 * g->m54 + col) * g->m44 * 2);
     int n = fn_8040B6A0(buf);
     int neg = 0;
     int all = 1;
