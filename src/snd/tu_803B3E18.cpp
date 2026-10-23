@@ -16,7 +16,7 @@ extern unsigned char lbl_8060990A[];
 extern int lbl_8069CBC0;
 
 /* The per-layout table row is formed first, then offset by numchan*6; a channel pointer local keeps base + voice*0x90 in retail order. */
-extern "C" void fn_803B3E18(CHANPUB* c)
+extern "C" void SetDefaultAzimuths(CHANPUB* c)
 {
     const unsigned char* tab = lbl_8060990A + lbl_8069CBC0 * 0x24;
     const unsigned char* t = tab + c->numchan * 6;

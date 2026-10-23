@@ -47,7 +47,7 @@ extern "C" void fn_803B3EA8(int shandle, int ch, int level);
 
 /* Average data rate of a sample format (bytes per second). */
 
-extern "C" void fn_803AAE30(void* data);
+extern "C" void StreamFader(void* data);
 
 int iSNDsin(int angle)
 {
@@ -62,7 +62,7 @@ int iSNDsin(int angle)
     return -lbl_80625214[256 - idx];
 }
 
-extern "C" void fn_803A98B0(SNDSTREAMCHANNEL* pssc)
+extern "C" void StreamRemoveFaders(SNDSTREAMCHANNEL* pssc)
 {
     int i;
     for (i = 0; i < 6; i++) {
@@ -315,7 +315,7 @@ extern "C" int fn_803AA95C(int h)
         return -8;
     }
     fn_803AAA3C(h);
-    fn_803A98B0(pssc);
+    StreamRemoveFaders(pssc);
     if (SNDSTRMI_numcreated() == 1) {
         iSNDserverremoveclient(SNDSTRMI_service);
         lbl_8069CA44 = 0;
@@ -372,7 +372,7 @@ again:
     return 0;
 }
 
-extern "C" void fn_803AAE30(void* data)
+extern "C" void StreamFader(void* data)
 {
     Snd::StreamSourceChannelState* s = (Snd::StreamSourceChannelState*)data;
     s->vol += s->fader.incrementPerUpdate;
@@ -424,7 +424,7 @@ extern "C" int SNDSTRM_autovol(int h, int time, int targetVol)
         s->fader.targetVol = target;
         s->fader.incrementPerUpdate = (target - s->vol) * Snd::gVariableTimerPeriod / time;
         if (s->fader.incrementPerUpdate != 0.0f) {
-            s->fader.variableTimerClient.pClientFunc = fn_803AAE30;
+            s->fader.variableTimerClient.pClientFunc = StreamFader;
             s->fader.variableTimerClient.pClientData = s;
             Snd::Util::AddVariableTimerClient(&s->fader.variableTimerClient);
         }

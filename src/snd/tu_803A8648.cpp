@@ -15,7 +15,7 @@ void SNDSYS_leavecritical();
 void fn_803AB480(int shandle);
 int fn_803AD2F0(void* ppatch, void* attr);
 void SNDBANKI_userdatacallback(void* attr, int type);
-void fn_803B115C(int a, void* p);
+void SNDPLATFORM_memfree(int a, void* p);
 
 int SNDbankremove(int bhandle)
 {
@@ -54,7 +54,7 @@ int SNDbankremove(int bhandle)
         }
     }
     if (sndgs.banklist[bhandle].pspuram != NULL) {
-        fn_803B115C(8, sndgs.banklist[bhandle].pspuram);
+        SNDPLATFORM_memfree(8, sndgs.banklist[bhandle].pspuram);
     }
     sndgs.banklist[bhandle].phdr = NULL;
     sndgs.banklist[bhandle].locked = 0;

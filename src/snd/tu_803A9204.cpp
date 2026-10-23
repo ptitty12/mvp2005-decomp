@@ -121,7 +121,7 @@ extern "C" void SNDSYSI_variabletimerservice()
     }
 }
 
-/* near-miss: 152 insns, same control flow as retail now (the fade clamp is `if (fade < Z) {if (!(v > t)) clamp} else {if (!(v < t)) clamp}`, as matched in fn_803AAE30), but the zero constant (extern const float lbl_80609598) is hoisted out of the loop into f31/a saved register; retail reloads it with lis/lfs in each block. Literal 0.0f, extern float, local float and single-clamp goto forms tried */
+/* near-miss: 152 insns, same control flow as retail now (the fade clamp is `if (fade < Z) {if (!(v > t)) clamp} else {if (!(v < t)) clamp}`, as matched in StreamFader), but the zero constant (extern const float lbl_80609598) is hoisted out of the loop into f31/a saved register; retail reloads it with lis/lfs in each block. Literal 0.0f, extern float, local float and single-clamp goto forms tried */
 extern "C" void SNDSYSI_100hzserver()
 {
     int i = 0;

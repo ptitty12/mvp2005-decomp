@@ -307,7 +307,7 @@ done:
     return 0;
 }
 
-extern "C" int fn_803ABCB4(int k, int* out)
+extern "C" int CapOutputMode(int k, int* out)
 {
     SNDSYSOPTS sso;
     int r = 0;
@@ -341,10 +341,10 @@ extern "C" int fn_803ABCB4(int k, int* out)
     return 0;
 }
 
-extern "C" int fn_803ABD58(int a)
+extern "C" int SetOutputMode(int a)
 {
     int tmp;
-    fn_803ABCB4(a, &tmp);
+    CapOutputMode(a, &tmp);
     if (tmp == 0)
         return -5;
     if (lbl_8069C9E4[0] == 0) {

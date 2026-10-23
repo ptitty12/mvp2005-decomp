@@ -18,7 +18,7 @@ extern Unk805AF370_Ent lbl_805AF370[];
 extern char lbl_806872A4[];
 extern char lbl_806872AC[];
 extern "C" void fn_803A8B4C();
-extern "C" void fn_803B9FBC(int a);
+extern "C" void Unsubscribe(int a);
 extern "C" void fn_803BA7C4(void* a, int* b);
 extern "C" void fn_800418C4(Unk80040640* self);
 extern "C" void fn_800410D8(Unk80040640* self, int a);
@@ -264,7 +264,7 @@ void fn_800408A0(Unk80040640* self)
     if (self->m5D0 == 1) {
         fn_803A8B4C();
         MEM_free(self->m5CC);
-        fn_803B9FBC(self->m5C8);
+        Unsubscribe(self->m5C8);
         MEM_free(self->m5C8);
         self->m5D0 = 0;
     }

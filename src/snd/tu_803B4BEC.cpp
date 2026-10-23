@@ -120,12 +120,12 @@ extern "C" int fn_803AB480(int shandle);
 extern "C" void SNDSYS_entercritical();
 extern "C" void SNDSYS_leavecritical();
 struct Unk803B0714;
-extern "C" int fn_803B0368(int slot, Unk803B0714* pmem);
+extern "C" int SNDPLATFORM_packetplaycreate(int slot, Unk803B0714* pmem);
 extern "C" int fn_803B0360();
 extern "C" int fn_803B042C(int h, int voice, int timemult, int lowpass, int highpass, SNDSAMPLEFORMAT* pssf, SNDSAMPLEATTR* pssa);
 extern "C" int fn_803B58E8(int* prenderindex, SNDIPATCHHEADER* pph);
 extern "C" void fn_803AFD44(int rendermode, int* pmin, int* pmax);
-extern "C" void fn_803B3E18(CHANPUB* pvoice);
+extern "C" void SetDefaultAzimuths(CHANPUB* pvoice);
 
 /* SNDPKTPLAY_create (source structure from the ported spktplay.c reference). */
 
@@ -191,7 +191,7 @@ extern "C" int SNDPKTPLAY_create(void (*preleasefunc)(void*, void*), void (*pfra
     return -9;
 
 allocated:
-    packetinstancehandle = fn_803B0368(i, (Unk803B0714*)pmem);
+    packetinstancehandle = SNDPLATFORM_packetplaycreate(i, (Unk803B0714*)pmem);
     if (packetinstancehandle < 0) {
         SNDSYS_leavecritical();
         return -6;
@@ -276,7 +276,7 @@ extern "C" int SNDPKTPLAY_start(int packetinstancehandle, SNDSAMPLEFORMAT* pssf,
         if (pssf->channels == 1) {
             pVoice->azimuth = pspo->azimuth;
         } else {
-            fn_803B3E18(pVoice);
+            SetDefaultAzimuths(pVoice);
         }
 
         pVoice->bhandle = -1;
