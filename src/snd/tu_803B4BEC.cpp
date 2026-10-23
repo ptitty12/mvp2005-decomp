@@ -76,7 +76,7 @@ extern float lbl_80609B98;
 extern "C" void SNDSYS_entercritical();
 extern "C" void SNDSYS_leavecritical();
 extern "C" int fn_803B0360();
-extern "C" void fn_803B0714(int h);
+extern "C" int fn_803B0714(int h);
 
 extern "C" int SFILTER_ft24_32(int unused, int n, float* in, int* out);
 

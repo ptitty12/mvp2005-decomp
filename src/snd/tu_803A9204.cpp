@@ -19,7 +19,7 @@ extern const float lbl_80609598;
 
 extern "C" int fn_803B0798();
 extern "C" void iSNDserve();
-extern "C" void fn_803AB480(int handle);
+extern "C" int fn_803AB480(int handle);
 extern "C" void iSNDcalcvol(int voice);
 extern "C" int fn_803AD2F0(void** pptp, SNDIPATCHHEADER* pph);
 extern "C" int SNDPLATFORM_asyncresolvetimbre(SNDIPATCHHEADER* pph, int a, int b);

@@ -1021,14 +1021,14 @@ extern "C" int SNDSTRM_status(int h, void* p);
 extern "C" int SNDSTRM_requeststatus(int h, void* p);
 int fn_803AB278(int h);
 extern "C" void fn_803AAA3C(int h);
-extern "C" void fn_803AA95C(int h);
+extern "C" int fn_803AA95C(int h);
 extern "C" int SNDSTRM_setgreedylevel(int h, int v);
 void* fn_8004072C(void);
 extern "C" void fn_8004181C(void* self, int a, int b, int c, int d, int e, int f);
 extern "C" int fn_80038EB4(void);
 extern "C" void fn_800396D0(int a, int b);
 extern "C" int fn_803927D0(int h);
-void fn_803A9204(void* p, int a);
+int fn_803A9204(void* p, int a);
 int fn_8005A19C(Unk8005BA1C_Voice* v);
 int fn_8005A118(Unk8005BA1C_Voice* v, float f);
 int fn_8005A5FC(Unk8005BA1C_Voice* v, int k);
@@ -1069,7 +1069,7 @@ void fn_800403EC(void* p);
 
 void fn_8005C75C(Unk8005BA1C_Obj* o, int a, int b);
 int fn_8005C654(Unk8005BA1C_Obj* o, int a, int b, int c);
-extern "C" void fn_803AB480(int h);
+extern "C" int fn_803AB480(int h);
 extern "C" void SNDvol(int h, int v);
 
 void fn_8005AEB0(Unk8005ADD0_Obj* o, int ch);

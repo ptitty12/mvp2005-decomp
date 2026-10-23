@@ -43,7 +43,7 @@ extern "C" int STREAM_queuefile(int sh, void* a, void* b, int tag);
 extern "C" int STREAM_queuemem(int sh, void* a, int b, int tag);
 extern "C" void SNDLINKI_pushtail(SNDLINKLIST* list, void* node);
 extern "C" void* SNDLINKI_pop(SNDLINKLIST* list);
-extern "C" void fn_803B3EA8(int shandle, int ch, int level);
+extern "C" int fn_803B3EA8(int shandle, int ch, int level);
 
 /* Average data rate of a sample format (bytes per second). */
 

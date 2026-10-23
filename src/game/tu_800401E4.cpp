@@ -33,7 +33,7 @@ extern "C" int SNDbankpatpresent(int a, int b);
 extern "C" void SNDSYS_entercritical();
 int fn_803A85B0(int a, int b, void* out);
 extern "C" void SNDSYS_leavecritical();
-void fn_803A9204(void* p);
+int fn_803A9204(void* p);
 void fn_8006772C();
 
 int fn_802B96C4(const char* name, int a);

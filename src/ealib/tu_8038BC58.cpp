@@ -755,7 +755,7 @@ extern "C" int fn_8038E468(VdClock* c)
 
 extern "C" int fn_803AC11C();
 extern "C" void DEBUG_break();
-extern "C" void fn_803A9204(void* out);
+extern "C" int fn_803A9204(void* out);
 extern "C" int SNDSTRM_overheadtap(int a, int b);
 extern "C" int SNDSTRM_createtap(int a, void* b, int c, int d, int e, int f);
 extern "C" int fn_803AB5C8(int a, int b, int c);
@@ -786,7 +786,7 @@ extern "C" VdRes2* fn_8038E534(VdRes2* o, int a, int b)
     return o;
 }
 
-extern "C" void fn_803AA95C(int a);
+extern "C" int fn_803AA95C(int a);
 extern "C" int fn_803AB56C(int a, int b);
 extern "C" int SNDSTRM_modifyhold(int a, int b);
 

@@ -12,7 +12,7 @@ extern "C" {
 
 void SNDSYS_entercritical();
 void SNDSYS_leavecritical();
-void fn_803AB480(int shandle);
+int fn_803AB480(int shandle);
 int fn_803AD2F0(void* ppatch, void* attr);
 void SNDBANKI_userdatacallback(void* attr, int type);
 void SNDPLATFORM_memfree(int a, void* p);
