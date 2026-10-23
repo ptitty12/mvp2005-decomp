@@ -1020,7 +1020,7 @@ extern "C" void SNDSYS_leavecritical(void);
 extern "C" int SNDSTRM_status(int h, void* p);
 extern "C" int SNDSTRM_requeststatus(int h, void* p);
 int fn_803AB278(int h);
-extern "C" void fn_803AAA3C(int h);
+extern "C" int fn_803AAA3C(int h);
 extern "C" int SNDSTRM_destroy(int h);
 extern "C" int SNDSTRM_setgreedylevel(int h, int v);
 void* fn_8004072C(void);

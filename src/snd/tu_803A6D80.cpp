@@ -50,7 +50,7 @@ extern "C" {
 void SNDSYS_entercritical();
 void SNDSYS_leavecritical();
 int fn_803AAA18(int sndstrmhandle, int arg, const char* filename, int offset);
-void fn_803AAA3C(int sndstrmhandle);
+int fn_803AAA3C(int sndstrmhandle);
 AemsDef::PLAYERHANDLE* SNDAEMSI_playerplaystream(AemsDef::PLAYERHANDLE* out, AemsDef::PLAYERSTATE* ps, AemsDef::SAMPLEENTRY* se);
 int SNDAEMSI_playerupdatestream(AemsDef::PLAYERSTATE* ps);
 int fn_803A7ADC();
@@ -65,10 +65,10 @@ void SNDAEMSI_playerunpausestream(AemsDef::PLAYERSTATE* ps);
 int SNDSTRM_pitchmult(int handle, int value);
 void SNDSTRM_timemult(int handle, int value);
 int fn_803AB9F0(int handle, int arg, float v);
-void fn_803AAB7C(int handle, int arg, float v);
+int fn_803AAB7C(int handle, int arg, float v);
 void SNDSTRM_fxlevel(int handle, int arg, int value);
-void fn_803AB430(int handle, int value);
-void fn_803AB388(int handle, int value);
+int fn_803AB430(int handle, int value);
+int fn_803AB388(int handle, int value);
 void SNDSTRM_drylevel(int handle, int value);
 
 int SNDAEMSI_streamgethandle(int priority)

@@ -40,7 +40,7 @@ int fn_803B9448(void*);
 void fn_803B9730(SndT3*, int);
 void fn_803B9770(int, SndT3*, int);
 void fn_803B978C(int, int);
-void fn_803B9478(int, void*, int, int);
+int fn_803B9478(int, void*, int, int);
 int fn_803B9508(int, float**, int);
 void SNDDRV_getmastervoice(int, void*);
 char SNDDRV_getsamplechan(int);

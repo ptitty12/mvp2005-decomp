@@ -10,7 +10,7 @@
 
 struct DtorAt0 { const void* m; };
 
-extern "C" void fn_803B9DDC(DtorAt0* s, int chrg);
+extern "C" int fn_803B9DDC(DtorAt0* s, int chrg);
 
 extern unsigned char lbl_80625454;
 extern void (*lbl_8069C93C)();
@@ -19,7 +19,7 @@ extern "C" void fn_80400C1C(int (*fn)(), int a, int b);
 extern "C" void SYSTEM_addexit(int (*fn)());
 extern "C" int fn_803B3E88();
 
-extern "C" void fn_803B9E08(DtorAt0* s, int chrg);
+extern "C" int fn_803B9E08(DtorAt0* s, int chrg);
 
 extern void (*lbl_8062520C)(DtorAt0*, int);
 extern void (*lbl_80625210)(DtorAt0*, int);

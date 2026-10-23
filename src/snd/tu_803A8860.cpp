@@ -57,11 +57,11 @@ extern EA::Allocator::IAllocator* lbl_806251E8;
 
 extern "C" {
 
-void fn_803BA45C(Csis::Class* c);
+int fn_803BA45C(Csis::Class* c);
 void DecRef(Csis::Class* c);
-void fn_803B9D60(EA::Allocator::IAllocator** p);
-void fn_803B9DDC();
-void fn_803B9E08();
+int fn_803B9D60(EA::Allocator::IAllocator** p);
+int fn_803B9DDC();
+int fn_803B9E08();
 void A1cDestructorCallBack(Csis::Class* c, void* data);
 
 void fn_803A8860(Csis::Parameter* params, void* data)

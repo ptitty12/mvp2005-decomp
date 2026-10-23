@@ -10,11 +10,11 @@
 
 extern "C" void SNDSYS_entercritical();
 extern "C" void SNDSYS_leavecritical();
-extern "C" void fn_803B4160(int shandle, int cutoff);
-extern "C" void fn_803B445C(int shandle, int cutoff);
+extern "C" int fn_803B4160(int shandle, int cutoff);
+extern "C" int fn_803B445C(int shandle, int cutoff);
 extern "C" void SNDPLATFORM_stop(int voice);
 extern "C" int fn_803FD944(int a, int b, int c);
-extern "C" void fn_803AA810(int h, int a, void* b, int c, int d);
+extern "C" int fn_803AA810(int h, int a, void* b, int c, int d);
 extern "C" int fn_803FE914(int h);
 extern "C" void STREAM_setgreedylevel(int h, int v);
 extern "C" void SNDCTRL_timemult(int shandle, int v);

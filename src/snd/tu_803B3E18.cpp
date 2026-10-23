@@ -10,7 +10,7 @@
 
 struct DtorAt0 { const void* m; };
 
-extern "C" void fn_803AC134(DtorAt0* s, int chrg);
+extern "C" int fn_803AC134(DtorAt0* s, int chrg);
 
 extern unsigned char lbl_8060990A[];
 extern int lbl_8069CBC0;
