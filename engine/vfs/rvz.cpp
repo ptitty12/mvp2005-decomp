@@ -312,6 +312,30 @@ bool RvzSource::load_group(std::uint32_t index, std::uint64_t group_bytes,
   return decode_packing(plain.data(), plain.size(), disc_off, out->data(), out->size(), error);
 }
 
+bool RvzSource::chunk(std::uint32_t index, std::uint64_t chunk_bytes, const std::uint8_t** out,
+                      std::string* error) const {
+  for (std::size_t i = 0; i < cache_.size(); ++i) {
+    if (cache_[i].index == index) {
+      if (i != 0) std::swap(cache_[0], cache_[i]);  // most recently used first
+      *out = cache_[0].bytes.data();
+      return true;
+    }
+  }
+  std::vector<std::uint8_t> bytes;
+  if (!load_group(index, chunk_bytes, &bytes, error)) return false;
+  // Make room, then keep this one. A chunk larger than the whole budget (a very
+  // large chunk size against a small budget) simply replaces everything, so the
+  // caller always gets a pointer to live bytes.
+  while (!cache_.empty() && cache_bytes_ + bytes.size() > kCacheBudget) {
+    cache_bytes_ -= cache_.back().bytes.size();
+    cache_.pop_back();
+  }
+  cache_bytes_ += bytes.size();
+  cache_.insert(cache_.begin(), Chunk{index, std::move(bytes)});
+  *out = cache_[0].bytes.data();
+  return true;
+}
+
 bool RvzSource::read(std::uint64_t off, void* dst, std::size_t n) {
   if (off > iso_size_ || n > iso_size_ - off) return false;
   std::uint8_t* out = static_cast<std::uint8_t*>(dst);
@@ -335,19 +359,17 @@ bool RvzSource::read(std::uint64_t off, void* dst, std::size_t n) {
     }
     if (range == nullptr) return false;
     const std::uint64_t local = off - range->off;
-    const std::uint64_t chunk = local / chunk_size_;
-    const std::uint32_t index = range->group0 + std::uint32_t(chunk);
-    const std::uint64_t group_start = range->off + chunk * chunk_size_;
+    const std::uint64_t chunk_no = local / chunk_size_;
+    const std::uint32_t index = range->group0 + std::uint32_t(chunk_no);
+    const std::uint64_t group_start = range->off + chunk_no * chunk_size_;
     const std::uint64_t group_bytes =
         std::min<std::uint64_t>(chunk_size_, range->off + range->size - group_start);
     const std::size_t in_group = std::size_t(off - group_start);
     const std::size_t take = std::size_t(std::min<std::uint64_t>(group_bytes - in_group, n));
 
-    if (cached_group_ != index) {
-      if (!load_group(index, group_bytes, &cached_bytes_, &error)) return false;
-      cached_group_ = index;
-    }
-    std::memcpy(out, cached_bytes_.data() + in_group, take);
+    const std::uint8_t* bytes = nullptr;
+    if (!chunk(index, group_bytes, &bytes, &error)) return false;
+    std::memcpy(out, bytes + in_group, take);
     out += take;
     off += take;
     n -= take;

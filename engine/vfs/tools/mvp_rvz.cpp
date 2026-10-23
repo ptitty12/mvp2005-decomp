@@ -6,6 +6,18 @@
 //   mvp-rvz pack <image> <out.rvz> [--level N] [--chunk N] [--none]
 //
 // The input goes through the engine's own Source, so a CISO works too.
+//
+// Chunk size is a real tradeoff, measured on this game (level 3, 300 VI fields of
+// a browser run; the reader keeps 48 MiB of decompressed chunks):
+//
+//   chunk    image          I/O time   worst read   stalled frames
+//   2 MiB    1049 MB (76%)  420 ms     32 ms        none
+//   128 KiB  1119 MB (81%)  260 ms     93 ms        none
+//
+// A 2 MiB image that the reader cached with only its last chunk (before the chunk
+// cache existed) cost 1269 ms and 221 ms worst, so the cache matters more than the
+// chunk size. Smaller chunks suit a slower host or a slower machine; the default
+// keeps the smaller image.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>

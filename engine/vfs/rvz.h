@@ -76,11 +76,23 @@ class RvzSource final : public Source {
   std::vector<RawRange> raw_;
   std::vector<Group> groups_;
 
-  // One-group cache: reads walk the disc forwards (the DOL, then the FST, then the
-  // data a scene loads), so the previous chunk is almost always the next one asked
-  // for. Mutable because read() is const-eligible on a Source.
-  mutable std::uint32_t cached_group_ = 0xFFFFFFFFu;
-  mutable std::vector<std::uint8_t> cached_bytes_;
+  // Decompressed-chunk cache, most recently used first, bounded by bytes rather
+  // than by count so it behaves the same whatever chunk size the image was packed
+  // with. The disc is read in bursts over a small region (a model, a texture, a
+  // table), and a miss costs a whole chunk of inflation, so keeping the last few
+  // chunks is worth much more than keeping only the last one.
+  struct Chunk {
+    std::uint32_t index = 0;
+    std::vector<std::uint8_t> bytes;
+  };
+  static constexpr std::size_t kCacheBudget = 48u << 20;
+
+  // The decompressed bytes of chunk `index`, filling the cache on a miss.
+  bool chunk(std::uint32_t index, std::uint64_t chunk_bytes, const std::uint8_t** out,
+             std::string* error) const;
+
+  mutable std::vector<Chunk> cache_;
+  mutable std::size_t cache_bytes_ = 0;
 };
 
 namespace rvz {
