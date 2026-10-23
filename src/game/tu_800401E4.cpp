@@ -33,7 +33,7 @@ extern "C" int SNDbankpatpresent(int a, int b);
 extern "C" void SNDSYS_entercritical();
 int fn_803A85B0(int a, int b, void* out);
 extern "C" void SNDSYS_leavecritical();
-int fn_803A9204(void* p);
+int SNDplaysetdef(void* p);
 void fn_8006772C();
 
 int fn_802B96C4(const char* name, int a);
@@ -562,7 +562,7 @@ int fn_80041418(Unk80040640* self, int i)
 void fn_80041478(Unk80040640* self, int id)
 {
     int t;
-    fn_803A9204(&self->m600);
+    SNDplaysetdef(&self->m600);
     t = lbl_805AF688[id].m14;
     self->m600.m5 = 0;
     if (t > -1)

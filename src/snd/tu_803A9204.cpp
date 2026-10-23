@@ -19,7 +19,7 @@ extern const float lbl_80609598;
 
 extern "C" int fn_803B0798();
 extern "C" void iSNDserve();
-extern "C" int fn_803AB480(int handle);
+extern "C" int SNDstop(int handle);
 extern "C" void iSNDcalcvol(int voice);
 extern "C" int fn_803AD2F0(void** pptp, SNDIPATCHHEADER* pph);
 extern "C" int SNDPLATFORM_asyncresolvetimbre(SNDIPATCHHEADER* pph, int a, int b);
@@ -29,7 +29,7 @@ extern "C" void fn_803B12F8(void* s, int chrg);
 extern "C" void fn_803A97DC(int initialize, int priority);
 
 /* SNDplaysetdef: default SNDPLAYOPTS. */
-extern "C" int fn_803A9204(SNDPLAYOPTS* pspo)
+extern "C" int SNDplaysetdef(SNDPLAYOPTS* pspo)
 {
     pspo->pitchmult = 0x1000;
     pspo->timemult = 0x1000;
@@ -160,7 +160,7 @@ extern "C" void SNDSYSI_100hzserver()
                     }
                 }
                 if (p->programmedVol < lbl_80609598) {
-                    fn_803AB480(p->handle);
+                    SNDstop(p->handle);
                     continue;
                 }
             }
@@ -171,7 +171,7 @@ extern "C" void SNDSYSI_100hzserver()
             }
             if (p->envduration == 0) {
                 if (++p->curenvelope >= p->numenvelopes) {
-                    fn_803AB480(p->handle);
+                    SNDstop(p->handle);
                     continue;
                 }
                 ENVELOPE* e = &p->paenvelope[p->curenvelope];

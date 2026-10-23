@@ -755,7 +755,7 @@ extern "C" int fn_8038E468(VdClock* c)
 
 extern "C" int fn_803AC11C();
 extern "C" void DEBUG_break();
-extern "C" int fn_803A9204(void* out);
+extern "C" int SNDplaysetdef(void* out);
 extern "C" int SNDSTRM_overheadtap(int a, int b);
 extern "C" int SNDSTRM_createtap(int a, void* b, int c, int d, int e, int f);
 extern "C" int fn_803AB5C8(int a, int b, int c);
@@ -775,7 +775,7 @@ extern "C" VdRes2* fn_8038E534(VdRes2* o, int a, int b)
         o->m4 = 0;
         o->m10 = -1;
         o->mC = -1;
-        fn_803A9204(q);
+        SNDplaysetdef(q);
         int sz = SNDSTRM_overheadtap(1, 0x1E);
         int p = (int)lbl_80699B94.m0("AV::audiobuff", sz, 0, 0, lbl_80699B94.m8);
         o->m4 = p;
@@ -786,14 +786,14 @@ extern "C" VdRes2* fn_8038E534(VdRes2* o, int a, int b)
     return o;
 }
 
-extern "C" int fn_803AA95C(int a);
-extern "C" int fn_803AB56C(int a, int b);
+extern "C" int SNDSTRM_destroy(int a);
+extern "C" int SNDSTRM_pitchmult(int a, int b);
 extern "C" int SNDSTRM_modifyhold(int a, int b);
 
 extern "C" void fn_8038E61C(VdRes* o, int chrg)
 {
     if (o->m4 != 0) {
-        fn_803AA95C(o->mC);
+        SNDSTRM_destroy(o->mC);
         lbl_80699B94.m4(o->m4);
         o->m4 = 0;
     }
@@ -805,7 +805,7 @@ extern "C" int fn_8038E694(VdRes* o, int a)
 {
     if (o->mC != -1) {
         SNDSYS_entercritical();
-        int r = fn_803AB56C(o->mC, a);
+        int r = SNDSTRM_pitchmult(o->mC, a);
         SNDSYS_leavecritical();
         return r;
     }

@@ -106,7 +106,7 @@ extern "C" int fn_803AB430(int h, int v)
     return 0;
 }
 
-extern "C" int fn_803AB480(int shandle)
+extern "C" int SNDstop(int shandle)
 {
     int setvoice;
     int voice = SNDVOICEI_get(shandle);
@@ -132,7 +132,7 @@ extern "C" int SNDSTRM_overhead(int a, int b)
     return n + fn_803FD944(a + 2, 1, 1);
 }
 
-extern "C" int fn_803AB56C(int h, int v)
+extern "C" int SNDSTRM_pitchmult(int h, int v)
 {
     SNDSTREAMCHANNEL* pssc = SNDSTRMI_getstreamptr(h);
     if (pssc == 0)

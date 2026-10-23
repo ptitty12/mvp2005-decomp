@@ -11,8 +11,8 @@ extern "C" {
 int fn_803BA378(Csis::Class*);
 int fn_803BA44C(Csis::Class*, int*);
 int fn_803BA80C(Csis::GlobalVariableHandle*, void*);
-int fn_803A9204(SNDPLAYOPTS*);
-int fn_803AB480(int);
+int SNDplaysetdef(SNDPLAYOPTS*);
+int SNDstop(int);
 int SNDvol(int, int);
 int SNDbankremove(int);
 void SNDSYS_entercritical(void);
@@ -785,7 +785,7 @@ AemsDef::PLAYERHANDLE SNDAEMSI_playerplaybank(AemsDef::PLAYERSTATE *pplayerstate
     AemsDef::PLAYERINPUTSTATE *pplayerinputstate;
     int i;
 
-    fn_803A9204(&spo);
+    SNDplaysetdef(&spo);
     spo.fxlevel0 = 0;
     pplayerinputstate = reinterpret_cast<AemsDef::PLAYERINPUTSTATE *>(&pplayerstate[1]);
 
@@ -801,7 +801,7 @@ AemsDef::PLAYERHANDLE SNDAEMSI_playerplaybank(AemsDef::PLAYERSTATE *pplayerstate
 }
 
 void SNDAEMSI_playerstopbank(AemsDef::PLAYERSTATE *pplayerstate) {
-    fn_803AB480(pplayerstate->settings.handle.u.shandle);
+    SNDstop(pplayerstate->settings.handle.u.shandle);
 }
 
 void SNDAEMSI_playerpausebank(AemsDef::PLAYERHANDLE pplayerstate) {

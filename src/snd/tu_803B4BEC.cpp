@@ -115,7 +115,7 @@ struct Unk803B69AC {
     float m2C[4];
 };
 
-extern "C" int fn_803AB480(int shandle);
+extern "C" int SNDstop(int shandle);
 
 extern "C" void SNDSYS_entercritical();
 extern "C" void SNDSYS_leavecritical();
@@ -409,7 +409,7 @@ extern "C" int SNDPKTPLAY_stop(int h)
 {
     SNDPACKETCHAN* p = lbl_806AA500.ppc[h];
     int i = 0;
-    fn_803AB480(p->shandle);
+    SNDstop(p->shandle);
     SNDPKTPLAYI_flushcallbackdata();
     SNDPKTPLAY_purge(h, 0, 0x7fffffff);
     p->shandle = -1;

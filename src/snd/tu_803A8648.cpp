@@ -12,7 +12,7 @@ extern "C" {
 
 void SNDSYS_entercritical();
 void SNDSYS_leavecritical();
-int fn_803AB480(int shandle);
+int SNDstop(int shandle);
 int fn_803AD2F0(void* ppatch, void* attr);
 void SNDBANKI_userdatacallback(void* attr, int type);
 void SNDPLATFORM_memfree(int a, void* p);
@@ -34,7 +34,7 @@ int SNDbankremove(int bhandle)
     for (i = 0; i < sndgs.voicestotal; i++) {
         int o = i * 0x90;
         if (reinterpret_cast<CHANPUB*>(reinterpret_cast<char*>(sndgs.chan) + o)->bhandle == bhandle) {
-            fn_803AB480(*reinterpret_cast<int*>(reinterpret_cast<char*>(sndgs.chan) + o));
+            SNDstop(*reinterpret_cast<int*>(reinterpret_cast<char*>(sndgs.chan) + o));
         }
     }
     int patnum;

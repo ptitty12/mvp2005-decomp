@@ -893,3 +893,6 @@ fn_803B9E34	Subscribe
 fn_803B9FBC	Unsubscribe
 fn_803BA3B8	ReleaseFast
 fn_803BA474	DecRef
+fn_803AA95C	SNDSTRM_destroy
+fn_803AB56C	SNDSTRM_pitchmult
+fn_803B3EA8	SNDfxlevel

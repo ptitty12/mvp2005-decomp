@@ -32,7 +32,7 @@ extern "C" void fn_803B3E88(DtorAt0* s, int chrg)
     fn_803AC134(s, chrg);
 }
 
-extern "C" int fn_803B3EA8(int shandle, int ch, int level)
+extern "C" int SNDfxlevel(int shandle, int ch, int level)
 {
     int setvoice;
     int voice = SNDVOICEI_get(shandle);
