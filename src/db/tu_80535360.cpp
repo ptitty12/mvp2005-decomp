@@ -16,7 +16,7 @@ extern "C" int fn_80077BC4(void* g, int a);
 extern Unk80538DD8_G* lbl_80619948;
 extern float lbl_805FEC40;
 extern const char* lbl_80622A4C[];
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 extern "C" float fn_8007824C(int a, int b);
 int fn_8007F674(Unk8007F198_A* self, int a, int x);
 int fn_8007F6C4(Unk8007F198_A* self, int a, int x, int y);

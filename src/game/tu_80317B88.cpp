@@ -75,7 +75,7 @@ extern "C" {
 void fn_80328374(void* p, int a);
 void OnWindowClose(void* p);
 void fn_803E6B74(void* p);
-void fn_803E6C28(void* p, int n);
+int fn_803E6C28(void* p, int n);
 int fn_803E69D8(void* p, const char* name, void* data, int size, int count);
 int fn_803E6950(void* p, const char* name);
 void fn_803E67A0(void* p, void* q);
@@ -86,7 +86,7 @@ int fn_803DBE38(void* p, int n);
 int fn_803DBE20(void* p, int n);
 int fn_803DBE68(void* p, int n);
 int fn_803DBE78(void* p, int n);
-void fn_803DBD54(void* p);
+int fn_803DBD54(void* p);
 void fn_803E6660(void* p);
 int fn_8040B574(const char* a, const char* b);
 void fn_8040B61C(void* p, int a);

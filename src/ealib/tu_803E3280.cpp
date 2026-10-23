@@ -57,8 +57,8 @@ extern Unk803E3B3C_Cam* lbl_806EFC28;
 extern int lbl_806EFC2C;
 extern int lbl_80627A78;
 
-extern "C" void fn_803DB5A0(void* p);
-extern "C" void fn_803DBD54(void* p);
+extern "C" int fn_803DB5A0(void* p);
+extern "C" int fn_803DBD54(void* p);
 extern "C" void fn_803DBD84(void* p, int chrg);
 extern "C" void GXBegin(int prim, int fmt, unsigned short n);
 extern "C" void fn_803E3280(Unk803E3AFC_Obj* o, Unk803E3280_Item* items, int count);

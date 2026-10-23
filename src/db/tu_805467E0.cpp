@@ -129,7 +129,7 @@ extern "C" void fn_8053971C(void* l);
 extern "C" void fn_805362AC(char* o, int a);
 extern "C" int rand();
 extern "C" void fn_80535EAC(void* l);
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 extern "C" void fn_800A1930(void* g, int id, int b, int d, float f);
 extern "C" int fn_80077BC4(void* s, int id);
 extern "C" void fn_800793E8(void* s, int id, void* p1, void* p2, void* p3);

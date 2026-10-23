@@ -19,7 +19,7 @@ extern RcIfB* lbl_806EEA2C;
 extern "C" void* memset(void*, int, unsigned);
 extern "C" void fn_80377408(void*);
 extern "C" int fn_803F8944(RcIfB*);
-extern "C" void fn_803F7604(RcIfB*);
+extern "C" int fn_803F7604(RcIfB*);
 extern "C" void fn_803EF23C(int, int);
 extern "C" void fn_803F009C(void*, int*);
 extern "C" int fn_803F0074(void*, int*);

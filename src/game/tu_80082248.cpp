@@ -137,7 +137,7 @@ extern char lbl_805B4254[];
 
 
 
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 Rec* fn_80082248();
 
 

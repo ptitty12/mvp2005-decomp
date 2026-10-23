@@ -209,7 +209,7 @@ int fn_802D78D8(int a);
 int fn_802D7C70();
 void fn_800085AC();
 extern "C" int fn_80400DA4();
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 float fn_802DC1D8(Unk802D73B4_Pad* p, short b);
 float fn_802DC3E8(Unk802D73B4_Pad* p, short b);
 float fn_802D81A4(int a, int b);

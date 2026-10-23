@@ -98,7 +98,7 @@ extern "C" {
 float sqrtf(float x);
 void MultMatrix(Mtx4* a, Mtx4* b, Mtx4* out);
 void MEM_copy(void* dst, const void* src, int n);
-void fn_803DE7D0(Mtx4* a, Mtx4* b);
+float fn_803DE7D0(Mtx4* a, Mtx4* b);
 void fn_803DF4E4(Mtx4* out);
 void fn_803E02E4(Mtx4* dst, Mtx4* other);
 void* fn_803DD7C0(void* t);

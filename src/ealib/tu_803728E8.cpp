@@ -92,7 +92,7 @@ void fn_803DFBAC(Unk803728E8Mtx* in, Unk803728E8Mtx* out);
 void GXLoadPosMtxImm(Unk803728E8Mtx* m, int id);
 void GXSetCurrentMtx(int id);
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);
 void fn_803EA338(void* a, void* b, void* c, void* d);

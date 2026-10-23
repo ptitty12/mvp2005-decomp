@@ -353,8 +353,8 @@ inline int FindSet(Unk803E6950* o, const char* name, int a, int b, int c)
     return fn_803E6A70(o, found, a, b, c);
 }
 
-extern "C" void fn_803DBDD8(void* m, int a);
-extern "C" void fn_803D707C(void* self, void* item);
+extern "C" int fn_803DBDD8(void* m, int a);
+extern "C" int fn_803D707C(void* self, void* item);
 extern char lbl_8060CB24[];
 extern char lbl_8060CB74[];
 extern char lbl_8060CB90[];
@@ -455,7 +455,7 @@ extern "C" int fn_803E4C30(Unk803E4A50* o)
     return 1;
 }
 
-extern "C" void fn_803DBDD8(void* m, int a);
+extern "C" int fn_803DBDD8(void* m, int a);
 
 /* fn_803D987C takes no parameters; r3 is not set at the call. */
 inline int ReadyInl(Unk803E6660* o)
@@ -792,7 +792,7 @@ extern "C" void fn_803E6708(Unk803E6660* o, int chrg)
         lbl_8062C66C(o, 0x3C);
 }
 
-extern "C" void fn_803D707C(void* self, void* item);
+extern "C" int fn_803D707C(void* self, void* item);
 
 extern char lbl_8060CB24[];
 
@@ -934,7 +934,7 @@ extern "C" void fn_803E6D28(Unk803E6D28* s)
     }
 }
 
-extern "C" void fn_803DBDD8(void* m, int a);
+extern "C" int fn_803DBDD8(void* m, int a);
 
 struct Unk803E6E10_Blk60 {
     float w[15];

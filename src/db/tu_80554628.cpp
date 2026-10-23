@@ -97,7 +97,7 @@ struct Db8055A360_S {
     int mC;
 };
 
-extern "C" void fn_80400CE4(int a);
+extern "C" int fn_80400CE4(int a);
 extern "C" void fn_805371C4(Unk805352B0_List* self, unsigned f);
 extern char lbl_8064A2A8[];
 void fn_8007F524(Unk8007F198_A* g, int a);

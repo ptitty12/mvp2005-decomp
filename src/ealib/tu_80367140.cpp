@@ -75,7 +75,7 @@ void fn_803EA338(void* a, void* b, void* c, void* d);
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
 void GXSetNumChans(int n);
 void fn_803DD794(void* tex);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DB9C0(int a, int b);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);

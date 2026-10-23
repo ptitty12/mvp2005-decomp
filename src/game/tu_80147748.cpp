@@ -162,7 +162,7 @@ extern const char lbl_805C4D98[];
 extern int lbl_8061B900;
 void fn_8033E958(const char*, ...);
 void fn_8014A0EC();
-void fn_804007D4(void*);
+int fn_804007D4(void*);
 void fn_80148AB4(void*);
 void fn_80400498(void (*)());
 extern int lbl_8061B914;

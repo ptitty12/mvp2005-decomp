@@ -96,7 +96,7 @@ struct RcCb {
 
 extern RcCb lbl_806AABE4;
 extern "C" void FREE_add(RcHeap*, RcBlk*);
-extern "C" void fn_804007D4(void*);
+extern "C" int fn_804007D4(void*);
 extern "C" char* strcpy(char*, const char*);
 extern "C" int sprintf(char*, const char*, ...);
 extern char lbl_8060DF50[];

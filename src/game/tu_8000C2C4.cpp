@@ -18,7 +18,7 @@ extern unsigned char lbl_806158B8[];
 void fn_8000C704(short x, short y, unsigned short w, unsigned char* base, const char* s, unsigned short color);
 extern "C" void DCFlushRange(void* p, unsigned int n);
 int fn_804089B4(char* buf, const char* fmt, ...);
-extern "C" void fn_803E7320(int ch, const char* s, ...);
+extern "C" int fn_803E7320(int ch, const char* s, ...);
 void fn_8043D380(void* fb);
 void fn_8043D250();
 int fn_80409C4C(char* buf, int n, const char* fmt, va_list ap);

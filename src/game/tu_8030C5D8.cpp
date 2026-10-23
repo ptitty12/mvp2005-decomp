@@ -446,8 +446,8 @@ inline float Unk8030EBC8_Secs(unsigned n)
     return (float)n * 0.016666668f;
 }
 extern "C" {
-void fn_803E6D00(void* p, void* m);
-void fn_803E6C28(void* p, int n);
+int fn_803E6D00(void* p, void* m);
+int fn_803E6C28(void* p, int n);
 }
 extern "C" {
 Unk8030F0C8_Ent* fn_8031C1E4(void* h, int id);
@@ -491,7 +491,7 @@ int fn_8030CE18(int h);
 int fn_8030C5D8(int h);
 void fn_8037B424(void* p);
 void fn_803E6660(void* p);
-void fn_803DBD54(void* p);
+int fn_803DBD54(void* p);
 int fn_803E9B98(const void* a, void* b);
 void* fn_8030BDE8(void* p);
 void v3unit(const Unk8030FC1C_V3* v, Unk8030FC1C_V3* out);
