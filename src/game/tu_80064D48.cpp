@@ -43,7 +43,7 @@ extern char lbl_806872DC[];
 extern char lbl_806872E4[];
 
 extern "C" int fn_803FED48(int h, int a, int b, int* out);
-extern "C" void fn_803FEDB8(int h, int a);
+extern "C" int fn_803FEDB8(int h, int a);
 extern "C" void MEM_free(int h);
 int fn_804089B4(char* buf, const char* fmt, ...);
 extern "C" void fn_803917D0(int v);

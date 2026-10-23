@@ -75,7 +75,7 @@ extern "C" void fn_803FED48(int a, int b, int c, int* d);
 extern "C" char* fn_803FC548(int p, int i, char* buf);
 void fn_802B0638(int g, char* s, int a);
 void fn_802B0140(int g, char* s, int a, int b, int c);
-extern "C" void fn_803FEDB8(int a, int b);
+extern "C" int fn_803FEDB8(int a, int b);
 extern "C" void fn_80377488(int p);
 int fn_8040B574(const char* a, const char* b);
 extern char lbl_805BA560[];

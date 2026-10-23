@@ -147,7 +147,7 @@ struct SortArrDel {
 };
 extern "C" {
 void fn_80356798(void* self);
-void fn_803780A0(SortArr* a, int idx);
+int fn_803780A0(SortArr* a, int idx);
 void fn_80377DBC(SortArr* a, int* o1, int* o2, int idx);
 void fn_80377DE4(SortArr* a, int v1, int v2, int idx);
 int fn_80377E04(SortArr* a, int* out, int key);

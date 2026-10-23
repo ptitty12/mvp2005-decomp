@@ -224,7 +224,7 @@ struct GlEntry {
 };
 
 extern float lbl_80605DA8;
-extern "C" void fn_80388490(GlPool* self, int flags, GlEntry* arr, int n, int* out);
+extern "C" int fn_80388490(GlPool* self, int flags, GlEntry* arr, int n, int* out);
 
 inline void CopyV3(GlV3* d, const GlV3* s)
 {

@@ -867,7 +867,7 @@ struct Unk802B9FF0_Hdr;
 extern const char lbl_805E0138[];
 extern int lbl_805E0F88;
 extern "C" int fn_803FED48(const char* fmt, int a, int b, int* out);
-extern "C" void fn_803FEDB8(int h, int n);
+extern "C" int fn_803FEDB8(int h, int n);
 int fn_802B98AC(int a, int b);
 void fn_802B9FF0(void* p, Unk802B9FF0_Hdr* h);
 extern "C" void DCStoreRange(void* p, int n);
