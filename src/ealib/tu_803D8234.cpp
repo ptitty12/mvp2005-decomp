@@ -781,7 +781,7 @@ extern "C" void* fn_803D9BE0(Unk803D8234Light* self, void* owner)
 }
 
 /*
- * Not matched yet: fn_803D8918 (510 instructions); fn_803D8828 and fn_803D9378 read the time base (mftb);
+ * Not matched yet: SetupFrameBuffers (510 instructions); fn_803D8828 and fn_803D9378 read the time base (mftb);
  * fn_803D9528 ends in a trap word after the fatal-error call. The original code stays linked for these.
  * fn_803D9918 uses the shared FIFO view for the retail signed displacement.
  */

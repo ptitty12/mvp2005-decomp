@@ -974,3 +974,4 @@ fn_803F8A2C	FindNext
 fn_803F8B24	Seek
 fn_803F9114	VerifyHeaderChecksum
 fn_80402FCC	Unicode2Ascii
+fn_803D8918	SetupFrameBuffers

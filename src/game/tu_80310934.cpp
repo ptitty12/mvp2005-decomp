@@ -334,7 +334,7 @@ void VIFlush(void);
 void VIWaitForRetrace(void);
 void OSSetProgressiveMode(int a);
 void fn_803D9DDC(int h, void* p, int n);
-void fn_803D8918(int h);
+void SetupFrameBuffers(int h);
 void fn_803D9E70(int h, int a, int b, int c, int d, int e, int f, int g, int s);
 void fn_803D9ECC(int h, int a, int b, int c, int d);
 void fn_80314894(int a, int b, int c, int d, int e, int f);
@@ -891,7 +891,7 @@ void fn_803134A0(Unk80310934_S134* self, int x, int y, int a3, int a4, int c, in
     ((void (*)(void*))fn_80312DA8)(self);
     if (OSGetResetCode() < 0 && OSGetProgressiveMode() != 0 && VIGetDTVStatus() == 1)
         fn_803D9DDC(lbl_8061FEDC->m38->m4 + 0x10, lbl_80634B54, 0x10);
-    fn_803D8918(self->m38->m4);
+    SetupFrameBuffers(self->m38->m4);
     float sp8;
     float spC;
     ((Unk80310934_V0C*)self->m38->m4)->s3(&sp8, &spC);
@@ -909,7 +909,7 @@ extern "C" void fn_80313634(void* p)
     VIWaitForRetrace();
     OSSetProgressiveMode(1);
     fn_803D9DDC(((Unk80310934_P60*)p)->m38->m4 + 0x10, lbl_80634B54, 0x10);
-    fn_803D8918(((Unk80310934_P60*)p)->m38->m4);
+    SetupFrameBuffers(((Unk80310934_P60*)p)->m38->m4);
 }
 
 extern "C" void fn_803136A0(void* p)
@@ -920,7 +920,7 @@ extern "C" void fn_803136A0(void* p)
     VIWaitForRetrace();
     OSSetProgressiveMode(0);
     fn_803D9DDC(((Unk80310934_P60*)p)->m38->m4 + 0x10, lbl_80634AA0, 0x10);
-    fn_803D8918(((Unk80310934_P60*)p)->m38->m4);
+    SetupFrameBuffers(((Unk80310934_P60*)p)->m38->m4);
 }
 
 void fn_8031370C()
