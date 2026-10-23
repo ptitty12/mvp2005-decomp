@@ -4,7 +4,7 @@
 # Everything derived from the disc (extracted DOL, translated C++, traces) is
 # written under the build tree, never into the source tree.
 cmake_minimum_required(VERSION 3.25)
-project(mvp_engine LANGUAGES CXX)
+project(mvp_engine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,6 +74,7 @@ function(engine_test name)
 endfunction()
 
 add_subdirectory(third_party/pureikyubu)
+add_subdirectory(third_party/zstd)
 add_subdirectory(common)
 add_subdirectory(vfs)
 add_subdirectory(mods)

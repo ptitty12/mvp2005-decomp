@@ -155,6 +155,21 @@ pinned to the exact upstream commit it was fetched from.
 |---|---|---|---|---|
 | `engine/third_party/doctest/doctest.h`, `LICENSE.txt` | [doctest/doctest](https://github.com/doctest/doctest) v2.5.3 | MIT | `2d0a9359a60c51affe2a9bebb1be1dca47868151` | Unit-test framework for every data-free engine test |
 | `engine/third_party/pureikyubu/` (`gekko.cpp`, `gekko.h`, `gekkoc.cpp`, `gekkoc.h`, `gekkodec.cpp`, `gekkodec.h`, `gekkodisasm.cpp`, `gekkodisasm.h`, `gqr.h` from `src/`; `pch.h`, `stubs.cpp` from `testing/gekko_bench/`; `LICENSE`) | [emu-russia/pureikyubu](https://github.com/emu-russia/pureikyubu) | CC0-1.0 | `0c29dca5cfa13d9126a137b9ebf95f13821413cb` (the last commit where the benchmark's `pch.h` and the core sources agree) | Test oracle only: `test_ppc_fuzz_pk` runs random integer/branch/CR/XER programs on its interpreter and ours. Not linked into the engine. Changes: `pch.h` includes our `pk_jit_stub.h` when the recompiler is not built; `pk_jit_stub.h`, `pk_wasm_shim.h` (no x86 cycle counter in the WebAssembly build, E2) and `CMakeLists.txt` are ours |
+| `engine/third_party/zstd/` (`lib/common/`, `lib/compress/`, `lib/decompress/`, `lib/zstd.h`, `lib/zstd_errors.h`, `LICENSE`) | [facebook/zstd](https://github.com/facebook/zstd) v1.5.5 | BSD-3-Clause | `63779c798237346c2b245c546c40b72a5a5913fe` (the v1.5.5 release) | The RVZ disc container stores its chunks and its tables as zstd streams (`vfs/rvz.cpp`, `vfs/rvz_pack.cpp`). Built from source for the host and for WebAssembly; the x86-64 assembly decompressor (`huf_decompress_amd64.S`) is not included, and `ZSTD_MULTITHREAD` is off |
+
+### Read, not copied: the RVZ container (`engine/vfs/`)
+
+The RVZ disc container's compressor is vendored (the `third_party/zstd` row in §6);
+its layout was implemented from documentation. No code was copied:
+
+| Source | License | Read for |
+|---|---|---|
+| Dolphin's `docs/WiaAndRvz.md` | documentation only (the Dolphin project is GPL-2.0+; only its format document was read, and no code or constant was copied from `WIABlob.cpp`) | The container layout: `wia_file_head_t`/`wia_disc_t` fields, `rvz_group_t`, the `RVZ\x1` magic, the compression enum, the version rules, the `data_offset % 0x8000` rounding, and the RVZ packing PRNG |
+
+`tests/test_rvz.cpp` builds its images in memory from a synthetic pattern, so no RVZ
+file, and nothing derived from a disc, is committed. Dolphin itself could not be run
+to cross-check a file: no Dolphin build is available here and the independent Rust
+`rvz` crate reads Wii images only.
 
 ### Read, not copied: the renderer (`engine/gfx/`, E1)
 
