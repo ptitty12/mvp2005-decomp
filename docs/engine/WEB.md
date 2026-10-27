@@ -42,7 +42,7 @@ Everything below is run by agents; the owner never runs commands.
    | `mvp-web.js`, `mvp-web.wasm` (0.6 MB) | the engine: translator, runtime, interpreter, renderer, mixer (`engine/web/wasm/`) |
    | `mvp-web-mt.js`, `mvp-web-mt.wasm` | the threaded engine (P2): the same sources for wasm threads, the renderer on its own thread (section 2); loaded where the page is cross-origin isolated |
    | `build-id.json` | the SHA-256 of `mvp-web.wasm` (`engine`), of `mvp-web-mt.wasm` (`engine_mt`) and of `symbols.txt` (the key of the browser's translation cache) |
-   | `symbols.txt` | `config/GV4E69/symbols.txt`: repository metadata (function boundaries and names), not game data (ARCHITECTURE.md §4) |
+   | `symbols.txt` | `engine/decomp_pin/symbols.txt`, the engine's pinned copy of the decomp's symbol map: repository metadata (function boundaries and names), not game data (ARCHITECTURE.md §4) |
    | `licenses/` | notices for the third-party code compiled into the engine (Emscripten, emdawnwebgpu) |
 
 4. **Serve:** `node engine/web/tools/serve.mjs` (`--port N`, default 8000;

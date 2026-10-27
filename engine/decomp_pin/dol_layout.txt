@@ -1,0 +1,13 @@
+# DOL layout for GV4E69: one line per DOL section, in DOL slot order.
+# Mirrors the program headers of the retail /mvp.elf (see tools/mkdol.py).
+# Gaps between grouped sections are zero-filled; the retail gaps are all zero
+# (checked: 0x8043FDB8, 0x8052A208, 0x805A2BB0, 0x805A2D24).
+# Format: <text|data|bss> <section> [<section> ...]
+text .init
+text .text .frontend_codeoverlay .database_codeoverlay
+data .ctors .dtors
+data .rodata
+data .data
+data .sdata
+data .sdata2
+bss  .bss .sdata .sbss

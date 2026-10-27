@@ -22,6 +22,6 @@ add_executable(local_disasm tests/local_disasm.cpp)
 target_link_libraries(local_disasm PRIVATE engine_ppc engine_vfs)
 target_compile_options(local_disasm PRIVATE ${ENGINE_WARN})
 target_compile_definitions(local_disasm PRIVATE MVP_DISC_DEFAULT="${MVP_DISC_PATH}" MVP_DTK_ASM_DEFAULT="${MVP_DTK_ASM_PATH}"
-                                               MVP_REPO_ROOT="${MVP_REPO_ROOT}")
+                                               MVP_DECOMP_PIN_DIR="${MVP_DECOMP_PIN}")
 add_test(NAME local_disasm COMMAND local_disasm)
 set_tests_properties(local_disasm PROPERTIES SKIP_RETURN_CODE 77 LABELS local)

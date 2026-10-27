@@ -25,7 +25,7 @@ namespace mvp::rt::mod {
 
 struct Site {
   u32 address;        // retail main.dol (GV4E69 rev 0)
-  const char* label;  // placeholder name in config/GV4E69/symbols.txt
+  const char* label;  // placeholder name in the decomp's symbols.txt (decomp_pin/)
   const char* why;    // what a mod uses the site for
 };
 

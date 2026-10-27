@@ -76,7 +76,7 @@ if(MVP_DISC_PATH AND EXISTS "${MVP_DISC_PATH}")
   add_custom_command(
     OUTPUT ${MVP_GEN_SOURCES} ${MVP_GEN_DIR}/game_decls.h
     COMMAND mvp-xlat emit-cpp ${MVP_GEN_DIR} --shards ${MVP_GEN_SHARDS}
-    DEPENDS mvp-xlat ${MVP_REPO_ROOT}/config/GV4E69/symbols.txt
+    DEPENDS mvp-xlat ${MVP_DECOMP_PIN}/symbols.txt
     COMMENT "Translating main.dol to C++ (build/ only)"
     VERBATIM)
   add_library(mvp_game_native STATIC ${MVP_GEN_SOURCES})

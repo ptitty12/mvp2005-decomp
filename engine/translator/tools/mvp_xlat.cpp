@@ -8,7 +8,8 @@
 //                                        names for profilers and disassemblers; --shared: the threaded
 //                                        engine's module)
 //
-// Reads the disc from MVP_DISC (or the build's default) and config/GV4E69/symbols.txt.
+// Reads the disc from MVP_DISC (or the build's default) and the engine's pinned
+// symbols.txt (decomp_pin/).
 // Output describes the retail binary's structure only; it stays in the terminal
 // or under build/.
 #include <algorithm>

@@ -1,4 +1,5 @@
-// decomp-toolkit symbol map (config/GV4E69/symbols.txt): metadata about the
+// decomp-toolkit symbol map (the decomp's config/GV4E69/symbols.txt, which the
+// engine reads from its pinned copy, decomp_pin/symbols.txt): metadata about the
 // retail binary (names, addresses, sizes), not game data.
 #pragma once
 

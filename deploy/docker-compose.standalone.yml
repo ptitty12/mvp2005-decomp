@@ -1,0 +1,49 @@
+# MVP Baseball 2005: your own copy of the site, on this computer only.
+# For anyone who cloned the repository (docs/GETTING_STARTED.md). The scripts
+# run-local.sh (macOS, Linux) and run-local.cmd (Windows) at the repository root
+# start it; with Docker alone:
+#
+#   docker compose -f deploy/docker-compose.standalone.yml -p mvp-standalone up -d --build
+#
+# then open http://localhost:8080. The same image as the owner's deployment
+# (deploy/Dockerfile: the engine built for WebAssembly, the web shell and the server),
+# with these differences:
+#
+#   - published on 127.0.0.1 only: no other computer can reach it. localhost is a secure
+#     context, so WebGPU, the AudioWorklet and the browser's storage work without TLS
+#     (an address like http://192.168.x.y is not one, and the game cannot run there);
+#   - plain HTTP, so the access cookies are not Secure;
+#   - no coturn: two browsers on one computer reach each other directly (MVP_TURN_MODE=off).
+#     Online play with a friend elsewhere needs a server with HTTPS:
+#     docs/engine/DEPLOY_DOKPLOY.md.
+#
+# Optional setting: MVP_LOCAL_PORT (default 8080), the port on this computer.
+#
+# Everything kept between runs is in the volume mvp-data (/data): the admin and player
+# keys, the disc image if you upload it on the Server disc page, roster packs and save
+# states. The image itself holds no game data. "run-local reset" (or "down -v") deletes
+# the volume.
+
+services:
+  mvp:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: mvp2005-web:local
+    restart: unless-stopped
+    environment:
+      MVP_TURN_MODE: "off"
+      MVP_SECURE_COOKIES: "false"
+    volumes:
+      - mvp-data:/data
+    ports:
+      - "127.0.0.1:${MVP_LOCAL_PORT:-8080}:8080"
+    # The image's health check, probed every second while it starts, so "up --wait" returns
+    # as soon as the server answers (the deployment's 30 s interval would hold it up).
+    healthcheck:
+      start_period: 60s
+      start_interval: 1s
+    stop_grace_period: 10s
+
+volumes:
+  mvp-data:

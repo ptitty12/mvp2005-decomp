@@ -2,9 +2,10 @@
 # (deploy/docker-compose.yml; the owner's guide: docs/engine/DEPLOY_DOKPLOY.md).
 #
 # Build context: the repository root. The root .dockerignore admits only
-# engine/, config/GV4E69/symbols.txt (repository metadata) and the context
-# check. The image holds no game data: the owner uploads the disc image through
-# the site afterwards, into the /data volume.
+# engine/ and the context check: the decomp's symbol map comes from the
+# engine's own pinned copy (engine/decomp_pin/), never from config/. The image
+# holds no game data: the owner uploads the disc image through the site
+# afterwards, into the /data volume.
 #
 #   context  checks every file in the build context: no disc images, DOLs, ELFs (else the build fails)
 #   web      the engine (WebAssembly) and the web shell, with the pinned Emscripten (docs/engine/TOOLCHAIN.md)
@@ -55,7 +56,6 @@ WORKDIR /src
 COPY engine/web/package.json engine/web/package-lock.json engine/web/
 RUN cd engine/web && npm ci --ignore-scripts --no-audit --no-fund
 COPY engine/ engine/
-COPY config/GV4E69/symbols.txt config/GV4E69/symbols.txt
 RUN cd engine \
  && cmake --preset emscripten -DMVP_EMDAWNWEBGPU_DIR=/opt/emdawnwebgpu/emdawnwebgpu_pkg \
  && cmake --build --preset emscripten --target mvp-web -j "$(nproc)"

@@ -8,8 +8,9 @@
 #     mvp-web-mt.js, .wasm       the same engine with a render thread (P2), for
 #                                pages with cross-origin isolation; built in a
 #                                second tree (build/engine/emscripten/mt)
-#     symbols.txt                config/GV4E69/symbols.txt (repository metadata,
-#                                not game data: ARCHITECTURE.md §4)
+#     symbols.txt                the engine's pinned copy of the decomp's symbol map
+#                                (engine/decomp_pin/; repository metadata, not game
+#                                data: ARCHITECTURE.md §4)
 #
 # Nothing in it is derived from the disc: the player's browser translates the
 # DOL from the image the player picks. tools/serve.mjs serves this directory
@@ -129,9 +130,9 @@ foreach(f ${MVP_WEB_STATIC})
   list(APPEND _mvp_web_copies ${MVP_WEB_SITE}/${n})
 endforeach()
 add_custom_command(OUTPUT ${MVP_WEB_SITE}/symbols.txt
-                   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MVP_REPO_ROOT}/config/GV4E69/symbols.txt
+                   COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MVP_DECOMP_PIN}/symbols.txt
                            ${MVP_WEB_SITE}/symbols.txt
-                   DEPENDS ${MVP_REPO_ROOT}/config/GV4E69/symbols.txt VERBATIM)
+                   DEPENDS ${MVP_DECOMP_PIN}/symbols.txt VERBATIM)
 # Notices for the third-party code compiled into mvp-web.js/.wasm (docs/REUSE.md
 # §6): Emscripten's runtime and libraries, and emdawnwebgpu (Dawn's BSD-3-Clause
 # C++ side; its JS side is under Emscripten's license).
@@ -155,7 +156,7 @@ endforeach()
 # build-id.json: the engine modules' and symbols.txt's hashes, the key of the
 # browser's cache of the translated module (E2c; P2: the threaded engine's too).
 set(_mvp_build_id ${CMAKE_COMMAND} -DWASM=${MVP_WEB_SITE}/mvp-web.wasm -DWASM_MT=${MVP_WEB_SITE}/mvp-web-mt.wasm
-                  -DSYMBOLS=${MVP_REPO_ROOT}/config/GV4E69/symbols.txt
+                  -DSYMBOLS=${MVP_DECOMP_PIN}/symbols.txt
                   -DOUT=${MVP_WEB_SITE}/build-id.json -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_id.cmake)
 add_custom_command(TARGET mvp-web POST_BUILD COMMAND ${_mvp_build_id} VERBATIM)
 

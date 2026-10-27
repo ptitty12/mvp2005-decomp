@@ -76,8 +76,10 @@ what binds.
 
 **Input:**
 - the DOL from the player's disc;
-- function boundaries, jump tables and names from this repo's `config/GV4E69/`
-  (`symbols.txt`, `splits.txt`), which is metadata, not game data.
+- function boundaries, jump tables and names from the decomp's `config/GV4E69/`
+  (`symbols.txt`, `splits.txt`), which is metadata, not game data. The engine reads
+  them only from its own pinned copy, `engine/decomp_pin/`, which changes only through
+  `engine/tools/sync_decomp_pin.py` (DECISIONS, 2026-10-27).
 
 **Output:** one WebAssembly module, plus a table that maps guest addresses to functions.
 
@@ -266,5 +268,6 @@ Lead decisions under the owner's 2026-10-14 delegation. Settled ones are also in
 | `engine/net/` | Lockstep, input queue, desync detection, WebRTC client |
 | `engine/web/` | Browser shell (TypeScript): disc picker, settings, lobby UI |
 | `engine/server/` | VPS services (TypeScript): lobby, matchmaking, signaling; TURN config |
+| `engine/decomp_pin/` | The engine's pinned copy of the decomp's `symbols.txt`, `splits.txt` and `dol_layout.txt`, and the decomp commit it came from |
 
 Directories are created when their first code lands (E0 onward).

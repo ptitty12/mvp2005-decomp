@@ -4,8 +4,9 @@
 // Needs MVP_DISC (the disc) and MVP_DTK_ASM (dtk's build/GV4E69/asm); exits 77
 // (skipped) without them. dtk prints relocated operands symbolically
 // (`lbl_805A3048@l(r11)`, `fn_80003300`, `.L_800031A4`); those are evaluated with
-// config/GV4E69/symbols.txt and compared by value. Mismatches are printed (at
-// most 40) to the terminal only.
+// the symbols.txt dtk split with and compared by value: MVP_DTK_SYMBOLS, else the
+// engine's pinned copy (decomp_pin/), which fits a listing built at the decomp
+// commit pin.json names. Mismatches are printed (at most 40) to the terminal only.
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -28,8 +29,8 @@
 #ifndef MVP_DTK_ASM_DEFAULT
 #define MVP_DTK_ASM_DEFAULT ""
 #endif
-#ifndef MVP_REPO_ROOT
-#define MVP_REPO_ROOT ""
+#ifndef MVP_DECOMP_PIN_DIR
+#define MVP_DECOMP_PIN_DIR ""
 #endif
 
 namespace fs = std::filesystem;
@@ -249,11 +250,11 @@ bool parse_listing_line(const std::string& l, u32* addr, u32* word, std::string*
 int main() {
   std::string disc_path = env_or("MVP_DISC", MVP_DISC_DEFAULT);
   std::string asm_dir = env_or("MVP_DTK_ASM", MVP_DTK_ASM_DEFAULT);
-  std::string symbols = std::string(MVP_REPO_ROOT) + "/config/GV4E69/symbols.txt";
+  std::string symbols = env_or("MVP_DTK_SYMBOLS", std::string(MVP_DECOMP_PIN_DIR) + "/symbols.txt");
   std::error_code ec;
   if (disc_path.empty() || asm_dir.empty() || !fs::is_directory(asm_dir, ec) || !fs::exists(disc_path, ec) ||
       !fs::exists(symbols, ec)) {
-    std::printf("SKIP: needs MVP_DISC, MVP_DTK_ASM and config/GV4E69/symbols.txt\n");
+    std::printf("SKIP: needs MVP_DISC, MVP_DTK_ASM and %s\n", symbols.c_str());
     return 77;
   }
   std::string err;

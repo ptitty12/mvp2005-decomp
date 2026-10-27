@@ -5,8 +5,8 @@
 #ifndef MVP_DISC_DEFAULT
 #define MVP_DISC_DEFAULT ""
 #endif
-#ifndef MVP_REPO_ROOT
-#define MVP_REPO_ROOT ""
+#ifndef MVP_DECOMP_PIN_DIR
+#define MVP_DECOMP_PIN_DIR ""
 #endif
 
 namespace mvp::xlat {
@@ -29,7 +29,8 @@ std::optional<Inputs> load_inputs(const std::string& disc_path, const std::strin
 }
 
 std::string default_disc_path() { return env_or("MVP_DISC", MVP_DISC_DEFAULT); }
-std::string default_symbols_path() { return std::string(MVP_REPO_ROOT) + "/config/GV4E69/symbols.txt"; }
-std::string default_splits_path() { return std::string(MVP_REPO_ROOT) + "/config/GV4E69/splits.txt"; }
+// The engine's pinned copy of the decomp's files (decomp_pin/README.md), never config/GV4E69.
+std::string default_symbols_path() { return std::string(MVP_DECOMP_PIN_DIR) + "/symbols.txt"; }
+std::string default_splits_path() { return std::string(MVP_DECOMP_PIN_DIR) + "/splits.txt"; }
 
 }  // namespace mvp::xlat

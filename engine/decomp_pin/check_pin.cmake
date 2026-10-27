@@ -1,0 +1,35 @@
+# decomp_pin_hashes (data-free): the pinned files are exactly the ones pin.json
+# records (README.md). Catches a hand edit and a checkout that turned the files'
+# line endings into CRLF (.gitattributes keeps them LF).
+#
+#   cmake -DPIN=<engine/decomp_pin> -P check_pin.cmake
+if(NOT PIN)
+  message(FATAL_ERROR "usage: cmake -DPIN=<engine/decomp_pin> -P check_pin.cmake")
+endif()
+file(READ "${PIN}/pin.json" pin)
+string(JSON format GET "${pin}" format)
+if(NOT format EQUAL 1)
+  message(FATAL_ERROR "pin.json: format ${format}, this check reads format 1")
+endif()
+set(failed 0)
+foreach(name symbols.txt splits.txt dol_layout.txt)
+  string(JSON want ERROR_VARIABLE err GET "${pin}" files ${name})
+  if(err)
+    message(SEND_ERROR "pin.json has no SHA-256 for ${name}")
+    set(failed 1)
+  elseif(NOT EXISTS "${PIN}/${name}")
+    message(SEND_ERROR "${name} is missing")
+    set(failed 1)
+  else()
+    file(SHA256 "${PIN}/${name}" got)
+    if(NOT got STREQUAL want)
+      message(SEND_ERROR "${name}: SHA-256 ${got}, but pin.json records ${want}. Change these files only with "
+                         "engine/tools/sync_decomp_pin.py, and check out *.txt here with LF line endings.")
+      set(failed 1)
+    endif()
+  endif()
+endforeach()
+if(NOT failed)
+  string(JSON commit GET "${pin}" commit)
+  message(STATUS "decomp_pin: symbols.txt, splits.txt and dol_layout.txt match pin.json (decomp commit ${commit})")
+endif()

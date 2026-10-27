@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "from": "config/GV4E69 of the decompilation",
+  "commit": "4dc8bb396e2c262ecf0e8511c53e0e815c89d072",
+  "files": {
+    "dol_layout.txt": "a87b05dbf620bf90989d4987b3e073d56075147483b3f395393348aa09d8fd88",
+    "splits.txt": "3940daafe179c358dd76e3bcdc5e855ba9ae97d919240bac770c8a8981d0dabe",
+    "symbols.txt": "f47fe7313b385e625d388ba081ad3347d2178ee0205aa70c164c2f3da9af1f9b"
+  }
+}
