@@ -88,8 +88,9 @@ main gap is the weakest machines: one about four times slower than the dev PC st
  lockstep netplay (WebRTC data channel)                 page (canvas, input, panels)
 ```
 
-- **Translator** (`engine/translator/`): from the CFG of `main.dol`, using
-  `config/GV4E69/symbols.txt` for function boundaries. It writes one WebAssembly
+- **Translator** (`engine/translator/`): from the CFG of `main.dol`, using the
+  decomp's `symbols.txt` for function boundaries, from the engine's own pinned copy
+  (`engine/decomp_pin/`). It writes one WebAssembly
   module (or C++ for native builds). Guest registers live in locals, with resume
   labels so that threads and host yields can unwind and re-enter.
 - **Runtime** (`engine/runtime/`): the machine, the IPL environment, HLE for SDK
@@ -132,7 +133,11 @@ The old phase plan is kept as history in [`docs/ROADMAP.md`](docs/ROADMAP.md) §
 
 ## The decompilation (knowledge track)
 
-The decomp is how the engine work understands the game. It names the SDK functions
+The decomp is how the engine work understands the game. It lives in the same
+repository as the engine, behind a hard boundary (DECISIONS, 2026-10-27): the engine
+reads only its own pinned copy of the decomp's symbol map and layout files
+(`engine/decomp_pin/`), updated on purpose, so a decomp commit never changes the
+engine by itself. It names the SDK functions
 the runtime replaces, finds everything that could make two netplay runs differ, maps
 the roster tables, and gives mod hook points readable names. Byte-identical matching
 is still how a decompiled function is proven correct.
@@ -204,7 +209,7 @@ The full rules are in [`CLAUDE.md`](CLAUDE.md).
 
 | Path | Contents |
 |---|---|
-| `engine/` | The engine: translator, runtime, renderer, audio, virtual disc, mods, netplay, web shell, server ([README](engine/README.md)) |
+| `engine/` | The engine: translator, runtime, renderer, audio, virtual disc, mods, netplay, web shell, server ([README](engine/README.md)), and its pinned copy of the decomp's metadata (`decomp_pin/`) |
 | `deploy/` | Docker compose for the owner's VPS (Dokploy), and for a copy on your own computer (`docker-compose.standalone.yml`) |
 | `run-local.cmd`, `run-local.sh` | Start that copy on Windows, macOS or Linux ([`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)) |
 | `src/`, `include/` | Decompiled C/C++, one file per split unit, and shared headers |

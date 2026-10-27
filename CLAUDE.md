@@ -130,6 +130,10 @@ proof honest:
 - **Determinism is an invariant.** Host nondeterminism (wall time, audio device
   timing, network timing, file-load latency, host threads) may reach guest state
   only through the input queue and the virtual clock. Code that breaks this is a bug.
+- **The engine reads nothing from the decomp side** (owner, 2026-10-27). Nothing in
+  `engine/` or `deploy/` reads `config/`, `src/`, `include/` or the decomp's tools.
+  The decomp's metadata comes only from the pinned copy in `engine/decomp_pin/`,
+  changed only with `engine/tools/sync_decomp_pin.py` (its README says when and how).
 - **Every component has tests that need no game data**, and they run in CI.
   Tests that need the disc run only where it exists, skip cleanly elsewhere, and
   never write their outputs into the repo.

@@ -169,6 +169,11 @@ longer shows the picker.
   `ctest --preset emscripten` after a full build ([`engine/WEB.md`](engine/WEB.md) §1).
 - **The decompilation** builds on Windows only (the original compilers are Win32
   programs) and needs the disc's files in `orig/GV4E69/`. See *Building the
-  decomp* in the [README](../README.md).
+  decomp* in the [README](../README.md). You don't need it to build, run or mod
+  the engine.
+- **The boundary between them:** the engine reads the decomp's symbol map only
+  from its own pinned copy in `engine/decomp_pin/`, so decomp work never changes
+  the engine until someone updates that copy on purpose
+  ([`engine/decomp_pin/README.md`](../engine/decomp_pin/README.md)).
 - **Rules** for anyone contributing, people and agents alike, are in
   [`CLAUDE.md`](../CLAUDE.md). The first one: never commit anything from the disc.
