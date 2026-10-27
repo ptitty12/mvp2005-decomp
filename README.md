@@ -18,6 +18,15 @@ This is a personal project in a public repository. It holds source, tooling and
 docs only. It holds no game data, and nothing derived from the disc, not even the
 translated code.
 
+## Run your own copy
+
+You need Docker and your own disc image of the game (USA, `GV4E69`, revision 0).
+Clone the repository, then double-click `run-local.cmd` on Windows, or run
+`./run-local.sh` on macOS or Linux. The first build takes 5 to 15 minutes. Then
+open http://localhost:8080 and pick your disc image. Step by step, with online
+play, roster packs and troubleshooting:
+[`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
+
 ## What it is, and what it is not
 
 | It is | It is not |
@@ -196,7 +205,8 @@ The full rules are in [`CLAUDE.md`](CLAUDE.md).
 | Path | Contents |
 |---|---|
 | `engine/` | The engine: translator, runtime, renderer, audio, virtual disc, mods, netplay, web shell, server ([README](engine/README.md)) |
-| `deploy/` | Docker compose for the owner's VPS (Dokploy) |
+| `deploy/` | Docker compose for the owner's VPS (Dokploy), and for a copy on your own computer (`docker-compose.standalone.yml`) |
+| `run-local.cmd`, `run-local.sh` | Start that copy on Windows, macOS or Linux ([`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)) |
 | `src/`, `include/` | Decompiled C/C++, one file per split unit, and shared headers |
 | `config/GV4E69/` | dtk config (`splits.txt`, `symbols.txt`), linker script, retail hash, EA reference names, datafile schemas |
 | `configure.py`, `tools/project.py` | The decomp's build generator |
@@ -208,6 +218,7 @@ The full rules are in [`CLAUDE.md`](CLAUDE.md).
 
 | File | What's in it |
 |---|---|
+| [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) | Run your own copy and play: what you need, one command, online play, troubleshooting |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | The goals, the two tracks, milestones E0-E7 and K1-K5, history |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Engine design and decisions D1-D8 |
 | [`docs/engine/`](docs/engine/) | One log per engine milestone and quality pass (E0-E6, Q1-Q8, P1-P2, CLK2), plus WEB.md, NETPLAY.md, DEPLOY_DOKPLOY.md |
