@@ -2,7 +2,7 @@ add_library(engine_translator STATIC symbols.cpp cfg.cpp program.cpp emit_cpp.cp
 target_link_libraries(engine_translator PUBLIC engine_ppc engine_vfs)
 target_compile_options(engine_translator PRIVATE ${ENGINE_WARN})
 set_source_files_properties(program.cpp PROPERTIES COMPILE_DEFINITIONS
-                            "MVP_DISC_DEFAULT=\"${MVP_DISC_PATH}\";MVP_REPO_ROOT=\"${MVP_REPO_ROOT}\"")
+                            "MVP_DISC_DEFAULT=\"${MVP_DISC_PATH}\";MVP_DECOMP_PIN_DIR=\"${MVP_DECOMP_PIN}\"")
 
 add_executable(mvp-xlat tools/mvp_xlat.cpp)
 target_link_libraries(mvp-xlat PRIVATE engine_translator engine_runtime)

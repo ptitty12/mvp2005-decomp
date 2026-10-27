@@ -25,6 +25,11 @@ measurements:
 [`../docs/engine/E2_SPIKE.md`](../docs/engine/E2_SPIKE.md) and
 [`../docs/engine/WEB.md`](../docs/engine/WEB.md) (the browser build).
 
+The decomp's metadata (`symbols.txt`, `splits.txt`, `dol_layout.txt`) comes from
+the engine's own pinned copy in [`decomp_pin/`](decomp_pin/README.md), never from
+`../config/`: a decomp commit does not change the engine until someone syncs the
+copy on purpose (DECISIONS, 2026-10-27).
+
 Three rules matter most here:
 
 - **Nothing derived from the disc is ever committed or published.** (The owner's

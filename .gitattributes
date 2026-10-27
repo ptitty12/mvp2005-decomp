@@ -12,6 +12,8 @@
 
 # decomp-toolkit writes files with LF
 config/**/*.txt  text eol=lf
+# The engine's pinned copy of them: byte for byte, its SHA-256 is checked (engine/decomp_pin/README.md)
+engine/decomp_pin/*.txt  text eol=lf
 
 # dtk config: merge by meaning, not line position (tools/swarm/merge_dtk.py;
 # drivers registered by tools/swarm/install_merge_drivers.py)

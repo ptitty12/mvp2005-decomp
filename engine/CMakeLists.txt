@@ -21,7 +21,11 @@ set(MVP_DTK_ASM "$ENV{MVP_DTK_ASM}" CACHE PATH "dtk split assembly directory (bu
 file(TO_CMAKE_PATH "${MVP_DISC}" MVP_DISC_PATH)
 file(TO_CMAKE_PATH "${MVP_DTK_ASM}" MVP_DTK_ASM_PATH)
 
-# Repository root: config/GV4E69 (symbols.txt, splits.txt) is metadata, not game data.
+# The decomp's metadata (symbols.txt, splits.txt, dol_layout.txt: not game data), only
+# from the engine's own pinned copy (decomp_pin/README.md), never from ../config.
+set(MVP_DECOMP_PIN "${CMAKE_CURRENT_SOURCE_DIR}/decomp_pin")
+# The checkout's root, for the mods side's shared files only: the example pack
+# (docs/examples/packs) and the pack format's reference tool (tools/rosters).
 get_filename_component(MVP_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 # Deterministic floating point on the host: no contraction into FMA, no fast-math.
@@ -80,6 +84,7 @@ add_subdirectory(mods)
 add_subdirectory(ppc)
 add_subdirectory(translator)
 add_subdirectory(runtime)
+add_subdirectory(decomp_pin)
 add_subdirectory(gfx)
 add_subdirectory(audio)
 add_subdirectory(net)

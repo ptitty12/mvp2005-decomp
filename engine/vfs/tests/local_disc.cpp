@@ -1,7 +1,8 @@
 // Local-only test: needs the player's disc (MVP_DISC). Exits 77 (skipped) without it.
 //
 // Checks: the image opens, main.dol hashes to GV4E69 rev 0, and the DOL section
-// table, named from the disc's /mvp.elf, equals config/GV4E69/dol_layout.txt.
+// table, named from the disc's /mvp.elf, equals the decomp's dol_layout.txt (the
+// engine's pinned copy, decomp_pin/).
 // Prints only section names and counts, nothing from the game's bytes.
 #include <cstdio>
 #include <string>
@@ -12,8 +13,8 @@
 #ifndef MVP_DISC_DEFAULT
 #define MVP_DISC_DEFAULT ""
 #endif
-#ifndef MVP_REPO_ROOT
-#define MVP_REPO_ROOT ""
+#ifndef MVP_DECOMP_PIN_DIR
+#define MVP_DECOMP_PIN_DIR ""
 #endif
 
 using namespace mvp;
@@ -21,8 +22,9 @@ using namespace mvp::vfs;
 
 int main() {
   std::string path = env_or("MVP_DISC", MVP_DISC_DEFAULT);
-  if (path.empty() || !read_file(std::string(MVP_REPO_ROOT) + "/config/GV4E69/dol_layout.txt")) {
-    std::printf("SKIP: MVP_DISC not set or config/GV4E69/dol_layout.txt missing\n");
+  const std::string layout = std::string(MVP_DECOMP_PIN_DIR) + "/dol_layout.txt";
+  if (path.empty() || !read_file(layout)) {
+    std::printf("SKIP: MVP_DISC not set or %s missing\n", layout.c_str());
     return 77;
   }
   auto probe = FileSource::open(path);
@@ -50,7 +52,7 @@ int main() {
     return 1;
   }
   auto got = dol_layout_lines(disc->dol, *secs);
-  auto want = normalized_layout(*read_text(std::string(MVP_REPO_ROOT) + "/config/GV4E69/dol_layout.txt"));
+  auto want = normalized_layout(*read_text(layout));
   bool same = got == want;
   for (std::size_t i = 0; i < std::max(got.size(), want.size()); ++i) {
     const char* g = i < got.size() ? got[i].c_str() : "(none)";
