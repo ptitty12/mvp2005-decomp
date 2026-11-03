@@ -14,8 +14,8 @@ extern "C" {
 int fn_803D2D74(void* table, Unk803D2B20Key* key, int* out);
 void fn_803BE8EC(void* self);
 void fn_803BE90C(void* self, int c);
-void fn_803BE6B4(int a, int b);
-void fn_803BE6F4(unsigned int* set, int k, int v);
+void Invisible(int a, int b);
+void SetBone(unsigned int* set, int k, int v);
 }
 
 /* Data record at +0xC of the objects. */
@@ -274,7 +274,7 @@ extern "C" void fn_803D38B4(Unk803D2B20Obj* self, int flag)
 
 extern "C" int fn_803D394C(Unk803D2B20* self, int a, int* b, int* c, int* d)
 {
-    fn_803BE6B4(a, 0);
+    Invisible(a, 0);
     *b = 0;
     return self->v18(a, b, c, d);
 }
@@ -301,7 +301,7 @@ extern "C" int fn_803D39C0(Unk803D39C0Obj* self, unsigned* set, int* count, int*
                     *hi = id;
             }
             *count = *count + 1;
-            fn_803BE6F4(set, id, 1);
+            SetBone(set, id, 1);
         }
     }
     Unk803D2B20* child = rec->m10;
@@ -377,7 +377,7 @@ extern "C" void fn_803D4970(Unk803D2B20Obj* self, int flag)
 
 extern "C" int fn_803D4A08(Unk803D2B20* self, int a, int* b, int* c, int* d)
 {
-    fn_803BE6B4(a, 0);
+    Invisible(a, 0);
     *b = 0;
     return self->v18(a, b, c, d);
 }
@@ -398,7 +398,7 @@ extern "C" int fn_803D4A7C(Unk803D4A7CObj* self, unsigned* set, int* count, int*
                     *hi = id;
             }
             *count = *count + 1;
-            fn_803BE6F4(set, id, 1);
+            SetBone(set, id, 1);
         }
     }
     return 1;

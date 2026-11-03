@@ -20,10 +20,10 @@ extern int lbl_8062C674;
 extern char lbl_806AAB6C[];
 
 extern "C" void fn_80377408(void* p);
-extern "C" void fn_803ED634(void* a, void* b, int c);
+extern "C" int fn_803ED634(void* a, void* b, int c);
 extern "C" void fn_803EA0E4(void* p, int chrg);
 extern "C" void fn_803E9E30(void* p, int a);
-extern "C" void fn_803EA160(void* p, int a, int b);
+extern "C" int fn_803EA160(void* p, int a, int b);
 extern "C" void* fn_803E9F50(void* p, int a, int* count);
 extern "C" void fn_803EA08C(void* p);
 extern "C" void MEM_free(void* menu, int a);
@@ -49,7 +49,7 @@ extern "C" Unk803E9994_Ent fn_803E92E8(Unk803E9994_Hdr** c, int i);
 extern "C" int strcmp(const char* a, const char* b);
 extern "C" int strlen(const char* s);
 
-extern "C" void fn_803E6FB8(void* a, void* b)
+extern "C" void GaugesMgr_BeginShareDraft(void* a, void* b)
 {
     fn_803ED634(b, a, 0);
 }
@@ -216,18 +216,18 @@ extern char lbl_8060D0E0[];
 extern char lbl_8060D0F4[];
 extern char lbl_8060D108[];
 extern char lbl_8060D120[];
-extern "C" void fn_803DBDD8(int, int);
-extern "C" void fn_803DBE18(int, int);
-extern "C" void fn_803DBE20(int, int);
-extern "C" void fn_803DBE2C(int, int);
-extern "C" void fn_803DBE38(int, int);
-extern "C" void fn_803DBE44(int, int);
-extern "C" void fn_803DBE50(int, int);
-extern "C" void fn_803DBE5C(int, int);
-extern "C" void fn_803DBE68(int, int);
-extern "C" void fn_803DBE70(int, int);
-extern "C" void fn_803DBE78(int, int);
-extern "C" void fn_803DBE84(int, int*);
+extern "C" int fn_803DBDD8(int, int);
+extern "C" int fn_803DBE18(int, int);
+extern "C" int fn_803DBE20(int, int);
+extern "C" int fn_803DBE2C(int, int);
+extern "C" int fn_803DBE38(int, int);
+extern "C" int fn_803DBE44(int, int);
+extern "C" int fn_803DBE50(int, int);
+extern "C" int fn_803DBE5C(int, int);
+extern "C" int fn_803DBE68(int, int);
+extern "C" int fn_803DBE70(int, int);
+extern "C" int fn_803DBE78(int, int);
+extern "C" int fn_803DBE84(int, int*);
 extern "C" int fn_803E7400(const char*);
 extern "C" int atoi(const char*);
 extern "C" int sscanf(const char*, const char*, ...);

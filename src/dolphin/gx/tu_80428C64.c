@@ -24,7 +24,7 @@ OSTime OSGetTime(void);
  * PPCSync PPCSync, fn_8042C07C __GXAbort. */
 GXBreakPtCallback GXSetBreakPtCallback(GXBreakPtCallback cb);
 GXDrawSyncCallback GXSetDrawSyncCallback(GXDrawSyncCallback cb);
-void fn_8042C6F8(void* cb);
+int fn_8042C6F8(void* cb);
 void PPCSync(void);
 void fn_8042C07C(void);
 

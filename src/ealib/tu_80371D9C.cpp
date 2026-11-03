@@ -85,7 +85,7 @@ void fn_803DFBAC(Unk80371D9CMtx* in, Unk80371D9CMtx* out);
 void GXLoadPosMtxImm(Unk80371D9CMtx* m, int id);
 void GXSetCurrentMtx(int id);
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);
 void fn_803EA338(void* a, void* b, void* c, void* d);
@@ -95,11 +95,11 @@ void fn_803DE2E8(Unk803DE1BC* o, int a, int b);
 void fn_803DE27C(Unk803DE1BC* o, int a, int b, int c, int d);
 void fn_803DE25C(Unk803DE1BC* o, int a, int b, int c, int d);
 void fn_803DE300(Unk803DE1BC* o, int a);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
-void fn_803DBE2C(void* state, int a);
+int fn_803DBE2C(void* state, int a);
 void fn_803DBBE0(void* tex);
 }
 
@@ -115,7 +115,7 @@ extern unsigned char* lbl_8062C660;
 extern int lbl_8062C664;
 
 extern "C" {
-void fn_803DBE08(void* state, Unk803DBE08Out* out);
+int fn_803DBE08(void* state, Unk803DBE08Out* out);
 void DCStoreRange(void* p, int n);
 void GXBegin(int a, int b, int c);
 void fn_803DA188(int n);
@@ -161,7 +161,7 @@ extern char lbl_80604A1C[];
 
 extern int lbl_80627290;
 extern void (*lbl_806279C8)(void);
-extern "C" void fn_803DBF98(void);
+extern "C" void DisableCoPlanarZMode(void);
 extern int lbl_80623C24;
 extern char lbl_80623C28[];
 extern Unk80623C2C lbl_80623C2C;
@@ -213,7 +213,7 @@ extern "C" void fn_80371D9C(Unk803E3C08* a, Unk80623C2C* b)
         GXLoadPosMtxImm(&mtx, 0);
         GXSetCurrentMtx(0);
         fn_803DBBE0(a->m0[4].m4);
-        lbl_806279C8 = fn_803DBF98;
+        lbl_806279C8 = DisableCoPlanarZMode;
         mtx = *(Unk80371D9CMtx*)a->m0[1].m4;
         fn_803DFBAC(&mtx, &mtx);
         GXLoadPosMtxImm(&mtx, 0);

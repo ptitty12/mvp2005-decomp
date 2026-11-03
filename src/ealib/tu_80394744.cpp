@@ -97,8 +97,8 @@ struct McEntD {
 };
 
 extern "C" unsigned fn_80391C04(unsigned char a, unsigned char b, unsigned short c);
-extern "C" void fn_803B9858(void* a, void* b);
-extern "C" void fn_803BA118(void* a, void* b);
+extern "C" int fn_803B9858(void* a, void* b);
+extern "C" int fn_803BA118(void* a, void* b);
 extern "C" void iSPCH_CsisCb(void* src, int key);
 
 struct McEntH {

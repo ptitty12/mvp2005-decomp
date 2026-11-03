@@ -99,7 +99,7 @@ extern char lbl_805FB390[];
 extern float lbl_805FB394;
 extern "C" int strcmp(const char* a, const char* b);
 void fn_800E633C(char* s);
-extern "C" void fn_80402FCC(char* dst, const void* src);
+extern "C" void Unicode2Ascii(char* dst, const void* src);
 extern "C" int fn_804F9C64(void* l, int k);
 extern const int lbl_805FD3B4[];
 extern const int lbl_805FD3D4[];
@@ -737,8 +737,8 @@ extern "C" FE_OVERLAY int fn_804F9D10(FeCap* self, int arg)
         s2 = lbl_805FB380;
         s3 = lbl_805FB388;
         s4 = lbl_805FB390;
-        fn_80402FCC(a, self->m654->v31());
-        fn_80402FCC(b, self->m658->v31());
+        Unicode2Ascii(a, self->m654->v31());
+        Unicode2Ascii(b, self->m658->v31());
         fn_800E633C(a);
         fn_800E633C(b);
         if ((strcmp(a, s1) == 0 || strcmp(a, s2) == 0 || strcmp(a, s3) == 0) && strcmp(b, s4) == 0) {

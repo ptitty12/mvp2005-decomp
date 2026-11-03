@@ -153,7 +153,7 @@ void fn_8005B0EC(Unk8005ADD0_Obj* o, int ch)
 
 extern const char lbl_805B07A1[];
 extern char lbl_80687628[];
-extern "C" void fn_803A9204(void* p);
+extern "C" int SNDplaysetdef(void* p);
 extern "C" int fn_803A85B0(int h, int a, void* b);
 
 /* near-miss (2 slots): retail loads o->m78 (r4) before the handle (r3) for the SNDvol call. */
@@ -165,7 +165,7 @@ void fn_8005B1F0(Unk8005ADD0_Obj* o, int ch)
         s->fn_8004028C(lbl_805B07A1 + ch * 0x42, 0, 0, 0);
     if (s->m8 == 1) {
         int h = s->m4;
-        fn_803A9204(lbl_80687628);
+        SNDplaysetdef(lbl_80687628);
         char* b = lbl_80687628;
         lbl_80687628[0] = 0;
         SNDSYS_entercritical();
@@ -268,7 +268,7 @@ void fn_8005B58C(Unk8005ADD0_Obj* o, int a)
             return;
         case 1:
             SNDSYS_entercritical();
-            fn_803AB480(o->mC[o->mA8].mHandle);
+            SNDstop(o->mC[o->mA8].mHandle);
             SNDSYS_leavecritical();
             break;
         }

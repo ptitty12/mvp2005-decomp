@@ -235,7 +235,7 @@ extern const char lbl_805C5020;
 extern const char lbl_805C5024[];
 void fn_8040B320(char*, int, int, ...);
 int fn_803FEBDC(char*, int, int, int*);
-void fn_803FEC9C(int, int);
+int fn_803FEC9C(int, int);
 int fn_803FEC74(int, int, const char*, int, int);
 int fn_8040B6A0(const char*);
 void fn_8018466C(int, int);

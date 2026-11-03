@@ -79,7 +79,7 @@ struct UnkCfg {
 
 extern "C" {
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);
 void fn_803DD794(void* tex);
@@ -97,7 +97,7 @@ extern unsigned char* lbl_8062C660;
 extern int lbl_8062C664;
 
 extern "C" {
-void fn_803DBE08(void* state, Unk803DBE08Out* out);
+int fn_803DBE08(void* state, Unk803DBE08Out* out);
 void DCStoreRange(void* p, int n);
 void GXBegin(int a, int b, int c);
 void fn_803DA188(int n);
@@ -126,7 +126,7 @@ extern "C" {
 void fn_803DFBAC(Unk8036BECCMtx* in, Unk8036BECCMtx* out);
 void GXLoadPosMtxImm(Unk8036BECCMtx* m, int id);
 void GXSetCurrentMtx(int id);
-void fn_803DD7C8(void* tex, int a);
+int fn_803DD7C8(void* tex, int a);
 void fn_803DD8E0(void* tex, int a, int b);
 void fn_803DD794(void* tex);
 void fn_803DE3D0(int a);

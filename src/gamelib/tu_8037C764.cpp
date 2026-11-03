@@ -229,7 +229,7 @@ extern int lbl_80624290;
 extern int lbl_80624294;
 
 extern "C" {
-void fn_803FEDB8(void* p, int v);
+int fn_803FEDB8(void* p, int v);
 int fn_8037CA4C(void* self, const char* name, void* field, int id);
 void fn_8037CBB4(void* self, void* field, int id);
 }

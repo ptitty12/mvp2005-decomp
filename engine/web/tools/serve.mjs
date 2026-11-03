@@ -1,7 +1,7 @@
 // Local development server for the browser build (E2): serves the engine's
 // static site directory, and nothing else, on localhost.
 //
-//   node engine/web/tools/serve.mjs [--root DIR] [--port N] [--no-isolation]
+//   node engine/web/tools/serve.mjs [--root DIR] [--port N] [--host ADDR] [--no-isolation]
 //        [--disc PATH [--login] [--latency MS] [--rate MBPS] [--packs DIR]] [--states DIR]
 //
 // DIR defaults to build/engine/emscripten/web/site (what the "emscripten"
@@ -44,6 +44,7 @@ const arg = (name, fallback) => {
 };
 const root = resolve(arg('--root', join(here, '..', '..', '..', 'build', 'engine', 'emscripten', 'web', 'site')));
 const port = Number(arg('--port', '8000'));
+const host = arg('--host', '127.0.0.1');
 const disc = arg('--disc', '');
 const login = args.includes('--login');
 const latencyMs = Number(arg('--latency', '0'));
@@ -205,8 +206,8 @@ const server = createServer((req, res) => {
   else createReadStream(file).pipe(res);
 });
 
-server.listen(port, '127.0.0.1', () => {
+server.listen(port, host, () => {
   const { port: p } = server.address();
-  console.log(`serving http://127.0.0.1:${p}/ from ${root}${disc ? ' (mock deployment: /config.json, /api/disc/image)' : ''}` +
+  console.log(`serving http://${host === '0.0.0.0' ? '<host>' : host}:${p}/ from ${root}${disc ? ' (mock deployment: /config.json, /api/disc/image)' : ''}` +
               `${packsDir ? `, packs from ${packsDir}` : ''}${statesDir ? `, states from ${statesDir}` : ''}`);
 });

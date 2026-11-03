@@ -57,7 +57,7 @@ extern "C" int FILESYS_completeop(int h);
 extern "C" int FILESYS_size(int a, int b, int c);
 extern "C" void* fn_803774A8(unsigned n, int heap);
 extern "C" int FILESYS_read(int a, int b, void* c, int d, int e, int f);
-extern "C" void fn_803FEC9C(int a, int b);
+extern "C" int fn_803FEC9C(int a, int b);
 extern "C" void fn_80377488(void* p);
 int fn_8000446C(int a, int b);
 extern "C" int fn_804017B0(int a, int b);

@@ -98,7 +98,7 @@ extern "C" {
 float sqrtf(float x);
 void MultMatrix(Mtx4* a, Mtx4* b, Mtx4* out);
 void MEM_copy(void* dst, const void* src, int n);
-void fn_803DE7D0(Mtx4* a, Mtx4* b);
+float fn_803DE7D0(Mtx4* a, Mtx4* b);
 void fn_803DF4E4(Mtx4* out);
 void fn_803E02E4(Mtx4* dst, Mtx4* other);
 void* fn_803DD7C0(void* t);
@@ -316,7 +316,7 @@ extern "C" void MultMatrix(Mtx4* a, Mtx4* b, Mtx4* out)
     out->m[15] = a->m[12] * b->m[3] + a->m[13] * b->m[7] + a->m[14] * b->m[11] + a->m[15] * b->m[15];
 }
 
-extern "C" void fn_803DF66C(Mtx4* a, Mtx4* b)
+extern "C" void PostMult(Mtx4* a, Mtx4* b)
 {
     Mtx4 t;
     MultMatrix(a, b, &t);
@@ -383,7 +383,7 @@ extern "C" void fn_803DF74C(Mtx4* m)
     m->m[15] = 1.0f;
 }
 
-extern "C" void fn_803DF7A0(Mtx4* dst, float* rot, float* trans)
+extern "C" void mload44(Mtx4* dst, float* rot, float* trans)
 {
     dst->m[0] = rot[0];
     dst->m[1] = rot[1];
@@ -403,7 +403,7 @@ extern "C" void fn_803DF7A0(Mtx4* dst, float* rot, float* trans)
     dst->m[15] = 1.0f;
 }
 
-extern "C" void fn_803DF9C8(Mtx4* m, float* rot, float* trans)
+extern "C" void ExtractRotTrans(Mtx4* m, float* rot, float* trans)
 {
     rot[0] = m->m[0];
     rot[1] = m->m[1];
@@ -533,7 +533,7 @@ extern "C" void fn_803DFF50(Mtx4* dst, Mtx4* other)
     fn_803E02E4(dst, &c);
 }
 
-extern "C" void fn_803DFFE0(Mtx4* m, Unk803DFFE0Vec3* in, Unk803DFFE0Vec3* out)
+extern "C" void TransformVector(Mtx4* m, Unk803DFFE0Vec3* in, Unk803DFFE0Vec3* out)
 {
     if (in != out) {
         out->x = in->x * m->m[0] + in->y * m->m[4] + in->z * m->m[8];

@@ -1,7 +1,7 @@
 /*
  * Csis (EA common sound interface) internal layouts, as used by the library code in
  * src/snd/tu_803B7DA0.cpp (tail) and src/snd/tu_803B998C.cpp.
- * Evidence: offsets read from fn_803B9E34 (module registration), the Valid/SetFast
+ * Evidence: offsets read from Subscribe (module registration), the Valid/SetFast
  * handle code at 0x803B998C..0x803B9D00 and the Subscribe/Unsubscribe lists at
  * 0x803BA160..0x803BA90C. The public interface is include/csis/csis.h.
  */

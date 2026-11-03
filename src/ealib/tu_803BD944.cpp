@@ -164,7 +164,7 @@ struct EAGLFld {
     ~EAGLFld() {}
 };
 
-extern "C" void fn_803BE184(EAGLSelfFmt* self, unsigned char* src, char* dst);
+extern "C" void Decode(EAGLSelfFmt* self, unsigned char* src, char* dst);
 struct EAGLObjQ {
     virtual int v1(void*);
 };
@@ -179,7 +179,7 @@ struct EAGLSelfRows {
     EAGLRows* mC;
 };
 
-extern "C" void* fn_803BDCFC(void* unused, unsigned short* p)
+extern "C" void* NewFnAnimAux(void* unused, unsigned short* p)
 {
     EAGLTypeK k;
     EAGLVT* r;
@@ -244,12 +244,12 @@ extern "C" int fn_803BDE94()
     return (int)lbl_80626E0C - lbl_80626E08;
 }
 
-extern "C" int fn_803BDEAC()
+extern "C" int GetFreePoolSizeAux()
 {
     return lbl_80626E10 - lbl_80626DD0->v4();
 }
 
-extern "C" int* fn_803BDEF4(void* unused, int idx)
+extern "C" int* NewBlockByIdxAux(void* unused, int idx)
 {
     int* p = lbl_80626E18[idx];
     if (p) {
@@ -266,7 +266,7 @@ extern "C" int* fn_803BDEF4(void* unused, int idx)
     return p;
 }
 
-extern "C" int* fn_803BDF54(void* unused, unsigned x)
+extern "C" int* NewBlockAux(void* unused, unsigned x)
 {
     unsigned char t = x >> 4;
     int* p = lbl_80626E80[t];
@@ -282,7 +282,7 @@ extern "C" int* fn_803BDF54(void* unused, unsigned x)
     return p;
 }
 
-extern "C" void fn_803BDFA8()
+extern "C" void ResetPoolAux()
 {
     lbl_80626E0C = (char*)lbl_80626E08;
     int i;
@@ -292,7 +292,7 @@ extern "C" void fn_803BDFA8()
         lbl_80626E18[i] = 0;
 }
 
-extern "C" void fn_803BE004(void* unused, int size)
+extern "C" void InitAux(void* unused, int size)
 {
     lbl_80626E10 = size;
     lbl_80626E08 = (int)lbl_8062C668(size, lbl_80609E00);
@@ -300,7 +300,7 @@ extern "C" void fn_803BE004(void* unused, int size)
     lbl_80626DD0->v14();
 }
 
-extern "C" void fn_803BE084()
+extern "C" void CleanupAux()
 {
     lbl_8062C66C((void*)lbl_80626E08, lbl_80626E10);
 }
@@ -318,7 +318,7 @@ extern "C" void fn_803BE0DC(void* unused, int* p)
     lbl_80626E80[k] = p;
 }
 
-extern "C" void fn_803BE0FC(void* unused, EAGLObjV* o)
+extern "C" void DeleteFnAnimAux(void* unused, EAGLObjV* o)
 {
     int t = o->m8;
     if (t == 0x16)
@@ -331,7 +331,7 @@ extern "C" void fn_803BE0FC(void* unused, EAGLObjV* o)
     lbl_80626DD0->v9(o->m8s[1], o);
 }
 
-extern "C" void fn_803BE184(EAGLSelfFmt* self, unsigned char* src, char* dst)
+extern "C" void Decode(EAGLSelfFmt* self, unsigned char* src, char* dst)
 {
     EAGLFmt* f = self->mC;
     int v = 0;
@@ -415,7 +415,7 @@ struct U {
 };
 
 
-extern "C" void fn_803BE6B4(void* p, int flag);
+extern "C" void Invisible(void* p, int flag);
 
 /* near-miss: lfsx/add index operands come out swapped (2 slots of 60); retail has the row base first. */
 
@@ -435,7 +435,7 @@ extern "C" int fn_803BE594(EAGLSelfRows* self, EAGLObjQ* o, float t, float* out)
             float ti = *(float*)row;
             if (!(ti <= t)) {
                 char buf[0x50];
-                fn_803BE184((EAGLSelfFmt*)self, row + 4, buf);
+                Decode((EAGLSelfFmt*)self, row + 4, buf);
                 if (o->v1(buf)) {
                     *out = ti;
                     return 1;
@@ -449,11 +449,11 @@ extern "C" int fn_803BE594(EAGLSelfRows* self, EAGLObjQ* o, float t, float* out)
 
 extern "C" U* fn_803BE684(U* self, int flag)
 {
-    fn_803BE6B4(self, flag);
+    Invisible(self, flag);
     return self;
 }
 
-extern "C" void fn_803BE6B4(void* p, int flag)
+extern "C" void Invisible(void* p, int flag)
 {
     if (flag)
         memset(p, 0xff, 0x20);
@@ -461,7 +461,7 @@ extern "C" void fn_803BE6B4(void* p, int flag)
         memset(p, 0, 0x20);
 }
 
-extern "C" void fn_803BE6F4(unsigned* bits, int idx, int val)
+extern "C" void SetBone(unsigned* bits, int idx, int val)
 {
     if (val) {
         unsigned* q = &bits[idx >> 5];
@@ -472,7 +472,7 @@ extern "C" void fn_803BE6F4(unsigned* bits, int idx, int val)
     }
 }
 
-extern "C" void fn_803BE744(EAGLResB* self)
+extern "C" void Constructor(EAGLResB* self)
 {
     int i;
     for (i = self->m4 - 1; i >= 0; i--)
@@ -481,7 +481,7 @@ extern "C" void fn_803BE744(EAGLResB* self)
 
 extern "C" void fn_803BE7B0() {}
 
-extern "C" int fn_803BE7B4(EAGLResC* self, const char* name)
+extern "C" int GetAnimIndex(EAGLResC* self, const char* name)
 {
     int lo = 0;
     int hi = self->m4 - 1;

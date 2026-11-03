@@ -7,7 +7,7 @@
 
 /* RealCore timing, wait and one-slot message helpers (EA). */
 extern "C" {
-void fn_80400CE4(void);
+int fn_80400CE4(void);
 void THREAD_yield(int);
 void OSInitMessageQueue(void* q, void* buf, int n);
 int OSSendMessage(void* q, void* msg, int flags);

@@ -45,7 +45,7 @@ struct SndStream {
 };
 
 /* 0xD68-byte decoder object (fn_803B9448 initialises it). The first 0xC bytes are the bit
- * reader used by fn_803B8524/fn_803B8584. */
+ * reader used by getbits/fn_803B8584. */
 struct SndDec {
     unsigned char* m0;
     unsigned m4;
@@ -291,7 +291,7 @@ extern "C" void fn_803B84F8()
     lbl_806AA888();
 }
 
-extern "C" unsigned fn_803B8524(SndDec* s, int n)
+extern "C" unsigned getbits(SndDec* s, int n)
 {
     unsigned res = s->m4 & lbl_80626940[n];
     s->m4 >>= n;
@@ -313,7 +313,7 @@ extern "C" void fn_803B8584(SndDec* s, int n)
     }
 }
 
-extern "C" void fn_803B87C4(float* a)
+extern "C" void interpolate(float* a)
 {
     int i;
     for (i = 0; i <= 107; i += 2) {
@@ -322,7 +322,7 @@ extern "C" void fn_803B87C4(float* a)
     }
 }
 
-extern "C" void fn_803B882C(float* ac, float* out)
+extern "C" void reftolpc(float* ac, float* out)
 {
     float tmp[12];
     float k[12];
@@ -352,10 +352,10 @@ extern "C" void fn_803B8EE0(void* unused, unsigned char* data, SndDec* s, int fl
     s->m8 = 8;
     s->m4 = data[-1];
     if (flag != 0) {
-        s->mC = fn_803B8524(s, 1);
-        s->m10 = 32 - fn_803B8524(s, 4);
-        s->m14[0] = (float)(unsigned)(fn_803B8524(s, 4) + 1) * 8.0f;
-        float f = (float)(unsigned)fn_803B8524(s, 6) * 0.001f + 1.04f;
+        s->mC = getbits(s, 1);
+        s->m10 = 32 - getbits(s, 4);
+        s->m14[0] = (float)(unsigned)(getbits(s, 4) + 1) * 8.0f;
+        float f = (float)(unsigned)getbits(s, 6) * 0.001f + 1.04f;
         for (i = 1; i <= 0x3F; i++)
             s->m14[i] = s->m14[i - 1] * f;
         for (i = 0; i <= 11; i++) {

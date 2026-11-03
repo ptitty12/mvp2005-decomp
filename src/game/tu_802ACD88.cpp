@@ -319,7 +319,7 @@ typedef Unk802AD2B8_It (*Unk802AD2B8_Find)(Unk802AD2B8_Seq*, const char*, ...);
 extern "C" Unk802AD2B8_It fn_803D775C(Unk802AD2B8_Seq* s, const char* name);
 extern "C" Unk802AD2B8_It fn_803D7378(Unk802AD2B8_Seq* s, const char* name);
 extern "C" int fn_803D77EC(Unk802AD2B8_Rec* e);
-extern "C" void fn_803DBE2C(int a, int b);
+extern "C" int fn_803DBE2C(int a, int b);
 extern "C" void fn_8030ACCC(void* p);
 void fn_80305C88(void* p, int a);
 void fn_80305C30(void* p, int a, int b, int c);
@@ -762,7 +762,7 @@ struct Unk802AFA54_V {
     char pad365C[4];
     Unk802AFA54_T* b;
 };
-extern "C" void fn_803EC814(void* t, unsigned int i, char* buf);
+extern "C" int fn_803EC814(void* t, unsigned int i, char* buf);
 
 void* fn_802AFA54(Mgr* m, const char* name)
 {
@@ -867,7 +867,7 @@ struct Unk802B9FF0_Hdr;
 extern const char lbl_805E0138[];
 extern int lbl_805E0F88;
 extern "C" int fn_803FED48(const char* fmt, int a, int b, int* out);
-extern "C" void fn_803FEDB8(int h, int n);
+extern "C" int fn_803FEDB8(int h, int n);
 int fn_802B98AC(int a, int b);
 void fn_802B9FF0(void* p, Unk802B9FF0_Hdr* h);
 extern "C" void DCStoreRange(void* p, int n);

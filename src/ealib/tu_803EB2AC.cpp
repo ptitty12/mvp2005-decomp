@@ -316,7 +316,7 @@ struct Unk803EBC70_Tbl {
 };
 
 extern "C" int SHAPE_longname(int x);
-extern "C" void fn_803EC814(Unk803EBC70_Tbl* t, int i, char* out);
+extern "C" int fn_803EC814(Unk803EBC70_Tbl* t, int i, char* out);
 extern "C" int strcmp(const char*, const char*);
 
 /* near-miss (flags): exact at -O2 -fno-strength-reduce (see FONT_findkern16); with the configured flags the loop is strength-reduced */

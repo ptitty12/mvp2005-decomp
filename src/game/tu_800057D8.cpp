@@ -30,7 +30,7 @@ char* fn_8040B948(const char* hay, const char* needle); /* behaves like strstr *
 char* fn_8040B4D8(const char* s, int c);               /* behaves like strchr */
 int fn_8040B574(const char* a, const char* b);         /* behaves like strcmp */
 int fn_804089B4(char* dst, const char* fmt, ...);      /* behaves like sprintf */
-void fn_80402FCC(char* dst, const void* src);
+void Unicode2Ascii(char* dst, const void* src);
 Unk80170034_Entry* fn_80170034(Unk80170034_Info* info, int idx);
 void fn_8017008C(Unk80170034_Info* info, const char* name);
 void OSResetSystem(int a, int b, int c);
@@ -134,8 +134,8 @@ void Unk800058BC::fn_80005AB0(Unk80170034_Info* info)
     char a[16];
     char b[16];
     char c[32];
-    fn_80402FCC(a, info->m78);
-    fn_80402FCC(b, info->m8E);
+    Unicode2Ascii(a, info->m78);
+    Unicode2Ascii(b, info->m8E);
     fn_804089B4(c, "%s_%s%s", b, a, lbl_80615844);
     char* p = fn_8040B4D8(b, 0x20);
     if (p) {
@@ -288,7 +288,7 @@ void Unk800058BC::fn_800061C8()
                 if (p) {
                     *p = 0;
                     for (int i = 0; i < m154; i++) {
-                        fn_80402FCC(b, (const void*)m204[i].m0);
+                        Unicode2Ascii(b, (const void*)m204[i].m0);
                         if (fn_8040B574(a, b) == 0) {
                             if (m204[i].m4 == 0) {
                                 m204[i].m4 = 1;
@@ -682,10 +682,10 @@ void Unk800058BC::fn_800071F4(Unk800074BC_Msg* msg)
     char a[0x190];
     char b[0x20];
     int i = 0;
-    fn_80402FCC(a, (const void*)msg->mC);
+    Unicode2Ascii(a, (const void*)msg->mC);
     for (i = 0; i < m154;) {
         int n = m204[i].m8;
-        fn_80402FCC(b, (const void*)m204[i].m0);
+        Unicode2Ascii(b, (const void*)m204[i].m0);
         i++;
         fn_804089B4(a, "%s \\n%s requires 1 file and %i blocks.", a, b, n);
     }

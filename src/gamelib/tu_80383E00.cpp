@@ -147,7 +147,7 @@ struct SortArrDel {
 };
 extern "C" {
 void fn_80356798(void* self);
-void fn_803780A0(SortArr* a, int idx);
+int fn_803780A0(SortArr* a, int idx);
 void fn_80377DBC(SortArr* a, int* o1, int* o2, int idx);
 void fn_80377DE4(SortArr* a, int v1, int v2, int idx);
 int fn_80377E04(SortArr* a, int* out, int key);
@@ -179,7 +179,7 @@ struct V3I : VBase {
 
 extern "C" {
 int fn_80386188(void* link, void* q, int a, int b, float* f1, int c, int* d, void* e, void* g, int h, int i);
-void fn_803BB334(int a, int b, int c);
+void GetStillPose(int a, int b, int c);
 void fn_80383E74(struct Unk80383C9C_W* self);
 }
 
@@ -619,10 +619,10 @@ extern "C" int fn_8038614C(void* link, void* q, int a, int b, float* c, int d, i
 
 extern "C" void fn_80387CCC(Unk80387CCC* o)
 {
-    fn_803BB334(o->m14, lbl_806242D4[0], 0);
-    fn_803BB334(o->m14, lbl_806242D4[1], 0);
-    fn_803BB334(o->m14, o->m28C, 0);
-    fn_803BB334(o->m14, o->m290, 0);
+    GetStillPose(o->m14, lbl_806242D4[0], 0);
+    GetStillPose(o->m14, lbl_806242D4[1], 0);
+    GetStillPose(o->m14, o->m28C, 0);
+    GetStillPose(o->m14, o->m290, 0);
 }
 
 extern "C" void fn_80387D3C()

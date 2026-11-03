@@ -26,7 +26,7 @@ int fn_803B9CAC(GlobalVariableHandle* h);
 int fn_803B9DDC();
 int fn_803B9E08();
 void fn_803B9CFC(Class* c, void* data);
-int fn_803BA3B8(Class* c);
+int ReleaseFast(Class* c);
 int fn_803BA80C(GlobalVariableHandle* h, void* v);
 void fn_803BA988(int a, int b);
 }
@@ -183,7 +183,7 @@ extern "C" int fn_803B9D60(EA::Allocator::IAllocator** pa)
     return 0;
 }
 
-extern "C" int fn_803B9D84()
+extern "C" int Init()
 {
     OSInitMutex(&lbl_806AA8A4);
     lbl_806AA89C.head = 0;
@@ -209,7 +209,7 @@ extern "C" int fn_803B9E08()
     return 0;
 }
 
-extern "C" int fn_803B9E34(Module* m)
+extern "C" int Subscribe(Module* m)
 {
     int i;
     m->fn = (FnEntry*)((char*)m + 0x28);
@@ -245,7 +245,7 @@ extern "C" int fn_803B9E34(Module* m)
     return 0;
 }
 
-extern "C" int fn_803B9FBC(Module* m)
+extern "C" int Unsubscribe(Module* m)
 {
     int i;
     for (i = 0; i < m->nFn; i++)
@@ -352,12 +352,12 @@ Result Class::CreateInstanceFast(ClassHandle* pClassHandle, void* pMemberData, C
 extern "C" int fn_803BA378(Class* c)
 {
     fn_803B9DDC();
-    int r = fn_803BA3B8(c);
+    int r = ReleaseFast(c);
     fn_803B9E08();
     return r;
 }
 
-extern "C" int fn_803BA3B8(Class* c)
+extern "C" int ReleaseFast(Class* c)
 {
     ClassObj* o = (ClassObj*)c;
     CNode* n = o->dtors;
@@ -385,7 +385,7 @@ extern "C" int fn_803BA45C(Class* c)
     return 0;
 }
 
-extern "C" int fn_803BA474(Class* c)
+extern "C" int DecRef(Class* c)
 {
     ClassObj* o = (ClassObj*)c;
     if (--o->refCount == 0)

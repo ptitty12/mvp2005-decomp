@@ -163,7 +163,7 @@ extern "C" void fn_803DB9C0(int flags, int mode)
     lbl_80627A90 = mode;
 }
 
-extern "C" void fn_803DBF98();
+extern "C" void DisableCoPlanarZMode();
 extern "C" void fn_803DBBE0(float* m)
 {
     int savedFlags = lbl_80627A8C;
@@ -173,7 +173,7 @@ extern "C" void fn_803DBBE0(float* m)
     fn_803DB9C0(0x200, 1);
     GXSetVtxAttrFmt(5, 9, 1, 4, 0);
     if (lbl_80627A7C != 0)
-        fn_803DBF98();
+        DisableCoPlanarZMode();
     int cull;
     GXGetCullMode(&cull);
     GXSetCullMode(3);
@@ -354,7 +354,7 @@ extern "C" void fn_803DBF78(int fmt, int attr, int cnt, int type, int frac)
     GXSetVtxAttrFmt(fmt, attr, cnt, type, frac);
 }
 
-extern "C" void fn_803DBF98()
+extern "C" void DisableCoPlanarZMode()
 {
     GXSetCoPlanar(0);
     lbl_80627A7C = 0;

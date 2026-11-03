@@ -298,7 +298,7 @@ extern "C" {
 void fn_80312DB0(void* p);
 void* fn_803D7CDC(void* p);
 void fn_803D7D20(void* p);
-void fn_803BD61C(int a, int b);
+void InitInternal(int a, int b);
 void fn_803E73F4(int v);
 void* fn_8031DD54(void* p, int a, int b, int c, int d);
 void fn_803EB520(void* p);
@@ -334,7 +334,7 @@ void VIFlush(void);
 void VIWaitForRetrace(void);
 void OSSetProgressiveMode(int a);
 void fn_803D9DDC(int h, void* p, int n);
-void fn_803D8918(int h);
+void SetupFrameBuffers(int h);
 void fn_803D9E70(int h, int a, int b, int c, int d, int e, int f, int g, int s);
 void fn_803D9ECC(int h, int a, int b, int c, int d);
 void fn_80314894(int a, int b, int c, int d, int e, int f);
@@ -360,7 +360,7 @@ void MEM_free(int a);
 int fn_803DBD84(void* p, int k);
 void fn_803198B8(void* p, int k);
 int fn_803120CC(void* p, int a, int b, int c, int d, int e);
-void fn_803DD7C8(void* p, int k);
+int fn_803DD7C8(void* p, int k);
 void fn_802B0C44(void* p, int k);
 void fn_803D9804(int h, float x, float y);
 void fn_803D9E54(int h, int v);
@@ -372,7 +372,7 @@ int OSGetProgressiveMode();
 int VIGetDTVStatus();
 Unk80310934_Tx* SHAPE_create(int a, int b, int c, int d, int e, int f, int g, int h);
 void* fn_803DD628(void* a, void* b);
-void fn_803DD7C8(void* h, int v);
+int fn_803DD7C8(void* h, int v);
 void fn_803E0810(lbl_Owner* o, void* a, int b);
 void fn_803E0ACC(lbl_Node* n, float a, float b, float c, float d, float e, float f);
 void fn_803E2208(lbl_Node* n, int* p);
@@ -891,7 +891,7 @@ void fn_803134A0(Unk80310934_S134* self, int x, int y, int a3, int a4, int c, in
     ((void (*)(void*))fn_80312DA8)(self);
     if (OSGetResetCode() < 0 && OSGetProgressiveMode() != 0 && VIGetDTVStatus() == 1)
         fn_803D9DDC(lbl_8061FEDC->m38->m4 + 0x10, lbl_80634B54, 0x10);
-    fn_803D8918(self->m38->m4);
+    SetupFrameBuffers(self->m38->m4);
     float sp8;
     float spC;
     ((Unk80310934_V0C*)self->m38->m4)->s3(&sp8, &spC);
@@ -909,7 +909,7 @@ extern "C" void fn_80313634(void* p)
     VIWaitForRetrace();
     OSSetProgressiveMode(1);
     fn_803D9DDC(((Unk80310934_P60*)p)->m38->m4 + 0x10, lbl_80634B54, 0x10);
-    fn_803D8918(((Unk80310934_P60*)p)->m38->m4);
+    SetupFrameBuffers(((Unk80310934_P60*)p)->m38->m4);
 }
 
 extern "C" void fn_803136A0(void* p)
@@ -920,7 +920,7 @@ extern "C" void fn_803136A0(void* p)
     VIWaitForRetrace();
     OSSetProgressiveMode(0);
     fn_803D9DDC(((Unk80310934_P60*)p)->m38->m4 + 0x10, lbl_80634AA0, 0x10);
-    fn_803D8918(((Unk80310934_P60*)p)->m38->m4);
+    SetupFrameBuffers(((Unk80310934_P60*)p)->m38->m4);
 }
 
 void fn_8031370C()
@@ -1005,7 +1005,7 @@ extern "C" void fn_8031392C(Unk8031392C_Obj* p)
     p->m208 = 0;
     ((void (*)(void*, int, int, int, int, int))fn_803134A0)(p, 0x280, 0x1C0, 0x18, 0x20, 1);
     fn_80312DB0(p);
-    fn_803BD61C(0x43238, 0);
+    InitInternal(0x43238, 0);
     h = p->m38;
     h->mC = (Unk8031378C_DB*)fn_8031DD54(operator new(0xB4, 0), 0, 0, 3, 0);
     fn_803EB520(lbl_8062C620);

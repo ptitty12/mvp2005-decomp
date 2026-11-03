@@ -28,7 +28,7 @@ void fn_802D8A84__15Unk802D73B4_Mgr(void* p, int chrg);
 void fn_802D8AD8__15Unk802D73B4_Mgrii(void* p, int chrg);
 extern "C" void fn_80328374(void* p, int chrg);
 extern char lbl_80664AA8[];
-extern "C" int fn_803BE7B4(void* p);
+extern "C" int GetAnimIndex(void* p);
 extern "C" void fn_80377458(void* p);
 extern "C" void fn_80377488(void* p);
 extern "C" void MEM_allocsize(void* p);
@@ -207,7 +207,7 @@ int fn_8035EDF8(Unk8035EDD8* s, int i) { return s->m4->m14[i]; }
 int fn_8035EE0C(Unk8035EDD8* s)
 {
     Unk8035EDD8_T* t = s->m4;
-    int i = fn_803BE7B4(t);
+    int i = GetAnimIndex(t);
     int r;
     if (i == -1)
         r = 0;
@@ -216,7 +216,7 @@ int fn_8035EE0C(Unk8035EDD8* s)
     return r;
 }
 
-int fn_8035EE58(Unk8035EDD8* s) { return fn_803BE7B4(s->m4); }
+int fn_8035EE58(Unk8035EDD8* s) { return GetAnimIndex(s->m4); }
 
 int fn_8035EE7C(Unk8035EDD8* s) { return s->m4->m8; }
 

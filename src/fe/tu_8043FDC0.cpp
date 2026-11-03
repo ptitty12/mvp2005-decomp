@@ -83,7 +83,7 @@ struct FeD3 {
 };
 extern "C" void fn_80172118__Fv(const char* name);
 extern "C" void fn_8017211C__Fv(const char* name, const char* data, int n);
-extern "C" void fn_80402FCC(char* dst, const void* src);
+extern "C" void Unicode2Ascii(char* dst, const void* src);
 
 struct FeArrL {
     char* m0;
@@ -374,7 +374,7 @@ extern "C" FE_OVERLAY void fn_80442984(void)
 ", strlen("Date,MLB Chemistry,MLB Win%,AAA Chemistry,AAA Win%,AA Chemistry,AA Win%,Grade
 "));
     for (; i < lbl_806215E0; i++) {
-        fn_80402FCC(str, (void*)((FeRec28*)(i * 0x28 + (int)lbl_806215DC))->m24);
+        Unicode2Ascii(str, (void*)((FeRec28*)(i * 0x28 + (int)lbl_806215DC))->m24);
         fn_80329FA0(&d, *(int*)(i * 0x28 + (int)lbl_806215DC));
         FeRec28* e = (FeRec28*)(i * 0x28 + (int)lbl_806215DC);
         unsigned short y = (unsigned)d.c % 100;

@@ -67,7 +67,7 @@ extern "C" void MEM_fill(void*, int, int);
 extern "C" int FILESYS_completeop(int);
 extern "C" void iFILE_ExecCommand(int);
 extern "C" int THREAD_iscurrent(int);
-extern "C" void fn_80400CE4(int);
+extern "C" int fn_80400CE4(int);
 extern "C" void THREAD_yield(int);
 extern "C" void fn_8040074C(void*, int);
 extern "C" void MEM_copy(void*, void*, int);

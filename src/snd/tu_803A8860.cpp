@@ -21,7 +21,7 @@ struct AemsFnHandles {
     unsigned char m31;
 };
 
-/* State object (0x24 bytes) allocated by fn_803A8924. */
+/* State object (0x24 bytes) allocated by A1cConstructorCallBack. */
 struct AemsIfaceState {
     AemsFnHandles* psettings;
     Csis::FunctionClient fnclient;
@@ -57,12 +57,12 @@ extern EA::Allocator::IAllocator* lbl_806251E8;
 
 extern "C" {
 
-void fn_803BA45C(Csis::Class* c);
-void fn_803BA474(Csis::Class* c);
-void fn_803B9D60(EA::Allocator::IAllocator** p);
-void fn_803B9DDC();
-void fn_803B9E08();
-void fn_803A888C(Csis::Class* c, void* data);
+int fn_803BA45C(Csis::Class* c);
+void DecRef(Csis::Class* c);
+int fn_803B9D60(EA::Allocator::IAllocator** p);
+int fn_803B9DDC();
+int fn_803B9E08();
+void A1cDestructorCallBack(Csis::Class* c, void* data);
 
 void fn_803A8860(Csis::Parameter* params, void* data)
 {
@@ -70,7 +70,7 @@ void fn_803A8860(Csis::Parameter* params, void* data)
     Csis::Function::CallFast(reinterpret_cast<Csis::FunctionHandle*>(st->psettings->fh10), params);
 }
 
-void fn_803A888C(Csis::Class* c, void* data)
+void A1cDestructorCallBack(Csis::Class* c, void* data)
 {
     AemsIfaceState* st = static_cast<AemsIfaceState*>(data);
     AemsFnHandles* s = st->psettings;
@@ -84,7 +84,7 @@ void fn_803A888C(Csis::Class* c, void* data)
     lbl_806251E8->Free(st, 0);
 }
 
-void fn_803A8924(Csis::Class* c, void* arg, AemsFnHandles* s)
+void A1cConstructorCallBack(Csis::Class* c, void* arg, AemsFnHandles* s)
 {
     AemsIfaceState* st = static_cast<AemsIfaceState*>(lbl_806251E8->Alloc(0x24, EA::TagValuePair(0, 0)));
     if (st != NULL) {
@@ -99,12 +99,12 @@ void fn_803A8924(Csis::Class* c, void* arg, AemsFnHandles* s)
             st->fnclient.pClientData = st;
             st->fnclient.pClientFunc = fn_803A8860;
             c->SubscribeMemberDataFast(&st->fnclient);
-            fn_803BA474(c);
+            DecRef(c);
         }
         st->dtorclient.pClientData = st;
-        st->dtorclient.pClientFunc = reinterpret_cast<void (*)(Csis::Class*, void*)>(fn_803A888C);
+        st->dtorclient.pClientFunc = reinterpret_cast<void (*)(Csis::Class*, void*)>(A1cDestructorCallBack);
         c->SubscribeDestructorFast(&st->dtorclient);
-        fn_803BA474(c);
+        DecRef(c);
     }
 }
 
@@ -135,7 +135,7 @@ int fn_803A8A20(AemsIfaceTable* t)
             e->id4C.pString = reinterpret_cast<const char*>(reinterpret_cast<int>(e->id4C.pString) + reinterpret_cast<int>(t));
             reinterpret_cast<Csis::FunctionHandle*>(e->fh18)->SetFast(&e->id4C);
         }
-        e->ctor.pClientFunc = reinterpret_cast<void (*)(Csis::Class*, Csis::Parameter*, void*)>(fn_803A8924);
+        e->ctor.pClientFunc = reinterpret_cast<void (*)(Csis::Class*, Csis::Parameter*, void*)>(A1cConstructorCallBack);
         e->ctor.pClientData = e;
         Csis::Class::SubscribeConstructorFast(reinterpret_cast<Csis::ClassHandle*>(e->classHandle), &e->ctor);
     }

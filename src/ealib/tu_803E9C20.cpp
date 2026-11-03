@@ -246,7 +246,7 @@ extern "C" void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
 
 extern "C" void GXSetNumChans(int n);
 
-extern "C" void fn_803DB5A0(void* state);
+extern "C" int fn_803DB5A0(void* state);
 
 extern "C" void fn_803DB9C0(int a, int b);
 
@@ -281,7 +281,7 @@ extern "C" void DCStoreRange(void* p, int n);
 
 extern "C" void fn_803DA188(int n);
 
-extern "C" void fn_803DBE08(void* state, Unk803DBE08Out* out);
+extern "C" int fn_803DBE08(void* state, Unk803DBE08Out* out);
 extern "C" void GXBegin(int a,int b,int c);
 inline Unk803DBE08Out::Unk803DBE08Out(void* state)
 {

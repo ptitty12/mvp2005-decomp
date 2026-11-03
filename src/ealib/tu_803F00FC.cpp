@@ -126,7 +126,7 @@ struct RcEvD : RcEvC {
 
 extern RcEvD lbl_806AAF90;
 extern RcEvD lbl_806AB0DC;
-extern "C" void fn_803F67C8(RcSysX*);
+extern "C" void CheckVersion(RcSysX*);
 
 struct RcSys {
     int m0, m4;
@@ -141,7 +141,7 @@ struct RcSys {
 extern RcSys lbl_806AB4C8;
 extern void* lbl_806EEA2C;
 extern char lbl_806AB190[];
-extern "C" int fn_803F8B24(void*, int, int, int);
+extern "C" int Seek(void*, int, int, int);
 extern "C" int fn_803F8730(void*, void*, int*, int*);
 extern int lbl_806AB170[3];
 extern int lbl_806AB1B4[3];
@@ -177,8 +177,8 @@ extern int lbl_806AB330[16];
 extern "C" int fn_803F8C44(void*, int*, int*, int);
 extern "C" int fn_803F74E0(void*, void*);
 extern "C" int fn_803F7958(void*, void*, int, int, int*);
-extern "C" int fn_803F80EC(void*, int);
-extern "C" int fn_803F8604(void*, int);
+extern "C" int FlushWriteBuffer(void*, int);
+extern "C" int CloseFile(void*, int);
 extern "C" int fn_803F78CC(void*, void*);
 extern "C" char* strncpy(char*, const char*, unsigned);
 extern RcSysX* lbl_806EEA60;
@@ -190,10 +190,10 @@ extern "C" unsigned short* fn_803F6AE0(int, const char*, ...);
 extern "C" int fn_803F6F18(unsigned short*);
 extern "C" unsigned short* fn_803F0918(const unsigned short*, unsigned short*, int);
 
-extern "C" void fn_803F00FC(RcSysX* s, RcBig* a)
+extern "C" void TrcStartGame(RcSysX* s, RcBig* a)
 {
     int one = 1;
-    fn_803F67C8(s);
+    CheckVersion(s);
     s->m18->v3();
     RcEvB* e = &lbl_806AAEB0;
     e->s1();
@@ -208,7 +208,7 @@ extern "C" void fn_803F00FC(RcSysX* s, RcBig* a)
     s->m18->v4();
 }
 
-extern "C" void fn_803F0238(RcSysX* s, int* a)
+extern "C" void TrcCardExists(RcSysX* s, int* a)
 {
     int one = 1;
     s->m18->v3();
@@ -224,7 +224,7 @@ extern "C" void fn_803F0238(RcSysX* s, int* a)
     s->m18->v4();
 }
 
-extern "C" void fn_803F031C(RcSysX* s, int* a)
+extern "C" void TrcGetCardInfo(RcSysX* s, int* a)
 {
     int one = 1;
     s->m18->v3();
@@ -260,7 +260,7 @@ extern "C" void fn_803F0418(RcSysX* s, int* a, RcBig12* b)
     s->m18->v4();
 }
 
-extern "C" void fn_803F0548(RcSysX* s, int* a, RcBig12* b)
+extern "C" void TrcSaveFile(RcSysX* s, int* a, RcBig12* b)
 {
     int one = 1;
     s->m18->v3();
@@ -279,7 +279,7 @@ extern "C" void fn_803F0548(RcSysX* s, int* a, RcBig12* b)
     s->m18->v4();
 }
 
-extern "C" void fn_803F0680(RcSysX* s, int* a, RcBig12* b)
+extern "C" void TrcListFiles(RcSysX* s, int* a, RcBig12* b)
 {
     int one = 1;
     s->m18->v3();
@@ -343,7 +343,7 @@ extern "C" unsigned short* fn_803F0918(const unsigned short* a, unsigned short* 
     return buf;
 }
 
-extern "C" void fn_803F09FC(RcSysX* s, int* a)
+extern "C" void CardExists(RcSysX* s, int* a)
 {
     s->m18->v3();
     int v = a[0];
@@ -400,7 +400,7 @@ extern "C" void fn_803F0C1C(RcSysX* s, int* a)
     s->m18->v4();
 }
 
-extern "C" void fn_803F0CD0(RcSysX* s, int* a, int x, int y)
+extern "C" void OpenFile(RcSysX* s, int* a, int x, int y)
 {
     s->m18->v3();
     int v = a[0];
@@ -493,7 +493,7 @@ extern "C" void fn_803F108C(RcSysX* s, int v)
 }
 
 /* One initialized state value preserves retail scheduling of the paired 1/-1 stores. */
-extern "C" void fn_803F113C(RcSysX* s, int* a, int x, const char* str)
+extern "C" void DeleteFile(RcSysX* s, int* a, int x, const char* str)
 {
     int active;
     s->m18->v3();
@@ -510,7 +510,7 @@ extern "C" void fn_803F113C(RcSysX* s, int* a, int x, const char* str)
     s->m18->v4();
 }
 
-extern "C" void fn_803F1204(RcSysX* s, int* a, int x, const char* str, int w)
+extern "C" void SetFileAttribute(RcSysX* s, int* a, int x, const char* str, int w)
 {
     int active;
     s->m18->v3();
@@ -528,8 +528,8 @@ extern "C" void fn_803F1204(RcSysX* s, int* a, int x, const char* str, int w)
     s->m18->v4();
 }
 
-/* The paired state stores use the same initialized value as fn_803F113C. */
-extern "C" void fn_803F12D4(RcSysX* s, int* a, int x, const char* str)
+/* The paired state stores use the same initialized value as DeleteFile. */
+extern "C" void FindFile(RcSysX* s, int* a, int x, const char* str)
 {
     int active;
     s->m18->v3();
@@ -583,7 +583,7 @@ extern "C" void fn_803F13A0()
     e->m0->v1(e);
 }
 
-extern "C" void fn_803F149C()
+extern "C" void UpdateTaskGetCardInfo()
 {
     int a = 0;
     int b = 0;
@@ -611,7 +611,7 @@ extern "C" void fn_803F149C()
     e->m0->v1(e);
 }
 
-extern "C" void fn_803F1568()
+extern "C" void UpdateTaskMount()
 {
     RcEv* e = &lbl_806AB19C;
     e->m18 = 1;
@@ -655,7 +655,7 @@ extern "C" void fn_803F1568()
     }
 }
 
-extern "C" void fn_803F16A0()
+extern "C" void UpdateTaskUnmount()
 {
     int r = 1;
     int k = fn_803F78CC(lbl_806EEA2C, &lbl_806AB1D0);
@@ -680,7 +680,7 @@ extern "C" void fn_803F16A0()
     }
 }
 
-extern "C" void fn_803F1760()
+extern "C" void UpdateTaskOpen()
 {
     int sp8 = 0;
     int r = 1;
@@ -724,9 +724,9 @@ extern "C" void fn_803F1760()
     }
 }
 
-extern "C" void fn_803F1874()
+extern "C" void UpdateTaskClose()
 {
-    int k = fn_803F8604(lbl_806EEA2C, lbl_806AB204.m20);
+    int k = CloseFile(lbl_806EEA2C, lbl_806AB204.m20);
     RcEv* e = &lbl_806AB204;
     e->m0->v1(e);
     if (e->m1C != 0) {
@@ -871,10 +871,10 @@ extern "C" void fn_803F1AAC()
     e->m0->v1(e);
 }
 
-extern "C" void fn_803F1C34()
+extern "C" void UpdateTaskSeek()
 {
     int r = 1;
-    int k = fn_803F8B24(lbl_806EEA2C, lbl_806AB288.m20, lbl_806AB288.m24, lbl_806AB288.m28);
+    int k = Seek(lbl_806EEA2C, lbl_806AB288.m20, lbl_806AB288.m24, lbl_806AB288.m28);
     switch (k) {
     case 0:
         r = 0;
@@ -900,11 +900,11 @@ extern "C" void fn_803F1C34()
     e->m0->v1(e);
 }
 
-extern "C" void fn_803F1D04()
+extern "C" void UpdateTaskFlush()
 {
     RcEv* e = &lbl_806AB2B4;
     int ok = 1;
-    if (fn_803F80EC(lbl_806EEA2C, e->m20) == 0)
+    if (FlushWriteBuffer(lbl_806EEA2C, e->m20) == 0)
         ok = 0;
     e->m0->v1(e);
     if (e->m1C != 0) {
@@ -922,7 +922,7 @@ extern "C" void fn_803F1D04()
     }
 }
 
-extern "C" void fn_803F1DB0()
+extern "C" void UpdateTaskDelete()
 {
     RcQ q;
     memset(&q, 0, 0x30);
@@ -967,7 +967,7 @@ extern "C" void fn_803F1DB0()
     }
 }
 
-extern "C" void fn_803F1F08()
+extern "C" void UpdateTaskSetAttribute()
 {
     int sp8 = lbl_806AB330[0];
     int k = fn_803F8C44(lbl_806EEA2C, &sp8, &lbl_806AB330[3], lbl_806AB330[12]);

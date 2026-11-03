@@ -168,7 +168,7 @@ int fn_800C58E8(Unk800C341C_Mgr* m, int kind);
 void fn_800C435C(Unk800C341C_Mgr* m, int idx, float scale, const char* name, int flag);
 void fn_800C4D90(Unk800C341C_Mgr* m, int idx, float scale, const char* name, int flag);
 void fn_800C56C0(Unk800C341C_Mgr* m, int a);
-void fn_803FEDB8(void* p, int a);
+int fn_803FEDB8(void* p, int a);
 void fn_803FB4B0();
 int fn_800C5C68(Unk800C341C_Mgr* m, Unk800C1BE4_Widget* w);
 int fn_800C587C(Unk800C341C_Mgr* m);

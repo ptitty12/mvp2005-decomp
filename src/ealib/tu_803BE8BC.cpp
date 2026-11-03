@@ -388,7 +388,7 @@ public:
     virtual void v22();
 };
 
-extern "C" void fn_803BE6B4(int a, int b);
+extern "C" void Invisible(int a, int b);
 
 struct EAGLRecA {
     char pad0[6];
@@ -408,7 +408,7 @@ inline int EAGLTestBit(unsigned* bits, int idx)
     return (*q & (1 << (idx & 31))) != 0 ? 1 : 0;
 }
 
-extern "C" void fn_803BE6F4(unsigned* set, int k, int v);
+extern "C" void SetBone(unsigned* set, int k, int v);
 
 struct EAGLChild10 {
     virtual void v1();
@@ -466,7 +466,7 @@ extern "C" int fn_803BE958(EAGLSelfB* s)
     return s->mC->m2;
 }
 
-extern "C" int fn_803BE964(EAGLSelfArr10* s, float x, float y, int a, int b)
+extern "C" int EvalEvent(EAGLSelfArr10* s, float x, float y, int a, int b)
 {
     EAGLRecArr* rec = s->mC;
     int r = 0;
@@ -571,7 +571,7 @@ extern "C" int fn_803BF0D4(EAGLSelfArr12* s, float t, int a)
     return r;
 }
 
-extern "C" int fn_803BF248(EAGLSelfArr15* s)
+extern "C" int GetPhaseChan(EAGLSelfArr15* s)
 {
     EAGLRecArr* rec = s->mC;
     int i;
@@ -666,7 +666,7 @@ extern "C" void fn_803BF694(EAGLSelfTwo* s, float x, float y, int a)
         s->m10[i]->v4(x, y, a);
 }
 
-extern "C" int fn_803BF7F0(EAGLSelfFind* s, int a, float t, float* out)
+extern "C" int FindTime(EAGLSelfFind* s, int a, float t, float* out)
 {
     EAGLRecCnt* rec = s->mC;
     int i;
@@ -682,7 +682,7 @@ extern "C" int fn_803BF7F0(EAGLSelfFind* s, int a, float t, float* out)
     return 0;
 }
 
-extern "C" int fn_803BF90C(EAGLSelfTick* s, float t, int a)
+extern "C" int EvalPhase(EAGLSelfTick* s, float t, int a)
 {
     int r = 0;
     EAGLRecCnt* rec = s->mC;
@@ -715,7 +715,7 @@ struct EAGLSelfScale {
 
 extern "C" int fn_803D2D74(void* table, Unk803D2B20Key* key, int* out);
 
-extern "C" void fn_803BFA5C(EAGLSelfScale* s, int on)
+extern "C" void UseFPS(EAGLSelfScale* s, int on)
 {
     s->m14 = on;
     if (s->m18 == 0 && on != 0) {
@@ -733,7 +733,7 @@ extern "C" void fn_803BFA5C(EAGLSelfScale* s, int on)
 
 extern "C" int fn_803BFAEC(Unk803D2B20* self, int a, int* b, int* c, int* d)
 {
-    fn_803BE6B4(a, 0);
+    Invisible(a, 0);
     *b = 0;
     return self->v18(a, b, c, d);
 }
@@ -803,7 +803,7 @@ extern "C" int fn_803C1D00(EAGLSelfRA* s, unsigned* bits, int* cnt, int* lo, int
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;

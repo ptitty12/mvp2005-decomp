@@ -108,7 +108,7 @@ int fn_802B96C4(const char* name, int a);
 extern "C" void* fn_802B9300(const char* name, int a, int b, int c);
 void* fn_802B98AC(const char* name, int a);
 extern "C" int fn_803FED48(const char* name, int a, int b, void* c);
-extern "C" void fn_803FEDB8(void* p, int a);
+extern "C" int fn_803FEDB8(void* p, int a);
 extern "C" void MEM_free(void* p);
 int fn_8040B574(const char* a, const char* b);
 void fn_802AEBF0(void* a, const char* s);

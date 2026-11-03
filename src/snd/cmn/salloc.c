@@ -2,7 +2,7 @@
 #include "./sndcmn.h"
 
 /* SND stop entry point implemented in snd/tu_803AB310.cpp. */
-extern "C" int fn_803AB480(int shandle);
+extern "C" int SNDstop(int shandle);
 
 short sndvoicereserved[6];
 
@@ -115,7 +115,7 @@ int SNDVOICEI_alloc(int voicesneeded, int priority, int *phandle, int minvoicera
             if (temphandle < 0) {
                 temphandle = sndgs.chan[pv->masterchan].handle;
             }
-            fn_803AB480(temphandle);
+            SNDstop(temphandle);
         }
 
         pv->status = 1;

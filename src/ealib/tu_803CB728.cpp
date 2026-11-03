@@ -73,7 +73,7 @@ inline int EAGLTestBit(unsigned* bits, int idx)
     return (*q & (1 << (idx & 31))) != 0 ? 1 : 0;
 }
 
-extern "C" void fn_803BE6F4(unsigned* set, int k, int v);
+extern "C" void SetBone(unsigned* set, int k, int v);
 
 struct EAGLCount {
     unsigned short m0;
@@ -287,7 +287,7 @@ extern "C" int fn_803CB7D4(EAGLSelfRA* s, unsigned* bits, int* cnt, int* lo, int
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -382,7 +382,7 @@ extern "C" int fn_803CD700(EAGLSelfE* s, unsigned* bits, int* cnt, int* lo, int*
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -408,7 +408,7 @@ extern "C" int fn_803CD7F0(EAGLSelfE* s, unsigned* bits, int* cnt, int* lo, int*
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -455,7 +455,7 @@ extern "C" int fn_803CDA34(EAGLSelfF* s, unsigned* bits, int* cnt, int* lo, int*
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;
@@ -484,7 +484,7 @@ extern "C" int fn_803CDB60(EAGLSelfF* s, unsigned* bits, int* cnt, int* lo, int*
                     *hi = b;
             }
             *cnt += 1;
-            fn_803BE6F4(bits, b, 1);
+            SetBone(bits, b, 1);
         }
     }
     return 1;

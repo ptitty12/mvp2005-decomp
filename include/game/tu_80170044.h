@@ -125,7 +125,7 @@ public:
 extern "C" {
 int fn_80170A1C(Unk80170518* self);
 int fn_80090880(int a, int b);
-void fn_80402FCC(char* dst, const void* src);
+void Unicode2Ascii(char* dst, const void* src);
 void fn_80403144(unsigned short* dst, const unsigned short* src);
 int fn_80403060(const unsigned short* s);
 }

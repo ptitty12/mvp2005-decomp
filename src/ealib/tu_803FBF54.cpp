@@ -115,10 +115,10 @@ struct RcMapTab {
 
 extern "C" void STREAM_kill(int);
 extern "C" int THREAD_iscurrent(int);
-extern "C" void fn_80400CE4(int);
+extern "C" int fn_80400CE4(int);
 extern "C" void THREAD_yield(int);
 extern "C" void fn_804007FC(void*);
-extern "C" void fn_803FEC9C(int, int);
+extern "C" int fn_803FEC9C(int, int);
 extern "C" void STREAM_setgreedystate(int, int);
 
 extern "C" int fn_803FEBDC(int, int, int, int*);

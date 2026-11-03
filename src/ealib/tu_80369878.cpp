@@ -80,7 +80,7 @@ void fn_803EA338(void* a, void* b, void* c, void* d);
 void GXSetChanCtrl(int a, int b, int c, int d, int e, int f, int g);
 void GXSetNumChans(int n);
 void fn_803DD794(void* tex);
-void fn_803DB5A0(void* state);
+int fn_803DB5A0(void* state);
 void fn_803DB9C0(int a, int b);
 void fn_803DDCD4(void);
 void GXCallDisplayList(void* list, int nbytes);
@@ -108,7 +108,7 @@ extern unsigned char* lbl_8062C660;
 extern int lbl_8062C664;
 
 extern "C" {
-void fn_803DBE08(void* state, Unk803DBE08Out* out);
+int fn_803DBE08(void* state, Unk803DBE08Out* out);
 void DCStoreRange(void* p, int n);
 void GXBegin(int a, int b, int c);
 void fn_803DA188(int n);

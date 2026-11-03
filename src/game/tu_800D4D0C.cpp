@@ -364,7 +364,7 @@ void fn_800D5A28(Unk800D4D0C_D* t, int x)
 void fn_800D5B00(Unk800D4D0C_D* t, int idx)
 {
     char s[0x64];
-    fn_80402FCC(s, fn_80090880(lbl_8061977C, t->m108[idx]));
+    Unicode2Ascii(s, fn_80090880(lbl_8061977C, t->m108[idx]));
     fn_80409DAC(s);
 }
 

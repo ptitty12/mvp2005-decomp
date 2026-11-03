@@ -10,11 +10,11 @@
 
 extern "C" void SNDSYS_entercritical();
 extern "C" void SNDSYS_leavecritical();
-extern "C" void fn_803B4160(int shandle, int cutoff);
-extern "C" void fn_803B445C(int shandle, int cutoff);
+extern "C" int fn_803B4160(int shandle, int cutoff);
+extern "C" int fn_803B445C(int shandle, int cutoff);
 extern "C" void SNDPLATFORM_stop(int voice);
 extern "C" int fn_803FD944(int a, int b, int c);
-extern "C" void fn_803AA810(int h, int a, void* b, int c, int d);
+extern "C" int fn_803AA810(int h, int a, void* b, int c, int d);
 extern "C" int fn_803FE914(int h);
 extern "C" void STREAM_setgreedylevel(int h, int v);
 extern "C" void SNDCTRL_timemult(int shandle, int v);
@@ -106,7 +106,7 @@ extern "C" int fn_803AB430(int h, int v)
     return 0;
 }
 
-extern "C" int fn_803AB480(int shandle)
+extern "C" int SNDstop(int shandle)
 {
     int setvoice;
     int voice = SNDVOICEI_get(shandle);
@@ -132,7 +132,7 @@ extern "C" int SNDSTRM_overhead(int a, int b)
     return n + fn_803FD944(a + 2, 1, 1);
 }
 
-extern "C" int fn_803AB56C(int h, int v)
+extern "C" int SNDSTRM_pitchmult(int h, int v)
 {
     SNDSTREAMCHANNEL* pssc = SNDSTRMI_getstreamptr(h);
     if (pssc == 0)
@@ -307,7 +307,7 @@ done:
     return 0;
 }
 
-extern "C" int fn_803ABCB4(int k, int* out)
+extern "C" int CapOutputMode(int k, int* out)
 {
     SNDSYSOPTS sso;
     int r = 0;
@@ -341,10 +341,10 @@ extern "C" int fn_803ABCB4(int k, int* out)
     return 0;
 }
 
-extern "C" int fn_803ABD58(int a)
+extern "C" int SetOutputMode(int a)
 {
     int tmp;
-    fn_803ABCB4(a, &tmp);
+    CapOutputMode(a, &tmp);
     if (tmp == 0)
         return -5;
     if (lbl_8069C9E4[0] == 0) {

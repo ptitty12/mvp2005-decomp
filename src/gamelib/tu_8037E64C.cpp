@@ -155,7 +155,7 @@ struct Unk8037E9D0 {
 };
 
 extern "C" {
-void fn_8037E078(KnotBuf2* p);
+int fn_8037E078(KnotBuf2* p);
 void fn_8037E0C0(KnotBuf2* p, int chrg);
 void fn_8037893C(int a, int b, void* c, int d, int e);
 void fn_8037E9D0(Unk8037E9D0* o);

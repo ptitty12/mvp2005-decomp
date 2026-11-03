@@ -71,7 +71,7 @@ extern int lbl_8061A708[];
 extern "C" {
 int fn_800C2FE8(Unk800C2250_File* f);
 void ASYNCFILE_release(int a, int b, int c);
-void fn_80400CE4(int a);
+int fn_80400CE4(int a);
 void ASYNCFILE_cancel(int a);
 int ASYNCFILE_getstatus(int a);
 void THREAD_yield(int a);
